@@ -346,12 +346,25 @@ class _SettingsPageState extends State<SettingsPage> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            '酷狗概念版凭证',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontSize: 16 * s,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '酷狗概念版凭证',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 16 * s,
+                                ),
+                              ),
+                              SizedBox(height: 2 * s),
+                              Text(
+                                '支持扫码登录 / 粘贴凭证',
+                                style: TextStyle(
+                                  color: const Color(0xFF838383),
+                                  fontSize: 11 * s,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         Text(

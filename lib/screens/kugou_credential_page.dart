@@ -1,16 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/song_model.dart';
 import '../services/kugou_credential_service.dart';
+import '../services/sources/kugou_credential_parser.dart';
+import '../services/sources/kugou_login_models.dart';
+import '../services/sources/kugou_login_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
+import '../widgets/kugou_qr_panel.dart';
 
-/// 酷狗概念版凭证录入 / 清除页（REQ-11）。
+/// 酷狗概念版凭证页（REQ-11 + 增量「扫码登录」）。
 ///
-/// - token / userid 手动填写（Q2=A），与网易云 `user_cache.json` 隔离存储。
-/// - 全页脱敏展示；清除后音源自动回退网易云。
+/// - **扫码登录**（新增）：取码 → 轮询 → 拿 token/userid → 写入凭证；
+///   页面退出 / 销毁**必须**取消在飞请求与轮询；
+/// - **粘贴凭证**（新增兜底）：从整段 cookie / JSON 提取 token/userid；
+/// - 手工填写（既有，保留为高级 / 兜底）；
+/// - 与网易云 `user_cache.json` 隔离存储；全页脱敏展示。
 class KugouCredentialPage extends StatefulWidget {
   const KugouCredentialPage({super.key});
 
@@ -24,8 +33,15 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
   final _nicknameController = TextEditingController();
 
   final _credential = KugouCredentialService.instance;
+  final _loginService = KugouLoginService.instance;
 
   bool _configured = false;
+
+  // ── 扫码登录状态 ──────────────────────────────────────────
+  StreamSubscription<KugouQrPollResult>? _qrSub;
+  bool _scanning = false;
+  QrLoginState? _qrState;
+  KugouQrSession? _qrSession;
 
   @override
   void initState() {
@@ -36,11 +52,111 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
 
   @override
   void dispose() {
+    // 退出页面：退订 + 取消在飞请求与定时器（防离页后仍写凭证 / 泄漏）
+    _qrSub?.cancel();
+    _loginService.cancel();
     _tokenController.dispose();
     _userIdController.dispose();
     _nicknameController.dispose();
     super.dispose();
   }
+
+  // ── 扫码登录 ──────────────────────────────────────────────
+
+  void _startScanLogin() {
+    _qrSub?.cancel();
+    setState(() {
+      _scanning = true;
+      _qrState = QrLoginState.waiting;
+      _qrSession = null;
+    });
+    _qrSub = _loginService.startAutoLogin().listen(
+      _onQrUpdate,
+      onError: (_) {},
+      cancelOnError: false,
+    );
+  }
+
+  Future<void> _onQrUpdate(KugouQrPollResult result) async {
+    if (!mounted) return;
+    setState(() {
+      _qrState = result.state;
+      if (result.session != null) _qrSession = result.session;
+    });
+    if (result.state == QrLoginState.success) {
+      await _persistLogin(result.token ?? '', result.userId ?? '');
+    }
+  }
+
+  Future<void> _persistLogin(String token, String userId) async {
+    final ok = await _credential.saveFromLogin(token, userId);
+    if (!mounted) return;
+    if (ok) {
+      setState(() {
+        _configured = true;
+        _scanning = false;
+      });
+      DesignToast.show(
+        context,
+        '登录成功：已登录(${AppConstants.maskToken(userId)})',
+      );
+    } else {
+      DesignToast.show(context, '凭证保存失败，请改用粘贴 / 手填');
+    }
+  }
+
+  void _stopScan() {
+    _qrSub?.cancel();
+    _qrSub = null;
+    _loginService.cancel();
+    setState(() {
+      _scanning = false;
+      _qrState = null;
+      _qrSession = null;
+    });
+  }
+
+  // ── 粘贴凭证（兜底）──────────────────────────────────────
+
+  Future<void> _showPasteDialog() async {
+    final controller = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('粘贴凭证'),
+        content: TextField(
+          controller: controller,
+          maxLines: 5,
+          decoration: const InputDecoration(
+            hintText: '粘贴整段 cookie 或 JSON，例如 token=...; userid=...',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('解析并保存'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (raw == null || !mounted) return;
+
+    final parsed = parseCredentialText(raw);
+    if (parsed.token == null && parsed.userId == null) {
+      DesignToast.show(context, '未识别到凭证，请检查粘贴内容');
+      return;
+    }
+    if (parsed.token != null) _tokenController.text = parsed.token!;
+    if (parsed.userId != null) _userIdController.text = parsed.userId!;
+    await _save();
+  }
+
+  // ── 手工保存 / 清除（既有）────────────────────────────────
 
   Future<void> _save() async {
     final token = _tokenController.text;
@@ -68,9 +184,10 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
   void _confirmClear() {
     DesignDialog.showConfirm(
       context,
-      titleText: '清除酷狗凭证',
-      contentText: '清除后酷狗音源将不可用，并自动回退网易云，确定继续？',
+      titleText: '退出登录',
+      contentText: '退出后酷狗音源将不可用，并自动回退网易云，确定继续？',
       onConfirm: () async {
+        _stopScan();
         await _credential.clear();
         await SourceManager().switchTo(SongSource.netease);
         if (!mounted) return;
@@ -78,10 +195,12 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
           _configured = false;
           _nicknameController.clear();
         });
-        DesignToast.show(context, '凭证已清除，已回退网易云');
+        DesignToast.show(context, '已退出登录，已回退网易云');
       },
     );
   }
+
+  // ── 构建 ──────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -141,6 +260,10 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(height: 17 * s),
+                    _buildSectionHeader('扫码登录', s),
+                    SizedBox(height: 10 * s),
+                    _buildScanCard(s),
+                    SizedBox(height: 16 * s),
                     _buildSectionHeader('凭证配置', s),
                     SizedBox(height: 10 * s),
                     _buildCard(
@@ -209,22 +332,10 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                       ),
                     ),
                     SizedBox(height: 16 * s),
-                    GestureDetector(
-                      onTap: _save,
-                      behavior: HitTestBehavior.opaque,
-                      child: Container(
-                        width: double.infinity,
-                        height: 48,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2F84FE),
-                          borderRadius: BorderRadius.circular(10 * s),
-                        ),
-                        child: const Text('保存凭证',
-                            style:
-                                TextStyle(color: Colors.white, fontSize: 16)),
-                      ),
-                    ),
+                    _buildPrimaryButton('保存凭证', _save, s),
+                    SizedBox(height: 10 * s),
+                    _buildOutlineButton('粘贴凭证（从 cookie / JSON 提取）',
+                        _showPasteDialog, s),
                     SizedBox(height: 24 * s),
                     _buildSectionHeader('当前状态', s),
                     SizedBox(height: 10 * s),
@@ -240,6 +351,28 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
     );
   }
 
+  Widget _buildScanCard(double s) {
+    return _buildCard(
+      child: Column(
+        children: [
+          if (!_scanning)
+            _buildPrimaryButton('扫码登录', _startScanLogin, s)
+          else ...[
+            KugouQrPanel(
+              state: _qrState ?? QrLoginState.waiting,
+              session: _qrSession,
+              size: (Responsive.contentWidth(MediaQuery.of(context).size) - 60)
+                  .clamp(160.0, 220.0),
+              onRefresh: _startScanLogin,
+            ),
+            const SizedBox(height: 12),
+            _buildOutlineButton('取消扫码', _stopScan, s),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildSectionHeader(String title, double s) {
     return SizedBox(
       height: 20 * s,
@@ -248,6 +381,43 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
         child: Text(title,
             style: TextStyle(
                 color: const Color(0xFF838383), fontSize: 15.5 * s)),
+      ),
+    );
+  }
+
+  Widget _buildPrimaryButton(String text, VoidCallback onTap, double s) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFF2F84FE),
+          borderRadius: BorderRadius.circular(10 * s),
+        ),
+        child: Text(text,
+            style: const TextStyle(color: Colors.white, fontSize: 16)),
+      ),
+    );
+  }
+
+  Widget _buildOutlineButton(String text, VoidCallback onTap, double s) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10 * s),
+          border: Border.all(color: const Color(0xFF2F84FE)),
+        ),
+        child: Text(text,
+            style: const TextStyle(color: Color(0xFF2F84FE), fontSize: 15)),
       ),
     );
   }
@@ -266,6 +436,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
 
   Widget _buildStatusCard(double s) {
     final masked = _credential.maskedToken;
+    final maskedUid = AppConstants.maskToken(_credential.userId);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -287,7 +458,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
               ),
               const SizedBox(width: 6),
               Text(
-                _configured ? '凭证已配置' : '未配置凭证',
+                _configured ? '已登录($maskedUid)' : '未配置凭证',
                 style: TextStyle(
                   fontSize: 15 * s,
                   fontWeight: FontWeight.w500,
@@ -300,10 +471,8 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
           Text('Token：${_configured ? masked : '—'}',
               style: TextStyle(fontSize: 13 * s, color: Colors.black54)),
           const SizedBox(height: 4),
-          Text(
-            'UserID：${_configured ? AppConstants.maskToken(_credential.userId) : '—'}',
-            style: TextStyle(fontSize: 13 * s, color: Colors.black54),
-          ),
+          Text('UserID：${_configured ? maskedUid : '—'}',
+              style: TextStyle(fontSize: 13 * s, color: Colors.black54)),
           if (_configured &&
               _credential.nickname != null &&
               _credential.nickname!.isNotEmpty) ...[
@@ -318,13 +487,13 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
               behavior: HitTestBehavior.opaque,
               child: Container(
                 width: double.infinity,
-                height: 40,
+                height: 48,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10 * s),
                   border: Border.all(color: const Color(0xFFE53935)),
                 ),
-                child: const Text('清除凭证',
+                child: const Text('退出登录',
                     style: TextStyle(color: Color(0xFFE53935), fontSize: 15)),
               ),
             ),

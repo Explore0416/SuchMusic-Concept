@@ -5,7 +5,17 @@
 //   playKey   = md5(hash + pidVersionSecret + appid + mid + userId)
 // 断言为固定常量（黄金值），从而锁死拼接顺序与 MD5 结果，防止后续误改。
 import 'package:flutter_test/flutter_test.dart';
+import 'package:such_music/services/sources/kugou_config.dart';
+import 'package:such_music/services/sources/kugou_device.dart';
 import 'package:such_music/services/sources/kugou_sign.dart';
+
+// 固定输入（主理人实测向量，可复现）：
+//   mid = uuid = "0123456789abcdef0123456789abcdef"
+//   dfid = "0jAbCdEfGhIjKlMnOpQrSt"
+//   clienttime = "1700000000000", clientver="20489", appid="1005", srcappid="2919"
+const String _mid = '0123456789abcdef0123456789abcdef';
+const String _dfid = '0jAbCdEfGhIjKlMnOpQrSt';
+const String _clienttime = '1700000000000';
 
 void main() {
   group('KugouSign.md5Hex', () {
@@ -87,6 +97,106 @@ void main() {
       final lower = KugouSign.playKey(hash: 'abc', mid: 'm', userId: 'u');
       final upper = KugouSign.playKey(hash: 'ABC', mid: 'm', userId: 'u');
       expect(lower == upper, isFalse);
+    });
+  });
+
+  group('KugouSign.loginSignature（扫码登录 · 真实黄金向量）', () {
+    test('取码签名 = bc87e87342d24a51bfe36389daa5ed06', () {
+      final params = <String, dynamic>{
+        'appid': 1005,
+        'srcappid': 2919,
+        'clientver': 20489,
+        'clienttime': _clienttime,
+        'mid': _mid,
+        'uuid': _mid,
+        'dfid': _dfid,
+        'type': 1,
+        'plat': 4,
+        'qrcode_txt':
+            'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=1005&',
+      };
+      expect(KugouSign.loginSignature(params),
+          'bc87e87342d24a51bfe36389daa5ed06');
+    });
+
+    test('轮询签名 = 79c26d9f1566d1fbba55a9533a120d7e', () {
+      final params = <String, dynamic>{
+        'plat': 4,
+        'appid': 1005,
+        'srcappid': 2919,
+        'clientver': 20489,
+        'clienttime': _clienttime,
+        'mid': _mid,
+        'uuid': _mid,
+        'dfid': _dfid,
+        'qrcode': '2c009c8af2d64383e0983172796f9ec21005',
+      };
+      expect(KugouSign.loginSignature(params),
+          '79c26d9f1566d1fbba55a9533a120d7e');
+    });
+
+    test('登录盐 ≠ 搜索盐：同一参数集结果不同（防混用）', () {
+      final params = <String, dynamic>{
+        'appid': 1005,
+        'clienttime': _clienttime,
+      };
+      final login = KugouSign.loginSignature(params);
+      final search = KugouSign.signature(params);
+      expect(login, isNot(equals(search)));
+      expect(KugouConfig.loginSecret, isNot(equals(KugouConfig.secret)));
+    });
+
+    test('config.qrTxt 与实测取码参数逐字节一致', () {
+      expect(KugouConfig.qrTxt,
+          'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=1005&');
+    });
+  });
+
+  group('KugouSign.playKey（双平台盐值 · 真实黄金向量）', () {
+    const hash = 'b3a52a7a958bf0aed0ebfba2e9a818b7';
+    const uid = '0';
+
+    test('概念版 lite 盐 → e4070a69442a75675f1b656c1fb0c1a7', () {
+      expect(
+        KugouSign.playKey(
+            hash: hash,
+            mid: _mid,
+            userId: uid,
+            salt: KugouConfig.keySaltLite),
+        'e4070a69442a75675f1b656c1fb0c1a7',
+      );
+    });
+
+    test('标准版盐 → 584a651db79934c532846f48ff0b182b', () {
+      expect(
+        KugouSign.playKey(
+            hash: hash,
+            mid: _mid,
+            userId: uid,
+            salt: KugouConfig.keySaltStandard),
+        '584a651db79934c532846f48ff0b182b',
+      );
+    });
+
+    test('缺省盐 = 标准版（既有语义不变）', () {
+      expect(
+        KugouSign.playKey(hash: hash, mid: _mid, userId: uid),
+        '584a651db79934c532846f48ff0b182b',
+      );
+    });
+  });
+
+  group('KugouDevice', () {
+    test('mid 为 32 位小写 hex', () {
+      expect(KugouDevice.mid, matches(RegExp(r'^[0-9a-f]{32}$')));
+    });
+
+    test('uuid == mid', () {
+      expect(KugouDevice.uuid, KugouDevice.mid);
+    });
+
+    test('dfid 匹配 ^0j[A-Za-z0-9]{20}\$', () {
+      expect(KugouDevice.dfid, matches(RegExp(r'^0j[A-Za-z0-9]{20}$')));
     });
   });
 }

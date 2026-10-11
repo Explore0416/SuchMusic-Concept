@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -7,44 +6,55 @@ import 'package:flutter/foundation.dart';
 import '../../models/song_model.dart';
 import '../kugou_credential_service.dart';
 import 'kugou_config.dart';
+import 'kugou_device.dart';
 import 'kugou_sign.dart';
 import 'music_source.dart';
 import 'song_matcher.dart';
 
+/// 日志安全化：把播放直链裁剪为 `协议://主机/路径前缀`，**丢弃 query 与
+/// fragment**。酷狗取源直链的 query 里可能内嵌 `token=` 等凭证参数，
+/// 完整打印会泄漏到日志；此处仅保留「拿到了 URL」这一可观测性。
+///
+/// - 合法 URL：输出 `scheme://host` + 最长 40 字符的路径前缀；
+/// - 非法/相对 URL：退化为前 24 字符 + 省略号，避免整串泄漏。
+@visibleForTesting
+String sanitizePlayUrlForLog(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) {
+    return url.length <= 24 ? url : '${url.substring(0, 24)}…';
+  }
+  final path = uri.path.length > 40 ? '${uri.path.substring(0, 40)}…' : uri.path;
+  return '${uri.scheme}://${uri.host}$path';
+}
+
 /// 酷狗概念版音源实现（ARCH §4.6）。
 ///
-/// - 搜索：优先免签名 `mobilecdn` 兜底，失败再走需签名的 `complexsearch`。
-/// - 播放：`gateway/v3/url`，请求头 `x-router: tracker.kugou.com`。
+/// - 搜索：**主路径** `complexsearch`（需签名）；仅在主路径返回空时
+///   才走免签名 `mobilecdn` 兜底（该域名实测常不可达，需容忍其失败）。
+/// - 播放：`gateway/v3/url`，请求头 `x-router: tracker.kugou.com`；
+///   `key` 使用**概念版 lite 盐值**。
 /// - 歌词：`krcs` 取 id/accesskey → `lyrics/download` 取 base64 LRC（不解 KRC）。
 /// - 任何失败一律返回空 / null + 日志，交由 [SourceManager] 回退网易云。
 class KugouSource implements MusicSource {
-  KugouSource._internal();
+  KugouSource._internal(this._dio);
 
-  static final KugouSource _instance = KugouSource._internal();
+  static final KugouSource _instance = KugouSource._internal(_createDio());
 
   factory KugouSource() => _instance;
 
-  final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  /// 测试专用：注入自定义 [Dio]（记录请求 / 假应答）。
+  @visibleForTesting
+  factory KugouSource.withDio(Dio dio) => KugouSource._internal(dio);
 
-  /// 搜索 / 歌词请求的取消令牌（竞态保护：新请求先取消旧请求）
+  static Dio _createDio() => Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+      ));
+
+  final Dio _dio;
+
+  /// 搜索 / 歌词请求的取消令牌（竞态保护：新请求先取消旧请求）。
   CancelToken? _searchCancel;
-
-  // 设备标识（进程内固定，避免风控）
-  static final String _mid = _randomHex(32);
-  static final String _dfid = _randomHex(24);
-  static final String _uuid = _randomHex(32).toUpperCase();
-
-  static String _randomHex(int len) {
-    final r = Random();
-    final sb = StringBuffer();
-    for (var i = 0; i < len; i++) {
-      sb.write(r.nextInt(16).toRadixString(16));
-    }
-    return sb.toString();
-  }
 
   @override
   String get id => 'kugou';
@@ -73,12 +83,66 @@ class KugouSource implements MusicSource {
     final token = CancelToken();
     _searchCancel = token;
 
-    // 1) 免签名 mobilecdn（优先，稳定）
-    final primary = await _searchMobileCdn(kw, limit, token);
+    // 1) 主路径：需签名 complexsearch（唯一主路径）
+    final primary = await _searchComplex(kw, limit, token);
     if (primary.isNotEmpty) return primary;
 
-    // 2) 需签名 complexsearch（兜底）
-    return _searchComplex(kw, limit, token);
+    // 2) 兜底：免签名 mobilecdn（仅主路径为空时；容忍其失败）
+    return _searchMobileCdn(kw, limit, token);
+  }
+
+  Future<List<SongModel>> _searchComplex(
+      String kw, int limit, CancelToken token) async {
+    try {
+      // 概念版 Web 端签名所需**完整**参数集（漏参数 → error_code=20006）
+      final params = <String, dynamic>{
+        'appid': KugouConfig.appid, // 概念版 1005
+        'srcappid': KugouConfig.srcappid, // 2919
+        'clientver': KugouConfig.clientver,
+        'clienttime': DateTime.now().millisecondsSinceEpoch,
+        'dfid': KugouDevice.dfid,
+        'mid': KugouDevice.mid,
+        'uuid': KugouDevice.uuid,
+        'keyword': kw,
+        'page': 1,
+        'pagesize': limit,
+        'bitrate': 0,
+        'isfuzzy': 0,
+        'inputtype': 0,
+        'platform': 'WebFilter',
+        'userid': 0,
+        'iscorrection': 1,
+        'privilege_filter': 0,
+        'filter': 10,
+        'token': '',
+      };
+      // complexsearch 是 **Web 端接口**，必须用 Web 盐值签名（实测：误用
+      // Android 盐值会被拒 → error_code=20006 → 搜索恒为空）。
+      final signature = KugouSign.webSignature(params);
+      final res = await _dio.get(
+        '${KugouConfig.complexSearchHost}/v2/search/song',
+        queryParameters: {...params, 'signature': signature},
+        cancelToken: token,
+        options: Options(headers: {
+          'User-Agent': KugouConfig.userAgent,
+          'x-router': 'complexsearch.kugou.com',
+        }),
+      );
+      final data = res.data;
+      if (data is Map) {
+        final status = data['status'];
+        final errCode = data['error_code'];
+        if ((status != null && status.toString() != '1') ||
+            (errCode != null && errCode.toString() != '0')) {
+          debugPrint('⚠️ 酷狗搜索(complexsearch)异常 status=$status err=$errCode');
+        }
+      }
+      final list = _extractList(data, ['data', 'lists']);
+      return _mapSongs(list);
+    } catch (e) {
+      debugPrint('⚠️ 酷狗搜索(complexsearch)失败: $e');
+      return [];
+    }
   }
 
   Future<List<SongModel>> _searchMobileCdn(
@@ -99,71 +163,18 @@ class KugouSource implements MusicSource {
       final info = _extractList(res.data, ['data', 'info']);
       return _mapSongs(info);
     } catch (e) {
-      debugPrint('⚠️ 酷狗搜索(mobilecdn)失败: $e');
-      return [];
-    }
-  }
-
-  Future<List<SongModel>> _searchComplex(
-      String kw, int limit, CancelToken token) async {
-    try {
-      // 按概念版 Web 端签名所需静态参数集合补全（缺失会导致签名校验 100% 被拒）
-      final params = <String, dynamic>{
-        'appid': KugouConfig.appid, // 概念版 1005（Web 端亦可用 1014）
-        'srcappid': KugouConfig.srcappid, // 2919
-        'clientver': KugouConfig.clientver,
-        'clienttime': DateTime.now().millisecondsSinceEpoch,
-        'dfid': _dfid,
-        'mid': _mid,
-        'uuid': _uuid,
-        'keyword': kw,
-        'page': 1,
-        'pagesize': limit,
-        'bitrate': 0,
-        'isfuzzy': 0,
-        'inputtype': 0,
-        'platform': 'WebFilter',
-        'userid': 0,
-        'iscorrection': 1,
-        'privilege_filter': 0,
-        'filter': 10,
-        'token': '',
-      };
-      final signature = KugouSign.signature(params);
-      final res = await _dio.get(
-        '${KugouConfig.complexSearchHost}/v2/search/song',
-        queryParameters: {...params, 'signature': signature},
-        cancelToken: token,
-        options: Options(headers: {
-          'User-Agent': KugouConfig.userAgent,
-          'x-router': 'complexsearch.kugou.com',
-        }),
-      );
-      final list = _extractList(res.data, ['data', 'lists']);
-      return _mapSongs(list);
-    } catch (e) {
-      debugPrint('⚠️ 酷狗搜索(complexsearch)失败: $e');
+      debugPrint('⚠️ 酷狗搜索(mobilecdn)兜底失败: $e');
       return [];
     }
   }
 
   @override
   Future<List<String>> hotSearch() async {
-    try {
-      final res = await _dio.get(
-        '${KugouConfig.mobileCdnHost}/api/v3/search/hot',
-        queryParameters: {'format': 'json', 'plat': 0, 'count': 30},
-        options: Options(headers: {'User-Agent': KugouConfig.userAgent}),
-      );
-      final list = _extractList(res.data, ['data', 'info']);
-      return list
-          .map((e) => e['keyword']?.toString() ?? '')
-          .where((k) => k.isNotEmpty)
-          .toList();
-    } catch (e) {
-      debugPrint('⚠️ 酷狗热搜获取失败: $e');
-      return [];
-    }
+    // ⚠️ 旧接口 `mobilecdn.kugou.com/api/v3/search/hot` 已失效（实测域名
+    // 证书不匹配 / 不可达）。此处**主动返回空列表**，由上层 UI
+    // （search_page）回退到本地默认热词 / 空态提示，避免界面卡在无结果且无提示。
+    debugPrint('ℹ️ 酷狗热搜接口已失效，返回空列表由上层回退');
+    return const [];
   }
 
   // ── 播放地址 ──────────────────────────────────────────────
@@ -190,18 +201,24 @@ class KugouSource implements MusicSource {
         'behavior': 'play',
         'clientver': KugouConfig.clientver,
         'cmd': 26,
-        'dfid': _dfid,
+        'dfid': KugouDevice.dfid,
         'hash': hashLower,
-        'mid': _mid,
+        'mid': KugouDevice.mid,
         'mtype': 2,
         'userid': userId,
-        'uuid': _uuid,
+        'uuid': KugouDevice.uuid,
         'vipType': KugouConfig.vipType,
       };
       if (userToken.isNotEmpty) params['token'] = userToken;
-      params['key'] =
-          KugouSign.playKey(hash: hashLower, mid: _mid, userId: userId);
-      final signature = KugouSign.signature(params);
+      // 概念版（lite）盐值 —— 见 ARCH-酷狗登录 §一.3 / REQ-L3
+      params['key'] = KugouSign.playKey(
+        hash: hashLower,
+        mid: KugouDevice.mid,
+        userId: userId,
+        salt: KugouConfig.keySaltLite,
+      );
+      // gateway 取地址属 **Android 端接口**，用 Android 盐值签名（保持 LDDC）。
+      final signature = KugouSign.androidSignature(params);
 
       final res = await _dio.get(
         '${KugouConfig.gatewayHost}/v3/url',
@@ -216,7 +233,9 @@ class KugouSource implements MusicSource {
         debugPrint('⚠️ 酷狗取播放地址为空（可能需 VIP 或凭证失效）');
         return null;
       }
-      debugPrint('🎵 酷狗 songUrl 返回: $url');
+      // 安全：直链 query 可能内嵌 `token=` 等凭证，日志只保留
+      // `协议://主机/路径前缀`，绝不输出完整 query（见 sanitizePlayUrlForLog）。
+      debugPrint('🎵 酷狗 songUrl 返回: ${sanitizePlayUrlForLog(url)}');
       return url;
     } catch (e) {
       debugPrint('❌ 酷狗取播放地址异常: $e');
@@ -321,9 +340,20 @@ class KugouSource implements MusicSource {
 
   // ── 解析工具 ──────────────────────────────────────────────
 
-  /// 从嵌套响应中取列表（防御性：任一层缺失返回空）
+  /// 从嵌套响应中取列表（防御性：任一层缺失返回空）。
+  ///
+  /// ⚠️ 酷狗 complexsearch 部分 CDN 节点返回 `text/html` 而非 `application/json`，
+  /// 此时 Dio 不会自动 JSON 解码 → `res.data` 为原始 **String**；此处手动解码兜底，
+  /// 否则即使签名正确也会因解析失败得到空结果。
   List<Map<String, dynamic>> _extractList(dynamic data, List<String> path) {
     dynamic cur = data;
+    if (cur is String) {
+      try {
+        cur = jsonDecode(cur);
+      } catch (_) {
+        return const [];
+      }
+    }
     for (final key in path) {
       if (cur is Map && cur[key] != null) {
         cur = cur[key];

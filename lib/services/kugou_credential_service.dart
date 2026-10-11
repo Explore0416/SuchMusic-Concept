@@ -58,6 +58,16 @@ class KugouCredentialService {
     }
   }
 
+  /// 保存来自扫码登录的凭证（语义同 [save]，仅用于日志区分来源）。
+  Future<bool> saveFromLogin(String token, String userId) async {
+    final ok = await save(token, userId);
+    if (ok) {
+      debugPrint(
+          '🔑 酷狗扫码登录凭证已写入: uid=${AppConstants.maskToken(userId)}');
+    }
+    return ok;
+  }
+
   Future<void> setNickname(String? nickname) async {
     _nickname = (nickname == null || nickname.isEmpty) ? null : nickname;
     try {

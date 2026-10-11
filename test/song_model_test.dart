@@ -122,7 +122,68 @@ void main() {
       expect(s.albumAudioId, 'E1');
       expect(s.duration, 210000); // 直接毫秒
       expect(s.coverUrl, 'http://img/480/x.jpg'); // {size} → 480
-      expect(s.id, 'E1'); // 优先 albumAudioId
+      expect(s.id, 'H1'); // 优先 hash（稳定标识，向后兼容旧 playlist）
+    });
+
+    test('complexsearch 主路径：真实字段名（大小写敏感）', () {
+      // 照抄 2024 实测 `complexsearch.kugou.com/v2/search/song` 响应结构
+      // （keyword=「晴天 周杰伦」首条）的关键字段名，防字段名再次踩坑。
+      final s = SongModel.fromKugouJson({
+        'SongName': '晴天',
+        'FileName': '周杰伦 - 晴天',
+        'SingerName': '周杰伦',
+        'FileHash': 'B3A52A7A958BF0AED0EBFBA2E9A818B7',
+        'Duration': 269, // 单位：秒
+        'AlbumID': 966846, // int，非字符串
+        'AlbumName': '叶惠美',
+        'MixSongID': 32100650, // 注意大小写：MixSongID（非 EMixSongID/AudioId）
+        'Audioid': 20505418, // 备份候选
+        'ID': 32100650,
+        'Scid': 20505418,
+        'Image': 'http://imge.kugou.com/stdmusic/{size}/x.jpg',
+        'AlbumImage': '', // 实测恒空
+      });
+      expect(s.source, SongSource.kugou);
+      expect(s.name, '晴天');
+      expect(s.artist, '周杰伦');
+      expect(s.hash, 'B3A52A7A958BF0AED0EBFBA2E9A818B7');
+      expect(s.album, '叶惠美'); // AlbumName 真实存在
+      expect(s.albumId, '966846');
+      expect(s.albumAudioId, '32100650'); // MixSongID（修复前恒 null）
+      expect(s.duration, 269000); // 269 秒 → 毫秒
+      expect(s.coverUrl, 'http://imge.kugou.com/stdmusic/480/x.jpg');
+      expect(s.id, s.hash); // 稳定标识优先 hash
+    });
+
+    test('albumAudioId 优先级：MixSongID > Audioid，且兼容旧 EMixSongID', () {
+      expect(
+        SongModel.fromKugouJson({'FileHash': 'H', 'MixSongID': 111, 'Audioid': 222})
+            .albumAudioId,
+        '111',
+      );
+      // 仅剩 Audioid 时取 Audioid
+      expect(
+        SongModel.fromKugouJson({'FileHash': 'H', 'Audioid': 222}).albumAudioId,
+        '222',
+      );
+      // 旧接口 EMixSongID 仍优先于 MixSongID
+      expect(
+        SongModel.fromKugouJson(
+                {'FileHash': 'H', 'EMixSongID': 9, 'MixSongID': 111})
+            .albumAudioId,
+        '9',
+      );
+    });
+
+    test('封面兜底：Image 缺失时取 trans_param.union_cover', () {
+      final s = SongModel.fromKugouJson({
+        'FileHash': 'H',
+        'SongName': 's',
+        'trans_param': {
+          'union_cover': 'http://imge.kugou.com/u/{size}/y.jpg',
+        },
+      });
+      expect(s.coverUrl, 'http://imge.kugou.com/u/480/y.jpg');
     });
 
     test('mobilecdn 风格：秒 duration → 转毫秒', () {

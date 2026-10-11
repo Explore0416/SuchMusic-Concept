@@ -59,10 +59,25 @@ flutter build apk --debug     # 或 --release
 
 - **当前音源**：网易云 / 酷狗概念版。
 - **失败自动回退**：酷狗取源失败时自动改用网易云（默认开）。
-- **酷狗概念版凭证**：点击进入凭证页，填入 `token` / `userid`（可从酷狗概念版 App 抓包获得），
-  可选填昵称用于展示。凭证本地保存、界面与日志**一律脱敏**（`前4****后4`）。
+- **酷狗概念版凭证**：点击进入凭证页，提供 **3 种** 配置方式：
+  - **扫码登录（推荐，v1.1 新增）**：点「扫码登录」→ 用**酷狗概念版 App** 扫码 → 手机上确认 →
+    自动拿到 `token`/`userid` 并写入。二维码优先用接口直返的 base64 图片，缺失时回退 `qr_flutter`
+    渲染；过期或本地 TTL 到期**自动换码**；退出页面会**取消**在飞请求与轮询。轮询间隔 2s，
+    连续 5 次网络错误或超时即停止（不无限刷风控）。
+  - **粘贴凭证（v1.1 新增兜底）**：点「粘贴凭证」，粘贴整段 cookie 或 JSON
+    （如 `token=...; userid=...` 或 `{"token":"...","userid":123}`），自动提取并保存。
+  - **手工填写（高级 / 兜底）**：直接填 `token` / `userid`（可从酷狗概念版 App 抓包获得），
+    可选填昵称用于展示。
+  凭证本地保存、界面与日志**一律脱敏**（`前4****后4`，`AppConstants.maskToken`）。
 
 > 未配置凭证时选择酷狗会先引导你去配置，不会清空网易云登录态。
+
+### 1.1 v1.1 两处缺陷修复
+
+| 编号 | 缺陷 | 修复位置 | 说明 |
+|---|---|---|---|
+| **REQ-L2** | 搜索**主路径**用的 `mobilecdn.kugou.com` 实测**完全不可达（HTTP 000）**，导致搜索主路径失效 | `lib/services/sources/kugou_source.dart`（`search` / `_searchComplex` / `_searchMobileCdn`） | 主路径改为实测可用的 `complexsearch.kugou.com/v2/search/song`，并补全**完整签名参数集**（`keyword/page/pagesize/bitrate=0/isfuzzy=0/inputtype=0/platform=WebFilter/userid/iscorrection=1/privilege_filter=0/filter=10/token=` + 公共参数）；`mobilecdn` **降级为兜底**（仅在主路径返回空时调用，且容忍其失败）。 |
+| **REQ-L3** | 取播放地址 `key` 的**盐值未按平台区分**，概念版使用了标准版盐值 | `lib/services/sources/kugou_config.dart`（`keySaltLite` / `keySaltStandard`）、`lib/services/sources/kugou_sign.dart`（`playKey(..., {salt})`）、`kugou_source.dart`（`getSongUrl` 传 lite 盐） | 概念版（lite）盐 `185672dd…` 与标准版盐 `57ae12eb…` 分离；登录签名盐 `NVPh5oo7…`（`loginSecret`）与搜索/取地址盐 `LnT6xpN3…`（`secret`）分离——两套签名体系不可混用。 |
 
 ### 2. 通知栏 / 灵动岛歌词
 
@@ -87,7 +102,8 @@ flutter build apk --debug     # 或 --release
 | 项 | 状态 | 证据 |
 |---|---|---|
 | `flutter analyze lib test` | ✅ **0 issues** | 与改造前基线一致（原基线有 1 个 error，已随依赖修复清零） |
-| `flutter test` | ✅ **105 / 105 通过** | 8 个测试文件 |
+| `flutter test` | ✅ **163 / 163 通过** | 13 个测试文件（v1.1 在既有 105 项之上**新增 58 项**：登录服务状态机 / 二维码组件 / 凭证解析 / 搜索主路径 / 登录签名黄金值 / 回归护栏） |
+| 扫码登录签名单测（真实黄金向量） | ✅ 通过 | 取码 `bc87e873…`、轮询 `79c26d9f…`、概念版 `playKey` `e4070a69…`、标准版 `584a651d…`（由独立脚本核算并断言） |
 | 竖屏基线不回归（430×932） | ✅ 单元测试固化 | 胶囊栏 321.5 / 封面 380 / uiScale 1.0 / dialogScale 1.0 |
 | 原生 Kotlin 编译（`MainActivity.kt` + `IslandBridge.kt`） | ✅ **编译通过** | 用 Kotlin 2.3.20 编译器 + `android.jar(API 36)` + Flutter embedding + audio_service 实际编译，产出 `MainActivity.class` / `IslandBridge.class`（仅原有 deprecated 警告） |
 | Android 构建管线（Gradle 配置 / 清单合并 / 资源处理 / R 类生成 / 全部插件编译） | ✅ 通过 | 端到端跑通 |
@@ -103,5 +119,10 @@ flutter build apk --debug     # 或 --release
 1. **酷狗接口为第三方逆向接口**，其参数、密钥、返回结构可能随时变更。本版已做
    「常量集中 + 失败回退网易云 + 请求竞态保护」，但仍存在失效风险。
 2. 酷狗歌词使用明文 LRC（`fmt=lrc`），**不解密 KRC**。
-3. 本版**不做**音质选择、不做扫码登录、不接入小米超级岛官方审核通道（见 PRD「非目标」）。
+3. 本版**不做**音质选择、**不做短信验证码登录、不做跳转酷狗 App 授权登录（OAuth）**、不接入小米超级岛官方审核通道（见 PRD「非目标」）。
+   - **短信验证码登录**未实现：实测 `POST login.user.kugou.com/v7/send_mobile_code` 持续返回 `error_code=20006`（签名错），
+     且依赖**设备注册上下文**，真实校验必须使用真实手机号，当前环境无法验证。
+   - **跳转 App 授权登录（OAuth）**未实现：需**酷狗开放平台**开发者资质（appid/secret + 回调），个人二改无法获得；
+     即便获得也**取不到概念版播放凭证**。
+   - 登录服务已预留 `QrLoginState.confirmed`（接口未见）等扩展位，后续拿到稳定链路可接入。
 4. 本项目仅供学习研究，请尊重版权；VIP 权益完全依赖使用者自有的合法账号凭证，本项目不破解、不伪造。
