@@ -1401,20 +1401,24 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
                   opacity: opacity,
                   duration: const Duration(milliseconds: 800),
                   curve: Curves.easeOut,
-                  child: Text(
-                    lyric.text,
+                  // 字号 / 字重 / 发光随高亮**平滑过渡**（此前为瞬变，观感生硬）
+                  child: AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 800),
+                    curve: Curves.easeOut,
                     textAlign: TextAlign.left,
                     style: TextStyle(
-                    fontSize: isCurrent ? currentFont : otherFont,
-                    fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                    color: Colors.white,
-                    height: 1.4,
-                    shadows: isCurrent
-                        ? const [Shadow(color: Colors.white38, blurRadius: 16)]
-                        : null,
+                      fontSize: isCurrent ? currentFont : otherFont,
+                      fontWeight:
+                          isCurrent ? FontWeight.bold : FontWeight.normal,
+                      color: Colors.white,
+                      height: 1.4,
+                      shadows: isCurrent
+                          ? const [Shadow(color: Colors.white38, blurRadius: 16)]
+                          : const [Shadow(color: Colors.transparent, blurRadius: 0)],
+                    ),
+                    child: Text(lyric.text, textAlign: TextAlign.left),
                   ),
                 ),
-              ),
             ),
           ),
           );
