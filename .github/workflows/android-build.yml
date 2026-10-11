@@ -58,23 +58,26 @@ jobs:
       - name: Unit / widget tests
         run: flutter test
 
+      # 只出 release 包：debug + release 连编会耗尽 GitHub 运行器磁盘
+      # （实测 release 已完成，debug 在 :app:mergeDebugNativeLibs 阶段
+      #  报 No space left on device）。release 无需 android/key.properties ——
+      # 缺失时签名配置自动回退 debug 签名，产物仍可直接安装。
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Build debug APK
-        run: flutter build apk --debug
+      - name: Show APK info
+        run: ls -lh build/app/outputs/flutter-apk/
 
-      - name: Collect artifacts
+      - name: Collect artifact
         run: |
           mkdir -p artifacts
-          cp build/app/outputs/flutter-apk/app-release.apk artifacts/SuchMusic-release.apk || true
-          cp build/app/outputs/flutter-apk/app-debug.apk   artifacts/SuchMusic-debug.apk   || true
+          cp build/app/outputs/flutter-apk/app-release.apk artifacts/SuchMusic-release.apk
           ls -lh artifacts
 
-      - name: Upload APKs
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SuchMusic-apk
+          name: SuchMusic-release-apk
           path: artifacts/*.apk
           if-no-files-found: error
           retention-days: 30
