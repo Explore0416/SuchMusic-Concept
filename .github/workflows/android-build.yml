@@ -1,18 +1,19 @@
-name: Android Build
+name: Android Build & Release
 
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # 发布 Release 需要写权限
 
 jobs:
   build:
-    name: Analyze · Test · Build APK
+    name: Analyze · Test · Build Signed APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -58,26 +59,57 @@ jobs:
       - name: Unit / widget tests
         run: flutter test
 
-      # 只出 release 包：debug + release 连编会耗尽 GitHub 运行器磁盘
-      # （实测 release 已完成，debug 在 :app:mergeDebugNativeLibs 阶段
-      #  报 No space left on device）。release 无需 android/key.properties ——
-      # 缺失时签名配置自动回退 debug 签名，产物仍可直接安装。
+      # 只出 release 包：debug + release 连编会耗尽 GitHub 运行器磁盘。
+      # 正式签名 suchmusic-release.jks 与 key.properties 随私有仓库入库，
+      # 构建产物自动带正式签名；若在公开 fork 缺失该文件则回退 debug 签名。
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Show APK info
-        run: ls -lh build/app/outputs/flutter-apk/
+      # 校验 APK 签名证书（公开 fork 缺 key.properties 时会在此明确暴露 debug 回退）
+      - name: Verify APK signature
+        run: |
+          APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort | tail -1)
+          echo "using $APKSIGNER"
+          $APKSIGNER verify --print-certs build/app/outputs/flutter-apk/app-release.apk
 
       - name: Collect artifact
         run: |
+          VERSION=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          SHORT_SHA=$(git rev-parse --short HEAD)
           mkdir -p artifacts
-          cp build/app/outputs/flutter-apk/app-release.apk artifacts/SuchMusic-release.apk
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            NAME="SuchMusic-$GITHUB_REF_NAME.apk"
+          else
+            NAME="SuchMusic-v$VERSION-$SHORT_SHA.apk"
+          fi
+          cp build/app/outputs/flutter-apk/app-release.apk "artifacts/$NAME"
+          echo "APK_NAME=$NAME" >> "$GITHUB_ENV"
           ls -lh artifacts
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: SuchMusic-release-apk
           path: artifacts/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # 正式发布：推送 v* 标签时触发，以标签为 Release 名，自动生成变更说明
+      - name: Create Release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/${{ env.APK_NAME }}
+          generate_release_notes: true
+
+      # 滚动发布：每次 push 到 main/master 自动构建签名 APK，
+      # 并覆盖更新固定 tag `latest` 的预发布版（同资源名自动替换）
+      - name: Update rolling Release (main)
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 'Latest build（最新自动构建）'
+          prerelease: true
+          make_latest: false
+          files: artifacts/${{ env.APK_NAME }}

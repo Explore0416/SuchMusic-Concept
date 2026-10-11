@@ -7,8 +7,10 @@ plugins {
 }
 
 // 读取签名配置（android/key.properties）。
-// 该文件含密钥口令，不入版本库；**缺失时必须能正常构建**（新克隆 / CI 场景），
-// 此时 release 回退用 debug 签名，保证产物仍可安装。
+// 本仓库为私有，正式签名 suchmusic-release.jks 与 key.properties 直接入库，
+// 保证本地与 CI 每次构建都用同一签名（升级安装不冲突）；
+// **缺失时仍必须能正常构建**（例如公开 fork 场景），
+// 此时 release 回退用 debug 签名，产物同样可直接安装。
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 val hasReleaseKeystore = keystorePropertiesFile.exists() &&
