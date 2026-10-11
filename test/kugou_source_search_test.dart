@@ -84,7 +84,7 @@ void main() {
       ]) {
         expect(q.containsKey(key), isTrue, reason: '缺少参数 $key');
       }
-      expect(q['appid'], 1005);
+      expect(q['appid'], 3116);
       expect(q['srcappid'], 2919);
       expect(q['bitrate'], 0);
       expect(q['isfuzzy'], 0);

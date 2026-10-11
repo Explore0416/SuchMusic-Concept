@@ -9,10 +9,12 @@ import 'package:such_music/services/sources/kugou_config.dart';
 import 'package:such_music/services/sources/kugou_device.dart';
 import 'package:such_music/services/sources/kugou_sign.dart';
 
-// 固定输入（主理人实测向量，可复现）：
+// 固定输入（可复现）：
 //   mid = uuid = "0123456789abcdef0123456789abcdef"
 //   dfid = "0jAbCdEfGhIjKlMnOpQrSt"
-//   clienttime = "1700000000000", clientver="20489", appid="1005", srcappid="2919"
+//   clienttime = "1700000000000", srcappid="2919"
+//   概念版(lite): clientver="11440", appid="3116"
+//   （登录签名向量采用概念版 lite 参数，与应用实际请求一致）
 const String _mid = '0123456789abcdef0123456789abcdef';
 const String _dfid = '0jAbCdEfGhIjKlMnOpQrSt';
 const String _clienttime = '1700000000000';
@@ -89,7 +91,7 @@ void main() {
       expect(
         KugouSign.playKey(
             hash: 'abcdef', mid: 'M0123456789', userId: '123456'),
-        '23cd3f7bb1096cc2f82723fa1868654d',
+        'b4fdf41ac0798d69220cfa14e8a1d1bf',
       );
     });
 
@@ -101,11 +103,11 @@ void main() {
   });
 
   group('KugouSign.loginSignature（扫码登录 · 真实黄金向量）', () {
-    test('取码签名 = bc87e87342d24a51bfe36389daa5ed06', () {
+    test('取码签名 = 4c505c49c0a687f352f48994361ecff2', () {
       final params = <String, dynamic>{
-        'appid': 1005,
+        'appid': 3116,
         'srcappid': 2919,
-        'clientver': 20489,
+        'clientver': 11440,
         'clienttime': _clienttime,
         'mid': _mid,
         'uuid': _mid,
@@ -113,18 +115,18 @@ void main() {
         'type': 1,
         'plat': 4,
         'qrcode_txt':
-            'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=1005&',
+            'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=3116&',
       };
       expect(KugouSign.loginSignature(params),
-          'bc87e87342d24a51bfe36389daa5ed06');
+          '4c505c49c0a687f352f48994361ecff2');
     });
 
-    test('轮询签名 = 79c26d9f1566d1fbba55a9533a120d7e', () {
+    test('轮询签名 = 22a8093d2e5a7c4b86cf6b06d4ce37fa', () {
       final params = <String, dynamic>{
         'plat': 4,
-        'appid': 1005,
+        'appid': 3116,
         'srcappid': 2919,
-        'clientver': 20489,
+        'clientver': 11440,
         'clienttime': _clienttime,
         'mid': _mid,
         'uuid': _mid,
@@ -132,12 +134,12 @@ void main() {
         'qrcode': '2c009c8af2d64383e0983172796f9ec21005',
       };
       expect(KugouSign.loginSignature(params),
-          '79c26d9f1566d1fbba55a9533a120d7e');
+          '22a8093d2e5a7c4b86cf6b06d4ce37fa');
     });
 
     test('登录盐 ≠ 搜索盐：同一参数集结果不同（防混用）', () {
       final params = <String, dynamic>{
-        'appid': 1005,
+        'appid': 3116,
         'clienttime': _clienttime,
       };
       final login = KugouSign.loginSignature(params);
@@ -146,9 +148,9 @@ void main() {
       expect(KugouConfig.loginSecret, isNot(equals(KugouConfig.secret)));
     });
 
-    test('config.qrTxt 与实测取码参数逐字节一致', () {
+    test('config.qrTxt 与概念版取码参数逐字节一致', () {
       expect(KugouConfig.qrTxt,
-          'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=1005&');
+          'https://h5.kugou.com/apps/loginQRCode/html/index.html?appid=3116&');
     });
   });
 
@@ -156,32 +158,32 @@ void main() {
     const hash = 'b3a52a7a958bf0aed0ebfba2e9a818b7';
     const uid = '0';
 
-    test('概念版 lite 盐 → e4070a69442a75675f1b656c1fb0c1a7', () {
+    test('概念版 lite 盐 → 5705999901a2c225ef73923914995aa3', () {
       expect(
         KugouSign.playKey(
             hash: hash,
             mid: _mid,
             userId: uid,
             salt: KugouConfig.keySaltLite),
-        'e4070a69442a75675f1b656c1fb0c1a7',
+        '5705999901a2c225ef73923914995aa3',
       );
     });
 
-    test('标准版盐 → 584a651db79934c532846f48ff0b182b', () {
+    test('标准版盐 → 429cee3cbae7363ea0d14d8975bfdcb0', () {
       expect(
         KugouSign.playKey(
             hash: hash,
             mid: _mid,
             userId: uid,
             salt: KugouConfig.keySaltStandard),
-        '584a651db79934c532846f48ff0b182b',
+        '429cee3cbae7363ea0d14d8975bfdcb0',
       );
     });
 
     test('缺省盐 = 标准版（既有语义不变）', () {
       expect(
         KugouSign.playKey(hash: hash, mid: _mid, userId: uid),
-        '584a651db79934c532846f48ff0b182b',
+        '429cee3cbae7363ea0d14d8975bfdcb0',
       );
     });
   });

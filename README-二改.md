@@ -126,3 +126,47 @@ flutter build apk --debug     # 或 --release
      即便获得也**取不到概念版播放凭证**。
    - 登录服务已预留 `QrLoginState.confirmed`（接口未见）等扩展位，后续拿到稳定链路可接入。
 4. 本项目仅供学习研究，请尊重版权；VIP 权益完全依赖使用者自有的合法账号凭证，本项目不破解、不伪造。
+
+---
+
+## 六、概念版（lite）平台参数修正（v1.2.0）
+
+### 问题
+
+此前音源虽名为「酷狗概念版」，但请求使用的是**酷狗普通版（标准版）的应用标识**
+`appid=1005 / clientver=20489`，导致：
+
+- 扫码登录授权到的是**酷狗音乐（普通版）**，而非酷狗概念版；
+- 服务端按普通版身份校验权益，**概念版 VIP 无法生效**。
+
+### 修正
+
+参照 KuGouMusicApi 的双版本架构（`util/config.json`），酷狗概念版（lite）与标准版参数为：
+
+| 参数 | 标准版 standard | 概念版 lite（本次采用） |
+|------|-----------------|------------------------|
+| appid | 1005 | **3116** |
+| clientver | 20489 | **11440** |
+| 登录二维码内容 `qrcode_txt` 的 appid | 1005 | **3116** |
+
+改动点（均在 `lib/services/sources/`）：
+
+1. `kugou_config.dart`：新增 `liteAppid=3116` / `liteClientver=11440`（与 `standardAppid/standardClientver` 并列保留），
+   并将 `appid` / `clientver` / `loginClientver` / `qrTxt` 全部切换到**概念版 lite** 参数；
+2. `kugou_source.dart`：搜索、取播放地址自动使用新配置（概念版 `appid=3116` + 概念版 android 盐 + 概念版 key 盐）；
+3. `kugou_credential_page.dart`：页面与扫码区文案明确为「酷狗概念版」，并提示使用**酷狗概念版 App** 扫码。
+
+> 说明：`qrcode_txt` 中的 `appid` 决定扫码授权的目标平台，是本次修复的关键。
+
+### 验证
+
+| 项 | 方式 | 结果 |
+|----|------|------|
+| 取二维码 | 真实联网 | ✅ 返回有效二维码（data URI） |
+| 轮询状态 | 真实联网 | ✅ 未扫码返回等待态 |
+| 搜索 | 真实联网 | ✅ `complexsearch` 主路径非空（概念版参数签名通过） |
+| 取播放地址 | 真实联网 | ✅ 无 `error_code=20006`（签名盐值正确） |
+| 离线单测 | `flutter test` | ✅ 197 passed / 5 skipped |
+| 静态分析 | `flutter analyze lib test` | ✅ 0 issues |
+
+> ⚠️ 「扫码后 token 是否绑定概念版权益」需在真机用**自有概念版 VIP 账号**实测确认。

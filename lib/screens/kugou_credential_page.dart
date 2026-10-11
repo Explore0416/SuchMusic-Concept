@@ -240,7 +240,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                   ),
                   Center(
                     child: Text(
-                      '酷狗凭证',
+                      '酷狗概念版',
                       style: TextStyle(
                         color: Colors.black,
                         fontSize: 17.5 * s,
@@ -260,7 +260,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(height: 17 * s),
-                    _buildSectionHeader('扫码登录', s),
+                    _buildSectionHeader('扫码登录（酷狗概念版）', s),
                     SizedBox(height: 10 * s),
                     _buildScanCard(s),
                     SizedBox(height: 16 * s),
@@ -355,9 +355,18 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
     return _buildCard(
       child: Column(
         children: [
-          if (!_scanning)
-            _buildPrimaryButton('扫码登录', _startScanLogin, s)
-          else ...[
+          if (!_scanning) ...[
+            Padding(
+              padding: EdgeInsets.only(bottom: 10 * s),
+              child: Text(
+                '请使用「酷狗概念版」App 扫码授权，登录后即可使用概念版 VIP 权益',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 12.5 * s, color: const Color(0xFF838383)),
+              ),
+            ),
+            _buildPrimaryButton('扫码登录', _startScanLogin, s),
+          ] else ...[
             KugouQrPanel(
               state: _qrState ?? QrLoginState.waiting,
               session: _qrSession,

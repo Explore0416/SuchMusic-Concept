@@ -71,9 +71,9 @@ void main() {
       // 请求参数完整性
       final req = adapter.log.single;
       expect(req.path, '${KugouConfig.loginHost}${KugouConfig.loginQrPath}');
-      expect(req.queryParameters['appid'], 1005);
+      expect(req.queryParameters['appid'], 3116);
       expect(req.queryParameters['srcappid'], 2919);
-      expect(req.queryParameters['clientver'], 20489);
+      expect(req.queryParameters['clientver'], 11440);
       expect(req.queryParameters['type'], 1);
       expect(req.queryParameters['plat'], 4);
       expect(req.queryParameters['qrcode_txt'], KugouConfig.qrTxt);

@@ -38,8 +38,30 @@ class KugouConfig {
   @Deprecated('请使用 keySaltStandard / keySaltLite 明确平台归属')
   static const String pidVersionSecret = keySaltStandard;
 
-  /// appkey
+  /// appkey（标准版，Android 端）。
   static const String appkey = 'OIlwieks28dk2k092lksi2UIkp';
+
+  // ── 平台差异：概念版(lite) vs 标准版(standard) ──────────────
+  //
+  // 参照 KuGouMusicApi 双版本架构（util/config.json）：
+  //   standard: appid=1005, clientver=20489
+  //   lite    : appid=3116, clientver=11440
+  // 【关键】请求 `appid` 决定服务端按哪个平台校验身份与权益：
+  //   - 用 1005（标准版）→ 只认「酷狗音乐」权益，概念版 VIP 无法生效；
+  //   - 用 3116（概念版）→ 走「酷狗概念版」权益与播放凭证。
+  // 本音源定位「酷狗概念版」，故**全局采用 lite 参数**。
+
+  /// 概念版（lite）应用标识。
+  static const int liteAppid = 3116;
+
+  /// 概念版（lite）客户端版本号。
+  static const int liteClientver = 11440;
+
+  /// 标准版（标准/普通酷狗音乐）应用标识（保留备查，勿用于本音源）。
+  static const int standardAppid = 1005;
+
+  /// 标准版客户端版本号（保留备查）。
+  static const int standardClientver = 20489;
 
   // ── 接口 Host ─────────────────────────────────────────────
 
@@ -73,8 +95,8 @@ class KugouConfig {
   static const String qrH5Base =
       'https://h5.kugou.com/apps/loginQRCode/html/index.html';
 
-  /// 登录接口客户端版本（≠ 搜索的 [clientver]）。
-  static const int loginClientver = 20489;
+  /// 登录接口客户端版本（**概念版 lite**）。
+  static const int loginClientver = liteClientver;
 
   /// 登录二维码 type 固定值。
   static const int qrcodeType = 1;
@@ -93,8 +115,8 @@ class KugouConfig {
 
   // ── 固定参数 ──────────────────────────────────────────────
 
-  static const int appid = 1005;
-  static const String clientver = '20989';
+  static const int appid = liteAppid;
+  static const String clientver = '11440';
 
   /// Web 端签名固定参数（概念版 WebFilter）。
   static const int srcappid = 2919;
