@@ -35,6 +35,15 @@ class AppConstants {
   /// 酷狗昵称（展示用）
   static const String kugouNickname = 'kugou_nickname';
 
+  /// 酷狗设备 mid（数字串，持久化——dfid 与之绑定，必须跨启动稳定）
+  static const String kugouMid = 'kugou_mid';
+
+  /// 酷狗设备 GUID（UUID v4，注册时作 uuid/imei）
+  static const String kugouGuid = 'kugou_guid';
+
+  /// 酷狗设备 dfid（设备注册所得，取直链必需）
+  static const String kugouDfid = 'kugou_dfid';
+
   // ── 默认值 ────────────────────────────────────────────────
 
   /// 通知歌词开关默认开

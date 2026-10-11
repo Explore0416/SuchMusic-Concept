@@ -170,3 +170,52 @@ flutter build apk --debug     # 或 --release
 | 静态分析 | `flutter analyze lib test` | ✅ 0 issues |
 
 > ⚠️ 「扫码后 token 是否绑定概念版权益」需在真机用**自有概念版 VIP 账号**实测确认。
+
+---
+
+## 七、播放失败修复：设备注册 + /v5/url 取直链（v1.3.0）
+
+### 现象
+
+酷狗登录成功、搜索正常，但**一放歌就回退网易云**（提示「播放失败，请检查网络或登录状态」）。
+
+### 根因（实测定位）
+
+1. 取播放直链的接口（`/v3/url`、`/v5/url`）对**未注册设备**返回
+   `20028 本次请求需要验证`（风控）→ `getSongUrl` 得到空 → 上层回退网易云；
+2. 旧实现用的是**进程内随机 dfid**、且 mid 为 32 位 hex —— 酷狗「设备注册」接口
+   **只接受纯数字 mid**，hex mid 会被拒绝（返回空 `data`），拿不到真实 `dfid`；
+3. 即便注册成功，mid/dfid **未持久化**，重开 App 后即失效。
+
+### 修复
+
+新增/改造（`lib/services/sources/`）：
+
+| 文件 | 变更 |
+|------|------|
+| `kugou_crypto.dart` | **新增**：AES-CBC/PKCS7、RSA-PKCS#1 v1.5、ASN.1 解析 PEM（供设备注册） |
+| `kugou_device_service.dart` | **新增**：`register_dev`（`userservice.kugou.com/risk/v2/r_register_dev`）拿真实 `dfid`，含**重试**与**持久化** |
+| `kugou_device.dart` | mid 改**纯数字 32 位**；mid/guid/dfid 可持久化注入；dfid 可写 |
+| `kugou_source.dart` | 取直链改用 **`/v5/url`**（`x-router: trackercdn.kugou.com`），参数对齐 KuGouMusicApi `song_url.js`；兼容响应在**顶层**或 `data` 下、以及 `text/plain` 未解码的 String |
+| `kugou_config.dart` | 新增注册接口、`/v5/url` 常量、概念版 RSA 公钥、Android UA/公共头 |
+| `main.dart` | 启动时后台触发设备注册（失败静默，取链时会自动重试） |
+
+关键实现对齐 KuGouMusicApi（已验证可用的开源实现）：
+- 设备注册 body = AES(设备信息)；会话串 `p` = RSA(概念版公钥)；签名含 body 串；
+- 取直链 `key = md5(hash + 概念版key盐 + appid + mid + userid)`，签名用概念版 android 盐；
+- 直链 URL 形如 `.../ap3116_df<dfid>_pi411_mx0_qu128_...mp3`（`ap3116` = 概念版）。
+
+### 验证（真实联网，沙箱实测）
+
+| 项 | 结果 |
+|----|------|
+| 设备注册 `register_dev` | ✅ 返回真实 dfid |
+| 取二维码 / 轮询 | ✅ 正常 |
+| 搜索 | ✅ 非空 |
+| **取播放直链** | ✅ 返回真实 `.mp3`（HTTP 200/206，`audio/mpeg`） |
+| 离线单测 | ✅ 202 passed / 6 skipped |
+| 静态分析 | ✅ 0 issues |
+
+> ⚠️ 说明：设备注册在**同一 IP 高频请求时会被限流**（返回空 `data`），已加自动重试；
+> 真机正常使用（每次安装只注册一次并持久化）通常首次即成功。
+> 若升级后登录态失效，重新扫码登录一次即可。

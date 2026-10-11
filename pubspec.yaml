@@ -45,6 +45,9 @@ dependencies:
   # 酷狗接口签名（自实现 MD5，不依赖外部签名服务）
   crypto: ^3.0.3
 
+  # 酷狗设备注册所需：AES-CBC / RSA-PKCS1 加解密（register_dev）
+  pointycastle: ^3.9.1
+
   # 音频播放（支持后台播放）
   just_audio: ^0.9.42
   audio_service: ^0.18.15

@@ -25,6 +25,17 @@ class KugouSign {
   ///
   /// 语义化调用请改用 [webSignature] / [androidSignature]，避免盐值混乱。
   static String signature(Map<String, dynamic> params, {String? salt}) {
+    return signatureWithBody(params, salt: salt);
+  }
+
+  /// = md5(salt + 字典序 "k=v" + [body] + salt)。
+  ///
+  /// 用于带请求体的接口（如 `register_dev`：Android 端签名会把 body 串拼进签名）。
+  static String signatureWithBody(
+    Map<String, dynamic> params, {
+    String? salt,
+    String body = '',
+  }) {
     final keys = params.keys.toList()..sort();
     final buffer = StringBuffer();
     for (final k in keys) {
@@ -33,8 +44,13 @@ class KugouSign {
       buffer.write('$k=$v');
     }
     final s = salt ?? KugouConfig.secret;
-    return md5Hex('$s$buffer$s');
+    return md5Hex('$s$buffer$body$s');
   }
+
+  /// Android 端 + 请求体签名（盐值 = [KugouConfig.androidSecretLite]）。
+  static String androidSignatureWithBody(
+          Map<String, dynamic> params, String body) =>
+      signatureWithBody(params, salt: KugouConfig.androidSecretLite, body: body);
 
   /// Web 端接口签名（盐值 = [KugouConfig.webSecret]）。
   ///

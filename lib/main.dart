@@ -12,6 +12,7 @@ import 'screens/profile_page.dart';
 import 'services/audio_player_handler.dart';
 import 'services/audio_player_service.dart';
 import 'services/app_init.dart';
+import 'services/sources/kugou_device_service.dart';
 import 'models/song_model.dart';
 import 'utils/navigation_guard.dart';
 import 'utils/responsive.dart';
@@ -43,6 +44,9 @@ void main() async {
   runApp(const MyApp());
   await NeteaseMusicApi.init(debug: true);
   await AudioPlayerService().init();
+  // 酷狗设备注册（取播放直链前置，未注册会被风控拒绝）；
+  // 后台进行、失败静默，取链时会自动再补一次。
+  unawaited(KugouDeviceService.instance.init());
   markInitialized();
 }
 

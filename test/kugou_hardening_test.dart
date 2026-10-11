@@ -172,6 +172,9 @@ void main() {
     });
 
     test('gateway 取地址 signature == androidSignature 且 != webSignature', () async {
+      // 预置已注册设备：跳过真实设备注册网络请求
+      KugouDevice.overrideForTest(
+          dfid: '0jAbCdEfGhIjKlMnOpQrSt', registered: true);
       final adapter = routed({
         'gateway.kugou.com': (_) async => jsonResponse({
               'data': [

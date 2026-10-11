@@ -127,4 +127,49 @@ class KugouConfig {
   /// 通用 User-Agent。
   static const String userAgent =
       'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36';
+
+  /// Android 客户端 UA（取直链 / 设备注册等 Android 端接口用）。
+  static const String androidUserAgent =
+      'Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi';
+
+  // ── 设备注册（register_dev，取直链前置）────────────────────
+  //
+  // ⚠️ 关键：酷狗取播放直链接口对**未注册设备**返回 `20028 本次请求需要验证`
+  // （风控）。必须先经 `register_dev` 拿到真实 `dfid` 并持久化，取直链才可用。
+
+  /// 设备注册接口 Host。
+  static const String registerHost = 'https://userservice.kugou.com';
+
+  /// 设备注册路径。
+  static const String registerPath = '/risk/v2/r_register_dev';
+
+  /// 概念版 RSA 公钥（PEM，PKCS#1 v1.5 加密会话串用）。
+  static const String liteRsaPublicKeyPem =
+      '-----BEGIN PUBLIC KEY-----\n'
+      'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDECi0Np2UR87scwrvTr72L6oO01rBbbBPriSDFPxr3Z5syug0O24QyQO8bg27+0+4kBzTBTBOZ/WWU0WryL1JSXRTXLgFVxtzIY41Pe7lPOgsfTCn5kZcvKhYKJesKnnJDNr5/abvTGf+rHG3YRwsCHcQ08/q6ifSioBszvb3QiwIDAQAB\n'
+      '-----END PUBLIC KEY-----';
+
+  // ── 取播放直链（/v5/url，x-router: trackercdn）────────────
+
+  /// 取直链路径（经网关，x-router 路由到 trackercdn.kugou.com）。
+  static const String playUrlPath = '/v5/url';
+
+  /// 取直链请求 x-router。
+  static const String playUrlRouter = 'trackercdn.kugou.com';
+
+  /// 取直链固定参数（概念版 lite 取值，见 KuGouMusicApi module/song_url.js）。
+  static const int playVersion = 11430;
+  static const int playPageId = 967177915;
+  static const int playPid = 411;
+  static const int playCmd = 26;
+  static const int playPidVersion = 3001;
+  static const String playPpageId = '356753938,823673182,967485191';
+
+  /// 设备注册 / 取直链 通用请求头（对齐上游 createRequest）。
+  static const Map<String, String> androidCommonHeaders = {
+    'kg-rc': '1',
+    'kg-thash': '5d816a0',
+    'kg-rec': '1',
+    'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
+  };
 }

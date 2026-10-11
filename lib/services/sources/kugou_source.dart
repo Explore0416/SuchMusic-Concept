@@ -7,6 +7,7 @@ import '../../models/song_model.dart';
 import '../kugou_credential_service.dart';
 import 'kugou_config.dart';
 import 'kugou_device.dart';
+import 'kugou_device_service.dart';
 import 'kugou_sign.dart';
 import 'music_source.dart';
 import 'song_matcher.dart';
@@ -191,46 +192,71 @@ class KugouSource implements MusicSource {
     final userToken = cred.token ?? '';
     final hashLower = hash.toLowerCase();
 
+    // 关键：必须先完成设备注册（否则服务端风控 → 20028 → 取不到直链）
+    final dfid = await KugouDeviceService.instance.ensureDfid();
+    if (dfid == null || dfid.isEmpty) {
+      debugPrint('⚠️ 酷狗设备未注册成功，无法取播放直链');
+      return null;
+    }
+
     try {
+      final clienttime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final albumId = int.tryParse(song.albumId ?? '') ?? 0;
+      final albumAudioId = int.tryParse(song.albumAudioId ?? '') ?? 0;
+
+      // 对齐 KuGouMusicApi module/song_url.js（概念版 lite 取值）
       final params = <String, dynamic>{
-        'album_id': (song.albumId?.isEmpty ?? true) ? '0' : song.albumId,
-        'album_audio_id':
-            (song.albumAudioId?.isEmpty ?? true) ? '0' : song.albumAudioId,
-        'appid': KugouConfig.appid,
+        'album_id': albumId,
         'area_code': 1,
-        'behavior': 'play',
-        'clientver': KugouConfig.clientver,
-        'cmd': 26,
-        'dfid': KugouDevice.dfid,
         'hash': hashLower,
+        'ssa_flag': 'is_fromtrack',
+        'version': KugouConfig.playVersion,
+        'page_id': KugouConfig.playPageId,
+        'quality': 128,
+        'album_audio_id': albumAudioId,
+        'behavior': 'play',
+        'pid': KugouConfig.playPid,
+        'cmd': KugouConfig.playCmd,
+        'pidversion': KugouConfig.playPidVersion,
+        'IsFreePart': 0,
+        'ppage_id': KugouConfig.playPpageId,
+        'cdnBackup': 1,
+        'module': '',
+        'clientver': KugouConfig.playVersion,
+        // 默认参数
+        'dfid': dfid,
         'mid': KugouDevice.mid,
-        'mtype': 2,
-        'userid': userId,
-        'uuid': KugouDevice.uuid,
-        'vipType': KugouConfig.vipType,
+        'uuid': '-',
+        'appid': KugouConfig.appid,
+        'clienttime': clienttime,
       };
       if (userToken.isNotEmpty) params['token'] = userToken;
-      // 概念版（lite）盐值 —— 见 ARCH-酷狗登录 §一.3 / REQ-L3
+      if (userId != '0') params['userid'] = userId;
+      // encryptKey：key = md5(hash + lite盐 + appid + mid + userid)
       params['key'] = KugouSign.playKey(
         hash: hashLower,
         mid: KugouDevice.mid,
         userId: userId,
         salt: KugouConfig.keySaltLite,
       );
-      // gateway 取地址属 **Android 端接口**，用 Android 盐值签名（保持 LDDC）。
+      // Android 端签名（lite 盐）
       final signature = KugouSign.androidSignature(params);
 
       final res = await _dio.get(
-        '${KugouConfig.gatewayHost}/v3/url',
+        '${KugouConfig.gatewayHost}${KugouConfig.playUrlPath}',
         queryParameters: {...params, 'signature': signature},
         options: Options(headers: {
-          'User-Agent': KugouConfig.userAgent,
-          'x-router': 'tracker.kugou.com',
+          'User-Agent': KugouConfig.androidUserAgent,
+          'x-router': KugouConfig.playUrlRouter,
+          ...KugouConfig.androidCommonHeaders,
         }),
       );
       final url = _extractPlayUrl(res.data);
       if (url == null || url.isEmpty) {
-        debugPrint('⚠️ 酷狗取播放地址为空（可能需 VIP 或凭证失效）');
+        final body = res.data;
+        final err = body is Map ? (body['error_code'] ?? body['errcode']) : null;
+        debugPrint('⚠️ 酷狗取播放地址为空（error_code=$err）');
+        debugPrint('🔎 酷狗取链原始响应: ${_truncate(res.data)}');
         return null;
       }
       // 安全：直链 query 可能内嵌 `token=` 等凭证，日志只保留
@@ -372,20 +398,59 @@ class KugouSource implements MusicSource {
         .toList();
   }
 
+  /// 截断过长响应用于日志（避免刷屏；不含敏感 query 的字段是服务端返回体）。
+  String _truncate(dynamic v) {
+    final s = v?.toString() ?? '';
+    return s.length > 400 ? '${s.substring(0, 400)}…' : s;
+  }
+
+  /// 解析直链。兼容多种结构：
+  /// - `/v5/url`（现行）：字段在**响应顶层**，`url` / `backupUrl` 为数组或字符串；
+  /// - 包裹式：`data` 为对象或数组，其内含 `url` / `play_url` / `backup_url`。
+  ///
+  /// ⚠️ 部分 CDN 节点返回 `text/plain`，Dio 不解码 → `data` 为原始 String，
+  /// 需手动 `jsonDecode`（与搜索主路径同款容错）。
   String? _extractPlayUrl(dynamic data) {
-    if (data is! Map) return null;
-    final d = data['data'];
+    dynamic cur = data;
+    if (cur is String) {
+      try {
+        cur = jsonDecode(cur);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (cur is! Map) return null;
+    // 1) 顶层（/v5/url 现行）
+    final top = _pickUrl(cur['url']) ??
+        _pickUrl(cur['play_url']) ??
+        _pickUrl(cur['backupUrl']) ??
+        _pickUrl(cur['backup_url']);
+    if (top != null) return top;
+    // 2) data 包裹
+    final d = cur['data'];
+    if (d is Map) {
+      return _pickUrl(d['url']) ??
+          _pickUrl(d['play_url']) ??
+          _pickUrl(d['backupUrl']) ??
+          _pickUrl(d['backup_url']);
+    }
     if (d is List && d.isNotEmpty) {
       final first = d.first;
       if (first is Map) {
-        final url = first['url'];
-        if (url is String && url.isNotEmpty) return url;
-        if (url is List && url.isNotEmpty) return url.first?.toString();
-        final playUrl = first['play_url'];
-        if (playUrl is String && playUrl.isNotEmpty) return playUrl;
-        final backup = first['backup_url'];
-        if (backup is List && backup.isNotEmpty) return backup.first?.toString();
+        return _pickUrl(first['url']) ??
+            _pickUrl(first['play_url']) ??
+            _pickUrl(first['backup_url']);
       }
+    }
+    return null;
+  }
+
+  /// 从「字符串或字符串数组」中取首个非空 URL。
+  String? _pickUrl(dynamic v) {
+    if (v is String && v.isNotEmpty) return v;
+    if (v is List && v.isNotEmpty) {
+      final first = v.first;
+      if (first is String && first.isNotEmpty) return first;
     }
     return null;
   }
