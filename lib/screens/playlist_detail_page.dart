@@ -6,6 +6,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/music_api_service.dart';
+import '../services/sources/source_manager.dart';
+import '../widgets/fade_slide_in.dart';
 
 class PlaylistDetailPage extends StatefulWidget {
   final PlaylistModel playlist;
@@ -50,15 +52,16 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   Future<void> _loadCover([String? url]) async {
     url ??= widget.playlist.coverUrl;
     if (url == null) return;
-    // 统一压缩到 500px 加载（原图可达数 MB，500px 仅几十 KB），背景/头部共用
-    final sizedUrl = '${url.split('?').first}?param=500y500';
+    // 网易云封面服务支持 `?param=500y500` 压缩；酷狗封面已是固定尺寸 → 不追加
+    final isNetease = url.contains('music.126.net') || url.contains('music.163.com');
+    final sizedUrl = isNetease ? '${url.split('?').first}?param=500y500' : url;
     try {
       final response = await _coverDio.get(
         sizedUrl,
         options: Options(
           responseType: ResponseType.bytes,
           headers: {
-            'Referer': 'https://music.163.com',
+            if (isNetease) 'Referer': 'https://music.163.com',
             'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           },
@@ -71,9 +74,17 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   Future<void> _loadSongs() async {
-    final songs = widget.isDaily
-        ? await _apiService.getDailyRecommendSongs()
-        : await _apiService.playlistDetail(widget.playlist.id);
+    final isKugou = widget.playlist.source == SongSource.kugou;
+    final List<SongModel> songs;
+    if (widget.isDaily) {
+      songs = isKugou
+          ? await SourceManager().source.dailyRecommend()
+          : await _apiService.getDailyRecommendSongs();
+    } else {
+      songs = isKugou
+          ? await SourceManager().source.rankSongs(widget.playlist.id)
+          : await _apiService.playlistDetail(widget.playlist.id);
+    }
     if (!mounted) return;
     setState(() {
       _songs = songs;
@@ -299,7 +310,11 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
         itemCount: _songs.length,
         itemBuilder: (_, index) {
           final song = _songs[index];
-          return _buildSongItem(index, song);
+          // 逐条淡入上滑，避免整屏「啪」地出现
+          return FadeSlideIn(
+            index: index,
+            child: _buildSongItem(index, song),
+          );
         },
       ),
     );

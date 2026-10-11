@@ -292,6 +292,9 @@ class PlaylistModel {
   final String? creatorName;
   final int? playCount;
 
+  /// 音源归属（默认网易云 → 旧调用点零改动）
+  final SongSource source;
+
   const PlaylistModel({
     required this.id,
     required this.name,
@@ -300,6 +303,7 @@ class PlaylistModel {
     this.trackCount,
     this.creatorName,
     this.playCount,
+    this.source = SongSource.netease,
   });
 
   factory PlaylistModel.fromNeteaseTopList(TopList topList) {

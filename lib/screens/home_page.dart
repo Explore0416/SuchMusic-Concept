@@ -75,6 +75,30 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadRankings() async {
     await ensureInitialized;
+    final sm = SourceManager();
+    // 酷狗音源：榜单走酷狗（否则会拿到网易云榜单却取不到歌 → 「为空或加载失败」）
+    if (sm.currentSource == SongSource.kugou) {
+      final rankings = await sm.source.topList();
+      final hotChart = rankings.firstWhere(
+        (r) => r.name.contains('热歌') || r.name.contains('飙升'),
+        orElse: () => rankings.isNotEmpty
+            ? rankings.first
+            : const PlaylistModel(id: '', name: '', source: SongSource.kugou),
+      );
+      final songs = hotChart.id.isNotEmpty
+          ? await sm.source.rankSongs(hotChart.id, limit: 12)
+          : <SongModel>[];
+      if (!mounted) return;
+      setState(() {
+        _rankings = rankings;
+        _loadingRankings = false;
+        _hotSongs = songs.take(12).toList();
+        _loadingHotSongs = false;
+        _hotChart = hotChart.id.isNotEmpty ? hotChart : null;
+      });
+      return;
+    }
+
     final results = await Future.wait([
       _apiService.topList(),
       _apiService.playlistDetail('3778678', subCount: 12, limit: 12),

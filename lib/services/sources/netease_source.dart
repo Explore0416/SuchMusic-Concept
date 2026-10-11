@@ -59,6 +59,17 @@ class NeteaseSource implements MusicSource {
   @override
   Future<List<PlaylistModel>> topList() => _api.topList();
 
+  /// 网易云歌单/榜单歌曲（榜单与歌单同一接口）。
+  @override
+  Future<List<SongModel>> rankSongs(String playlistId, {int limit = 50}) async {
+    try {
+      return await _api.playlistDetail(playlistId);
+    } catch (e) {
+      debugPrint('⚠️ 网易云歌单歌曲失败: $e');
+      return const [];
+    }
+  }
+
   /// 按「歌名 + 歌手」在网易云搜索匹配出对端歌曲（跨源回退用）。
   ///
   /// 搜索关键字为「歌名 歌手」；取最匹配结果（优先歌名完全一致且歌手有交集）。

@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:such_music/models/song_model.dart';
 import 'package:such_music/services/sources/kugou_device.dart';
 import 'package:such_music/services/sources/kugou_device_service.dart';
 import 'package:such_music/services/sources/kugou_login_models.dart';
@@ -110,6 +111,34 @@ void main() {
         print('[SMOKE] 直链 HTTP=${head.statusCode} bytes=${head.data?.length}');
         // Range 请求正常返回 206（Partial Content）
         expect(head.statusCode == 200 || head.statusCode == 206, isTrue);
+      }, timeout: const Timeout(Duration(seconds: 120)));
+
+      test('LIVE-SMOKE·榜单列表 + 榜单歌曲（酷狗）', () async {
+        final src = KugouSource();
+        await KugouDeviceService.instance.ensureDfid();
+
+        final ranks = await src.topList();
+        // ignore: avoid_print
+        print('[SMOKE] 榜单数=${ranks.length}');
+        for (final r in ranks.take(3)) {
+          // ignore: avoid_print
+          print('   - ${r.name} id=${r.id} cover=${r.coverUrl != null}');
+        }
+        expect(ranks, isNotEmpty, reason: '酷狗榜单列表应非空');
+        expect(ranks.first.name, isNotEmpty);
+        expect(ranks.first.id, isNotEmpty);
+
+        final songs = await src.rankSongs(ranks.first.id, limit: 10);
+        // ignore: avoid_print
+        print('[SMOKE] 榜单「${ranks.first.name}」歌曲数=${songs.length}');
+        for (final s in songs.take(3)) {
+          // ignore: avoid_print
+          print('   - ${s.name} / ${s.artist} hash=${(s.hash ?? "").substring(0, 8)}');
+        }
+        expect(songs, isNotEmpty, reason: '酷狗榜单歌曲应非空');
+        expect(songs.first.name, isNotEmpty);
+        expect(songs.first.hash, isNotNull, reason: '歌曲应有 hash 供取直链');
+        expect(songs.first.source, SongSource.kugou);
       }, timeout: const Timeout(Duration(seconds: 120)));
     },
     skip: _liveEnabled()

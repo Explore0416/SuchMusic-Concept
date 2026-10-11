@@ -9,7 +9,11 @@ import '../models/song_model.dart';
 
 import '../services/music_api_service.dart';
 import '../services/app_init.dart';
+import '../services/kugou_credential_service.dart';
+import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
+import '../widgets/fade_slide_in.dart';
+import 'kugou_credential_page.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
 
@@ -138,7 +142,18 @@ class _ProfilePageState extends State<ProfilePage> {
       child: ConstrainedBox(
         constraints:
             const BoxConstraints(maxWidth: Responsive.contentMaxWidth),
-        child: SizedBox.expand(child: page),
+        child: SizedBox.expand(
+          // 登录态切换时淡入淡出，避免页面「跳变」
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 260),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: KeyedSubtree(
+              key: ValueKey(_isLoggedIn),
+              child: page,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -400,50 +415,127 @@ class _ProfilePageState extends State<ProfilePage> {
           left: 25,
           right: 25,
           top: topPadding + 115,
-          child: GestureDetector(
-            onTap: _showQrCodeLoginDialog,
-            child: Container(
-              height: 46,
-              decoration: BoxDecoration(
-                color: const Color(0xFF3080FF),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SvgPicture.asset(
-                    'assets/images/svg/qrcode_fill.svg',
-                    width: 24,
-                    height: 24,
-                    colorFilter: const ColorFilter.mode(
-                      Colors.white,
-                      BlendMode.srcIn,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    '扫码登录网易云账号',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          child: _buildAccountCard(),
         ),
       ],
     );
   }
 
+  /// 音源账号卡片：可在「我的」页直接选择登录网易云 / 酷狗概念版。
+  Widget _buildAccountCard() {
+    final kugouLogged = KugouCredentialService.instance.hasCredentials;
+    final kugouUid =
+        AppConstants.maskToken(KugouCredentialService.instance.userId);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          _buildAccountRow(
+            icon: Icons.music_note,
+            title: '网易云音乐',
+            subtitle: '扫码登录后可使用网易云音源',
+            actionText: '扫码登录',
+            onTap: _showQrCodeLoginDialog,
+          ),
+          const Divider(height: 1, indent: 56, endIndent: 16),
+          _buildAccountRow(
+            icon: Icons.library_music_outlined,
+            title: '酷狗概念版',
+            subtitle: kugouLogged ? '已登录（$kugouUid）' : '扫码登录后可使用概念版 VIP',
+            actionText: kugouLogged ? '管理' : '扫码登录',
+            onTap: _openKugouLogin,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccountRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String actionText,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: const Color(0xFF3080FF)),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF999999),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFF3080FF),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                actionText,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 打开酷狗概念版凭证页（内置扫码登录），返回后刷新登录态。
+  Future<void> _openKugouLogin() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const KugouCredentialPage()),
+    );
+    if (!mounted) return;
+    setState(() {});
+  }
+
   Future<void> _openPlaylistDetail(PlaylistModel playlist) async {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PlaylistDetailPage(playlist: playlist),
-      ),
+      fadeSlideRoute(PlaylistDetailPage(playlist: playlist)),
     );
   }
 

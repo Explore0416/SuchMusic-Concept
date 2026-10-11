@@ -172,4 +172,15 @@ class KugouConfig {
     'kg-rec': '1',
     'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
   };
+
+  // ── 排行榜（榜单）────────────────────────────────────────
+
+  /// 排行榜列表路径（GET，经网关）。
+  static const String rankListPath = '/ocean/v6/rank/list';
+
+  /// 排行榜歌曲路径（POST，经网关）。
+  static const String rankAudioPath = '/openapi/kmr/v2/rank/audio';
+
+  /// 排行榜歌曲请求头。
+  static const Map<String, String> rankAudioHeaders = {'kg-tid': '369'};
 }

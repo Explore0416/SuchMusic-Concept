@@ -358,8 +358,146 @@ class KugouSource implements MusicSource {
     }
   }
 
+  // ── 榜单 ──────────────────────────────────────────────────
+
   @override
-  Future<List<PlaylistModel>> topList() async => const [];
+  Future<List<PlaylistModel>> topList() async {
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid();
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': KugouConfig.appid,
+        'clientver': KugouConfig.clientver,
+        'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'plat': 2,
+        'withsong': 1,
+        'parentid': 0,
+      };
+      params['signature'] = KugouSign.androidSignature(params);
+      final res = await _dio.get(
+        '${KugouConfig.gatewayHost}${KugouConfig.rankListPath}',
+        queryParameters: params,
+        options: Options(headers: {
+          'User-Agent': KugouConfig.androidUserAgent,
+          ...KugouConfig.androidCommonHeaders,
+        }),
+      );
+      final list = _extractList(res.data, ['data', 'info']);
+      return list
+          .map(_mapRank)
+          .where((p) => p.name.isNotEmpty && p.id.isNotEmpty)
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ 酷狗榜单列表失败: $e');
+      return const [];
+    }
+  }
+
+  /// 榜单歌曲（`/openapi/kmr/v2/rank/audio`）。
+  @override
+  Future<List<SongModel>> rankSongs(String playlistId, {int limit = 50}) async {
+    final rankId = int.tryParse(playlistId);
+    if (rankId == null) return const [];
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid();
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': KugouConfig.appid,
+        'clientver': KugouConfig.clientver,
+        'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      };
+      final body = <String, dynamic>{
+        'show_portrait_mv': 1,
+        'show_type_total': 1,
+        'filter_original_remarks': 1,
+        'area_code': 1,
+        'pagesize': limit,
+        'rank_cid': 0,
+        'type': 1,
+        'page': 1,
+        'rank_id': rankId,
+      };
+      final bodyStr = jsonEncode(body);
+      params['signature'] = KugouSign.androidSignatureWithBody(params, bodyStr);
+      final res = await _dio.post(
+        '${KugouConfig.gatewayHost}${KugouConfig.rankAudioPath}',
+        data: bodyStr,
+        queryParameters: params,
+        options: Options(
+          contentType: 'application/json;charset=utf-8',
+          headers: {
+            'User-Agent': KugouConfig.androidUserAgent,
+            ...KugouConfig.androidCommonHeaders,
+            ...KugouConfig.rankAudioHeaders,
+          },
+        ),
+      );
+      final list = _extractList(res.data, ['data', 'songlist']);
+      return list
+          .map(_mapRankSong)
+          .where((s) => s.name.isNotEmpty && (s.hash?.isNotEmpty ?? false))
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ 酷狗榜单歌曲失败: $e');
+      return const [];
+    }
+  }
+
+  /// 榜单条目 → [PlaylistModel]。
+  PlaylistModel _mapRank(Map<String, dynamic> j) {
+    final id = (j['rankid'] ?? j['rank_id'] ?? j['id'] ?? '').toString();
+    final name = (j['rankname'] ?? j['name'] ?? '').toString();
+    var cover = (j['imgurl'] ?? j['img_9'] ?? j['bannerurl'] ?? '').toString();
+    cover = cover.replaceAll('{size}', '480');
+    final playTimes = int.tryParse((j['play_times'] ?? '').toString());
+    return PlaylistModel(
+      id: id,
+      name: name,
+      coverUrl: cover.isEmpty ? null : cover,
+      description: j['intro']?.toString(),
+      playCount: playTimes,
+      source: SongSource.kugou,
+    );
+  }
+
+  /// 榜单歌曲条目 → [SongModel]（hash 取 `audio_info.hash_128`）。
+  SongModel _mapRankSong(Map<String, dynamic> j) {
+    final audioInfo = j['audio_info'];
+    var hash = '';
+    var durationMs = 0;
+    if (audioInfo is Map) {
+      hash = (audioInfo['hash_128'] ?? audioInfo['hash_320'] ?? '').toString();
+      durationMs =
+          int.tryParse((audioInfo['duration_128'] ?? '').toString()) ?? 0;
+    }
+    if (hash.isEmpty) {
+      final dep = j['deprecated'];
+      if (dep is Map) hash = (dep['hash'] ?? '').toString();
+    }
+    final tp = j['trans_param'];
+    var cover = '';
+    if (tp is Map) cover = (tp['union_cover'] ?? '').toString();
+    cover = cover.replaceAll('{size}', '480');
+    final albumInfo = j['album_info'];
+    final album =
+        albumInfo is Map ? (albumInfo['album_name'] ?? '').toString() : '';
+    return SongModel(
+      id: (j['audio_id'] ?? '').toString(),
+      name: (j['songname'] ?? '').toString(),
+      artist: (j['author_name'] ?? '').toString(),
+      album: album,
+      source: SongSource.kugou,
+      coverUrl: cover.isEmpty ? null : cover,
+      duration: durationMs > 0 ? durationMs : null,
+      hash: hash.isEmpty ? null : hash.toLowerCase(),
+      albumId: (j['album_id'] ?? '').toString(),
+      albumAudioId: (j['album_audio_id'] ?? '').toString(),
+    );
+  }
 
   @override
   Future<List<SongModel>> dailyRecommend() async => const [];

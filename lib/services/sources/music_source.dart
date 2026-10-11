@@ -36,6 +36,10 @@ abstract class MusicSource {
 
   Future<List<PlaylistModel>> topList();
 
+  /// 榜单/歌单歌曲。默认空实现（不支持则返回空列表）。
+  Future<List<SongModel>> rankSongs(String playlistId, {int limit = 50}) =>
+      Future.value(const []);
+
   /// 可选能力：按「歌名 + 歌手」在本音源搜索出**对端歌曲**（跨源回退用）。
   ///
   /// 默认不实现（返回 `null`），由支持搜索匹配的音源覆写。用于 [SourceManager.withFallback]
