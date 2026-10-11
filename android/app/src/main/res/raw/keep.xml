@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 资源收缩保留名单：这些资源通过字符串动态查找（audio_service 通知图标），
+     收缩器无法识别引用，必须显式保留，否则正式包播放时通知无 small icon 会导致闪退 -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification,@mipmap/ic_launcher" />

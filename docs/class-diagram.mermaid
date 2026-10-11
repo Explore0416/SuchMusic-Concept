@@ -1,0 +1,169 @@
+classDiagram
+    %% ===================== 数据模型层 =====================
+    class SongSource {
+        <<enumeration>>
+        netease
+        kugou
+        +String code
+        +String label
+        +static SongSource fromCode(String code)
+    }
+
+    class SongModel {
+        +String id
+        +String name
+        +String artist
+        +String album
+        +String? coverUrl
+        +int? duration
+        +SongSource source
+        +String? hash
+        +String? albumId
+        +String? albumAudioId
+        +factory SongModel.fromNeteaseSong(Song)
+        +factory SongModel.fromKugouJson(Map)
+        +Map~String,dynamic~ toJson()
+        +factory SongModel.fromStorage(Map)
+        +SongModel copyWith(...)
+    }
+
+    %% ===================== 音源抽象层 =====================
+    class MusicSource {
+        <<abstract>>
+        +String id
+        +String displayName
+        +SongSource kind
+        +bool needsCredentials
+        +bool isConfigured
+        +Future~List~SongModel~~ search(String keyword, int limit)
+        +Future~List~String~~ hotSearch()
+        +Future~String?~ getSongUrl(SongModel song)
+        +Future~String?~ getLyrics(SongModel song)
+        +Future~SongModel?~ getSongDetail(SongModel song)
+        +Future~List~PlaylistModel~~ topList()
+    }
+
+    class NeteaseSource {
+        -MusicApiService api
+        +search(keyword, limit)
+        +hotSearch()
+        +getSongUrl(song)
+        +getLyrics(song)
+        +getSongDetail(song)
+        +topList()
+    }
+
+    class KugouSource {
+        -KugouSign signer
+        -KugouCredentialService creds
+        -Dio dio
+        +search(keyword, limit)
+        +hotSearch()
+        +getSongUrl(song)
+        +getLyrics(song)
+        +getSongDetail(song)
+    }
+
+    class KugouSign {
+        +String md5(String input)
+        +String complexSearchSign(Map~String,String~ params)
+        +String urlKey(String hash, String mid, String userId)
+        +String lyricsKey(String hash, String mid)
+    }
+
+    class SourceManager {
+        -List~MusicSource~ _sources
+        -SongSource _current
+        -bool _fallbackEnabled
+        +MusicSource get source
+        +SongSource get currentSource
+        +Stream~SongSource~ onSourceChanged
+        +MusicSource sourceFor(SongSource kind)
+        +Future~void~ init()
+        +Future~void~ switchTo(SongSource kind)
+        +bool get fallbackEnabled
+        +Future~T~ withFallback~T~(SongModel song, Future~T~ Function(MusicSource) run)
+    }
+
+    class KugouCredentialService {
+        -String? _token
+        -String? _userId
+        +Future~void~ init()
+        +bool get hasCredentials
+        +String? get token
+        +String? get userId
+        +String? get maskedToken
+        +Future~bool~ save(String token, String userId)
+        +Future~void~ clear()
+    }
+
+    %% ===================== 传统 API 门面（兼容层） =====================
+    class MusicApiService {
+        <<singleton>>
+        +Future~List~SongModel~~ search(String, int)
+        +Future~List~String~~ getHotSearchKeys()
+        +Future~String?~ getSongUrl(String id)
+        +Future~String?~ getLyrics(String id)
+        +Future~String?~ getSongUrlForSong(SongModel)
+        +Future~String?~ getLyricsForSong(SongModel)
+        +Future~SongModel?~ getSongDetail(String id)
+    }
+
+    %% ===================== 播放与通知层 =====================
+    class AudioPlayerService {
+        <<singleton>>
+        -int _playSeq
+        -List~LyricLine~ _lyrics
+        +Future~bool~ play(SongModel song)
+        +Future~bool~ playSongs(List~SongModel~)
+        +String get currentLyric
+        +Stream~String~ onLyricChanged
+        +Stream~List~LyricLine~~ onLyricsChanged
+    }
+
+    class AudioPlayerHandler {
+        <<BaseAudioHandler>>
+        -IslandService island
+        -NotificationLyricService lyric
+        -updateMediaItem(SongModel, String? lyric)
+    }
+
+    class NotificationLyricService {
+        -DateTime _lastEmit
+        -String _lastLine
+        +Stream~String~ onSubtitleChanged
+        +void feed(String line)
+        +void setEnabled(bool)
+    }
+
+    class IslandService {
+        +Future~IslandCapability~ capability()
+        +Future~bool~ applyFocus(Map~String,dynamic~ params)
+        +Future~bool~ clearFocus()
+        +bool get supported
+    }
+
+    class IslandCapability {
+        +bool isMiui
+        +bool supported
+        +bool canShowFocus
+        +String reason
+    }
+
+    %% ===================== 关系 =====================
+    MusicSource <|-- NeteaseSource
+    MusicSource <|-- KugouSource
+    KugouSource --> KugouSign : uses
+    KugouSource --> KugouCredentialService : reads creds
+    SourceManager "1" o-- "1..2" MusicSource : manages
+    SourceManager --> KugouCredentialService : checks
+    NeteaseSource --> MusicApiService : delegates
+    MusicApiService --> SourceManager : routes
+    MusicSource ..> SongModel : produces
+    SongModel --> SongSource : has
+    AudioPlayerService --> SourceManager : resolves url/lyric
+    AudioPlayerService ..> SongModel : plays
+    AudioPlayerHandler --> AudioPlayerService : observes
+    AudioPlayerHandler --> NotificationLyricService : throttles lyric
+    AudioPlayerHandler --> IslandService : optional focus params
+    NotificationLyricService ..> IslandService : feeds content

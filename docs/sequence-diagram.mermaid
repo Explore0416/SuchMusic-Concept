@@ -1,0 +1,83 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant SP as SearchPage
+    participant APS as AudioPlayerService
+    participant SM as SourceManager
+    participant KS as KugouSource
+    participant SIGN as KugouSign
+    participant KG as 酷狗接口(gateway/krcs)
+    participant NS as NeteaseSource
+    participant AP as just_audio
+    participant AH as AudioPlayerHandler
+    participant NL as NotificationLyricService
+    participant IS as IslandService
+    participant OS as 系统通知/灵动岛
+
+    Note over U,OS: 前置：用户在设置页把音源切为「酷狗概念版」并已录入 token/userid
+
+    U->>SP: 关键词搜索「周杰伦」
+    SP->>SM: source (kugou)
+    SM->>KS: search(keyword, limit)
+    KS->>SIGN: complexSearchSign(params)
+    SIGN-->>KS: signature
+    KS->>KG: GET complexsearch.kugou.com/v2/search/song
+    alt 主接口失败
+        KS->>KG: GET mobilecdn.kugou.com/api/v3/search/song (无签名兜底)
+    end
+    KG-->>KS: songs[] (hash/album_id/album_audio_id)
+    KS-->>SP: List~SongModel~ (source=kugou)
+    SP-->>U: 展示结果
+
+    U->>SP: 点击某首播放
+    SP->>APS: play(song{source:kugou})
+    APS->>APS: final seq = ++_playSeq  (竞态序号)
+    APS->>APS: state = loading; currentSong = song
+    APS->>SM: sourceFor(kugou)
+    SM-->>APS: KugouSource
+    APS->>KS: getSongUrl(song)
+    KS->>SIGN: urlKey(hash, mid, userid)
+    SIGN-->>KS: key
+    KS->>KG: GET gateway.kugou.com/v3/url (Header x-router: tracker.kugou.com)
+    alt 返回 play_url
+        KG-->>KS: url (HTTP/HTTPS)
+        KS-->>APS: url
+    else 需VIP / 凭证失效 / 无版权 / 网络异常
+        KG-->>KS: 空或错误
+        APS->>SM: withFallback(song, ...)
+        SM->>NS: getSongUrl(song)
+        NS-->>SM: 网易云 url
+        SM-->>APS: url (回退成功)
+    end
+    APS->>APS: if (seq != _playSeq) return  // 丢弃过期结果
+    APS->>AP: setAudioSource(url).play()
+    AP-->>APS: playing
+
+    APS->>KS: getLyrics(song)
+    KS->>KG: GET krcs.kugou.com/search?hash=...
+    KG-->>KS: id + accesskey
+    KS->>KG: GET lyrics.kugou.com/download?fmt=lrc&charset=utf8
+    KG-->>KS: base64(LRC)
+    KS-->>APS: lrcText
+    APS->>APS: _parseLrc -> _lyrics; _updateCurrentLyric
+
+    loop positionStream（每次 position 更新）
+        AP-->>APS: position
+        APS->>APS: _updateCurrentLyric(position)
+        alt 当前歌词行文本发生变化
+            APS-->>AH: onLyricChanged(line)
+            AH->>NL: feed(line)
+            NL->>NL: 去抖 + 节流(<=2 次/秒)
+            alt 开关开启且文本不同
+                NL-->>AH: onSubtitleChanged(line)
+                AH->>AH: mediaItem.add(artist = line)  (副标题=歌词)
+                AH-->>OS: audio_service 更新 MediaStyle 通知
+                opt 小米且能力检测通过
+                    AH->>IS: applyFocus({title, content:line})
+                    IS->>OS: 反射 recoverBuilder + miui.focus.param 重发
+                end
+            else 开关关闭 / 非小米 / 未授权 / 无歌词
+                NL->>NL: 静默跳过（不影响播放）
+            end
+        end
+    end
