@@ -1,13 +1,16 @@
 // 外壳组件（ResponsiveScaffold / ResponsiveContent）多尺寸冒烟测试。
 //
 // 目的：在 320→1600dp 各断点下 pump 外壳，断言**无 overflow / 无未捕获异常**，
-// 并验证平板形态切换为 NavigationRail、手机形态不出现 NavigationRail。
+// 并验证平板形态切换为「PC 风格侧边栏 + 底部常驻播放条」、手机竖屏保留悬浮胶囊栏。
 // 说明：PlayerPage / SettingsPage 依赖 just_audio/audio_service 等平台插件，
 // 在纯 Dart 测试环境无法构造，需真机验证（见 QA 报告「未验证项」）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:such_music/utils/responsive.dart';
 import 'package:such_music/widgets/responsive_scaffold.dart';
+
+/// 播放条占位（真实 PlayerBar 的溢出验证见 player_bar_test.dart）。
+const _playerBarKey = Key('playerBar');
 
 ResponsiveScaffold _shell() => ResponsiveScaffold(
       currentIndex: 0,
@@ -22,6 +25,7 @@ ResponsiveScaffold _shell() => ResponsiveScaffold(
       ],
       body: const SizedBox.expand(),
       bottomBar: const SizedBox(width: 120, height: 48),
+      playerBar: const SizedBox(key: _playerBarKey, height: 80),
     );
 
 void main() {
@@ -51,11 +55,18 @@ void main() {
       expect(tester.takeException(), isNull);
 
       if (Responsive.isTablet(size)) {
-        expect(find.byType(NavigationRail), findsOneWidget,
-            reason: '平板形态应使用 NavigationRail');
+        // 平板形态：PC 风格侧边栏（Logo 文案）+ 底部常驻播放条
+        expect(find.text('Such Music'), findsOneWidget,
+            reason: '平板形态应使用 PC 风格侧边栏（含 Logo）');
+        expect(find.byType(NavigationRail), findsNothing,
+            reason: '平板形态已改为自定义侧边栏');
+        expect(find.byKey(_playerBarKey), findsOneWidget,
+            reason: '平板形态应渲染底部常驻播放条');
       } else {
         expect(find.byType(NavigationRail), findsNothing,
             reason: '手机形态应保留悬浮胶囊栏');
+        expect(find.byKey(_playerBarKey), findsNothing,
+            reason: '手机竖屏（B1）不渲染底部播放条');
       }
     });
   }

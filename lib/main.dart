@@ -17,6 +17,7 @@ import 'models/song_model.dart';
 import 'utils/navigation_guard.dart';
 import 'utils/responsive.dart';
 import 'widgets/responsive_scaffold.dart';
+import 'widgets/player_bar.dart';
 import 'widgets/update_checker.dart';
 
 void main() async {
@@ -68,6 +69,8 @@ class MyApp extends StatelessWidget {
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
           useMaterial3: true,
+          // 全局字体：MiSans（自带 400/500/700 字重）
+          fontFamily: 'MiSans',
         ),
         // 全局夹取系统字体缩放至 [0.85, 1.3]，保障无极缩放下不溢出/不截断
         builder: (context, child) => MediaQuery.withClampedTextScaling(
@@ -94,9 +97,13 @@ class _MainShellState extends State<MainShell> {
   StreamSubscription<SongModel?>? _currentSongSub;
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration>? _durationSub;
+  StreamSubscription<PlayerState>? _stateSub;
+  StreamSubscription<PlayMode>? _playModeSub;
   SongModel? _currentSong;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  bool _isPlaying = false;
+  PlayMode _playMode = PlayMode.loop;
 
   final List<Widget> _pages = const [
     HomePage(),
@@ -109,6 +116,8 @@ class _MainShellState extends State<MainShell> {
     _currentSong = _audioPlayer.currentSong;
     _position = _audioPlayer.position;
     _duration = _audioPlayer.duration;
+    _isPlaying = _audioPlayer.isPlaying;
+    _playMode = _audioPlayer.playMode;
     _currentSongSub = _audioPlayer.onCurrentSongChanged.listen((song) {
       if (mounted) {
         setState(() {
@@ -126,6 +135,16 @@ class _MainShellState extends State<MainShell> {
         setState(() => _duration = dur);
       }
     });
+    _stateSub = _audioPlayer.onStateChanged.listen((state) {
+      if (mounted) {
+        setState(() => _isPlaying = state == PlayerState.playing);
+      }
+    });
+    _playModeSub = _audioPlayer.onPlayModeChanged.listen((mode) {
+      if (mounted) {
+        setState(() => _playMode = mode);
+      }
+    });
     // 首次启动（或协议版本更新后）弹出《用户协议》确认弹窗
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) showAgreementConsentDialogIfNeed(context);
@@ -141,7 +160,34 @@ class _MainShellState extends State<MainShell> {
     _currentSongSub?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
+    _stateSub?.cancel();
+    _playModeSub?.cancel();
     super.dispose();
+  }
+
+  /// 打开播放页（带底部滑入转场；防重复打开）。
+  void _openPlayerPage() {
+    if (NavigationGuard.isPlayerPageOpen) return;
+    NavigationGuard.isPlayerPageOpen = true;
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const PlayerPage(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final tween = Tween(
+            begin: const Offset(0.0, 1.0),
+            end: Offset.zero,
+          ).chain(CurveTween(curve: Curves.easeOutCubic));
+          return SlideTransition(
+            position: animation.drive(tween),
+            child: child,
+          );
+        },
+      ),
+    ).then((_) {
+      NavigationGuard.isPlayerPageOpen = false;
+    });
   }
 
   @override
@@ -166,6 +212,20 @@ class _MainShellState extends State<MainShell> {
         children: _pages,
       ),
       bottomBar: _buildTabBar(),
+      // 平板 / 横屏：PC 风格底部常驻播放条
+      playerBar: PlayerBar(
+        song: _currentSong,
+        isPlaying: _isPlaying,
+        position: _position,
+        duration: _duration,
+        playMode: _playMode,
+        onTogglePlayPause: () => _audioPlayer.togglePlayPause(),
+        onPrevious: () => _audioPlayer.playPrevious(),
+        onNext: () => _audioPlayer.playNext(),
+        onTogglePlayMode: () => _audioPlayer.togglePlayMode(),
+        onSeek: (pos) => _audioPlayer.seek(pos),
+        onOpenPlayer: _openPlayerPage,
+      ),
     );
   }
 
@@ -188,29 +248,7 @@ class _MainShellState extends State<MainShell> {
               dy >= 8 &&
               dy <= 64;
           if (!inPill) return;
-          if (!NavigationGuard.isPlayerPageOpen) {
-            NavigationGuard.isPlayerPageOpen = true;
-            Navigator.push(
-              context,
-              PageRouteBuilder(
-                pageBuilder: (context, animation, secondaryAnimation) =>
-                    const PlayerPage(),
-                transitionsBuilder:
-                    (context, animation, secondaryAnimation, child) {
-                  final tween = Tween(
-                    begin: const Offset(0.0, 1.0),
-                    end: Offset.zero,
-                  ).chain(CurveTween(curve: Curves.easeOutCubic));
-                  return SlideTransition(
-                    position: animation.drive(tween),
-                    child: child,
-                  );
-                },
-              ),
-            ).then((_) {
-              NavigationGuard.isPlayerPageOpen = false;
-            });
-          }
+          _openPlayerPage();
         },
         child: Container(
           width: barWidth,

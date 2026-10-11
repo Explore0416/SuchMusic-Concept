@@ -219,3 +219,48 @@ flutter build apk --debug     # 或 --release
 > ⚠️ 说明：设备注册在**同一 IP 高频请求时会被限流**（返回空 `data`），已加自动重试；
 > 真机正常使用（每次安装只注册一次并持久化）通常首次即成功。
 > 若升级后登录态失效，重新扫码登录一次即可。
+
+---
+
+## 八、横屏/平板播放控制 + PC 风格布局 + MiSans 字体（v1.4.0）
+
+### 1. 横屏/平板看不到、也控制不了正在播放的歌（修复）
+
+**根因**：`ResponsiveScaffold` 在平板/横屏分支只渲染「左侧 NavigationRail + 内容」，
+**完全忽略 `bottomBar`**，导致横屏下没有任何播放控件。
+
+**修复**：新增 `lib/widgets/player_bar.dart` —— PC 风格**全宽常驻播放条**：
+
+| 区域 | 元素 |
+|------|------|
+| 左 | 封面（48，圆角 8）+ 歌名（加粗）+ 歌手；点击打开播放页 |
+| 中 | 播放模式 / 上一首 / 播放暂停（实心圆）/ 下一首 |
+| 右 | 时间 `mm:ss / mm:ss` + 打开播放页 |
+| 顶 | 细进度线（可点/拖 seek） |
+
+`MainShell` 新增 `isPlaying` / `playMode` 订阅并接入该播放条。
+
+### 2. 横屏参考 PC 版 UI
+
+参照 [SuchMusic-NG](https://github.com/Enzymeym/SuchMusic-NG)（仅参考 UI，未移植）：
+平板/横屏改为「**左侧边栏（Logo + 导航项、圆角选中态）+ 右侧内容 + 底部全宽播放条**」，
+替换原 Material NavigationRail。手机竖屏布局保持不变（无回归）。
+
+### 3. 全局字体改为 MiSans
+
+打包小米开源免费商用字体 **MiSans**（Regular/Medium/Bold 三个字重），
+在 `pubspec.yaml` 声明并在 `ThemeData.fontFamily = 'MiSans'` 全局生效。
+> 说明：APK 体积因字体增加约 16MB（65.7MB → 82.1MB）；若需要可改为按需子集化。
+
+### 4. 开发者名单
+
+`about_page.dart` 开发者弹幕新增：**闪电科技团队 / 手机、平板端二次开发**。
+
+### 验证
+
+| 项 | 结果 |
+|----|------|
+| 新增 PlayerBar 单测 + 平板/手机断点渲染 | ✅ 通过 |
+| 多尺寸（320→1600dp）无溢出 | ✅ 通过 |
+| 全量单测 | ✅ 211 passed / 6 skipped |
+| 静态分析 | ✅ 0 issues |
