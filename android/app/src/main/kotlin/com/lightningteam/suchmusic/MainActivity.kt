@@ -1,4 +1,4 @@
-package com.such.music.such_music
+package com.lightningteam.suchmusic
 
 import android.graphics.Color
 import android.os.Build
@@ -24,7 +24,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     /**
-     * 注册小米灵动岛 / 超级岛增强通道（com.such.music/island）。
+     * 注册小米灵动岛 / 超级岛增强通道（com.lightningteam.suchmusic/island）。
      *
      * 注意：继承自 AudioServiceActivity（即 FlutterActivity），可覆写
      * configureFlutterEngine；此方法在 Activity 生命周期内可能被多次调用

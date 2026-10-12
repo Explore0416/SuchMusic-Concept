@@ -107,7 +107,7 @@ flutter build apk --debug     # 或 --release
 | 竖屏基线不回归（430×932） | ✅ 单元测试固化 | 胶囊栏 321.5 / 封面 380 / uiScale 1.0 / dialogScale 1.0 |
 | 原生 Kotlin 编译（`MainActivity.kt` + `IslandBridge.kt`） | ✅ **编译通过** | 用 Kotlin 2.3.20 编译器 + `android.jar(API 36)` + Flutter embedding + audio_service 实际编译，产出 `MainActivity.class` / `IslandBridge.class`（仅原有 deprecated 警告） |
 | Android 构建管线（Gradle 配置 / 清单合并 / 资源处理 / R 类生成 / 全部插件编译） | ✅ 通过 | 端到端跑通 |
-| 完整 `flutter build apk` | ✅ **构建成功** | 产出 `app-debug.apk`（160MB，minSdk 24 / targetSdk 36，ABI：arm64-v8a / armeabi-v7a / x86_64）；已用 aapt 校验清单 `resizeableActivity=true`、无 `screenOrientation`、权限与服务齐全；dex 内含 `IslandBridge` / `miui.focus.param` / `com.such.music/island`，`kernel_blob.bin` 内含新增 Dart 逻辑 |
+| 完整 `flutter build apk` | ✅ **构建成功** | 产出 `app-debug.apk`（160MB，minSdk 24 / targetSdk 36，ABI：arm64-v8a / armeabi-v7a / x86_64）；已用 aapt 校验清单 `resizeableActivity=true`、无 `screenOrientation`、权限与服务齐全；dex 内含 `IslandBridge` / `miui.focus.param` / `com.lightningteam.suchmusic/island`，`kernel_blob.bin` 内含新增 Dart 逻辑 |
 | 酷狗接口真实可用性 | ⚠️ **未验证**（需联网 + 有效凭证） | 参数与签名算法已按逆向结论实现并单测 |
 | 小米灵动岛 / 超级岛真机呈现 | ⚠️ **未验证**（需小米真机与系统授权） | 能力检测 + 静默降级逻辑已实现 |
 | 多尺寸真机无溢出走查 | ⚠️ 布局逻辑已被单测覆盖，真机视觉走查待补 | — |

@@ -51,6 +51,25 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # 版本号随推送自动更新：
+      #   · 推送 main/master：versionName = <pubspec 的 major.minor>.<run_number>，
+      #     versionCode = run_number（单调递增，保证每次构建都能覆盖安装）；
+      #   · 推送 v* 标签：versionName 取标签号（去掉前缀 v），versionCode 仍用 run_number。
+      # 这样无需手动改版本号，每次 push 产出的 APK 版本号都会自动递增。
+      - name: Resolve version
+        run: |
+          BASE=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          MAJOR_MINOR=$(echo "$BASE" | cut -d'.' -f1-2)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION_NAME="${GITHUB_REF_NAME#v}"
+          else
+            VERSION_NAME="${MAJOR_MINOR}.${{ github.run_number }}"
+          fi
+          VERSION_CODE="${{ github.run_number }}"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "resolved -> versionName=$VERSION_NAME versionCode=$VERSION_CODE"
+
       # 只分析应用自身代码；vendored 包 packages/netease_music_api/test 含需要私密配置的
       # 上游用例，纳入分析会产生噪声，故与本地保持一致，限定 lib 与 test
       - name: Static analysis
@@ -63,7 +82,7 @@ jobs:
       # 正式签名 suchmusic-release.jks 与 key.properties 随私有仓库入库，
       # 构建产物自动带正式签名；若在公开 fork 缺失该文件则回退 debug 签名。
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
 
       # 校验 APK 签名证书（公开 fork 缺 key.properties 时会在此明确暴露 debug 回退）
       - name: Verify APK signature
@@ -74,16 +93,17 @@ jobs:
 
       - name: Collect artifact
         run: |
-          VERSION=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
-          SHORT_SHA=$(git rev-parse --short HEAD)
           mkdir -p artifacts
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            NAME="SuchMusic-$GITHUB_REF_NAME.apk"
+            # 正式发布：文件名带标签版本号
+            NAME="SuchMusic-${GITHUB_REF_NAME}.apk"
           else
-            NAME="SuchMusic-v$VERSION-$SHORT_SHA.apk"
+            # 滚动构建：固定文件名，覆盖 latest 资源，避免同名堆积
+            NAME="SuchMusic-latest.apk"
           fi
           cp build/app/outputs/flutter-apk/app-release.apk "artifacts/$NAME"
           echo "APK_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "打包版本号: versionName=$VERSION_NAME versionCode=$VERSION_CODE"
           ls -lh artifacts
 
       - name: Upload APK artifact
@@ -109,7 +129,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: 'Latest build（最新自动构建）'
+          name: 'Latest build · v${{ env.VERSION_NAME }} (build ${{ env.VERSION_CODE }})'
           prerelease: true
           make_latest: false
           files: artifacts/${{ env.APK_NAME }}

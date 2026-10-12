@@ -273,7 +273,7 @@ flowchart LR
 
 ### 3.5 Android 端 MethodChannel 接口定义
 
-**Channel 名**：`com.such.music/island`
+**Channel 名**：`com.lightningteam.suchmusic/island`
 
 | 方法 | 入参 | 返回 | 说明 |
 |---|---|---|---|
@@ -288,7 +288,7 @@ flowchart LR
 4. 任一环节异常/无权限 → 返回 `supported=false` + `reason`，**不抛出**。
 
 **`miui.focus.param` 注入要点（Kotlin）**：
-1. 在 `MainActivity.configureFlutterEngine` 注册 `MethodChannel("com.such.music/island")`（`MainActivity` 继承 `AudioServiceActivity`，即 `FlutterActivity`，可覆写 `configureFlutterEngine`）。
+1. 在 `MainActivity.configureFlutterEngine` 注册 `MethodChannel("com.lightningteam.suchmusic/island")`（`MainActivity` 继承 `AudioServiceActivity`，即 `FlutterActivity`，可覆写 `configureFlutterEngine`）。
 2. `applyFocus`：用 `NotificationManager.getActiveNotifications()` 取本 App（audio_service 的 MediaStyle 通知）→ `Notification.Builder.recoverBuilder(ctx, notif)` → `bundle.putString("miui.focus.param", jsonString)` `addExtras(bundle)` → `nm.notify(tag, id, rebuilt)`。**id/tag 必须与 audio_service 一致**，避免产生重复通知。
 3. `miui.focus.param` 为 JSON 字符串，最小结构：`{"param_v2":{"business":"such_music","protocol":2,"version":1,"islandId":"such_music_lyric","title":<歌名>,"content":<歌词>,"islandProperty":{"islandTitle":<歌名>,"islandContent":<歌词>}}}`。
 4. 若 `recoverBuilder`/`getActiveNotifications` 抛错（低版本/ROM 裁剪）→ 捕获并返回 false。

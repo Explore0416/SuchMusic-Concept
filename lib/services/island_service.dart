@@ -34,7 +34,8 @@ class IslandService {
   static final IslandService instance = IslandService._internal();
 
   /// 与 Kotlin 侧 [IslandBridge.CHANNEL] 保持一致
-  static const MethodChannel _channel = MethodChannel('com.such.music/island');
+  static const MethodChannel _channel =
+      MethodChannel('com.lightningteam.suchmusic/island');
 
   static const String defaultIslandId = 'such_music_lyric';
 

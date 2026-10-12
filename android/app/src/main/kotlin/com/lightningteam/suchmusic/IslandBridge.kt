@@ -1,4 +1,4 @@
-package com.such.music.such_music
+package com.lightningteam.suchmusic
 
 import android.app.Notification
 import android.app.NotificationManager
@@ -21,7 +21,7 @@ class IslandBridge(private val context: Context) {
         private const val TAG = "IslandBridge"
 
         /** 与方法通道名保持一致 */
-        const val CHANNEL = "com.such.music/island"
+        const val CHANNEL = "com.lightningteam.suchmusic/island"
     }
 
     /**

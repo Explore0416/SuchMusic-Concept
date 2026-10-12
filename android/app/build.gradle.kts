@@ -20,7 +20,9 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
         }
 
 android {
-    namespace = "com.such.music.such_music"
+    // 二改标识：与上游原版（com.such.music.such_music）彻底区分，
+    // 由「闪电科技团队（Lightning Team）」二次开发维护，可与原版并存安装。
+    namespace = "com.lightningteam.suchmusic"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -30,8 +32,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.such.music.such_music"
+        // 二改包名（Lightning Team 维护），区别于上游原版
+        applicationId = "com.lightningteam.suchmusic"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
