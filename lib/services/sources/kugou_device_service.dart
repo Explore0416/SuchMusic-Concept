@@ -2,7 +2,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../models/kugou_platform.dart';
 import '../../utils/app_constants.dart';
 import 'kugou_config.dart';
 import 'kugou_crypto.dart';

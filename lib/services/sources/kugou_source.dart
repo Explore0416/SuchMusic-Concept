@@ -511,6 +511,7 @@ class KugouSource implements MusicSource {
   }
 
   /// 推荐歌单（`/v2/special_recommend`，无需登录）。
+  @override
   Future<List<PlaylistModel>> topPlaylist({int limit = 30}) async {
     try {
       final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
