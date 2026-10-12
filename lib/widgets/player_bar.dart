@@ -191,6 +191,7 @@ class PlayerBar extends StatelessWidget {
           color: _sub,
           onTap: onTogglePlayMode,
           tooltip: '播放模式',
+          animate: true,
         ),
         const SizedBox(width: 18),
         _iconButton(
@@ -274,7 +275,37 @@ class PlayerBar extends StatelessWidget {
     required Color color,
     required VoidCallback? onTap,
     String? tooltip,
+    bool animate = false,
   }) {
+    final svg = SvgPicture.asset(
+      asset,
+      width: size,
+      height: size,
+      colorFilter: ColorFilter.mode(
+        onTap == null ? const Color(0xFFC4C4C4) : color,
+        BlendMode.srcIn,
+      ),
+    );
+    // 播放模式等「同一按钮换图标」的场景：淡入淡出 + 缩放/旋转，避免生硬跳变
+    final icon = animate
+        ? AnimatedSwitcher(
+            duration: const Duration(milliseconds: 320),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.65, end: 1.0).animate(animation),
+                child: RotationTransition(
+                  turns:
+                      Tween<double>(begin: -0.28, end: 0.0).animate(animation),
+                  child: child,
+                ),
+              ),
+            ),
+            child: KeyedSubtree(key: ValueKey<String>(asset), child: svg),
+          )
+        : svg;
     Widget btn = SizedBox(
       width: 40,
       height: 40,
@@ -283,17 +314,7 @@ class PlayerBar extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
-          child: Center(
-            child: SvgPicture.asset(
-              asset,
-              width: size,
-              height: size,
-              colorFilter: ColorFilter.mode(
-                onTap == null ? const Color(0xFFC4C4C4) : color,
-                BlendMode.srcIn,
-              ),
-            ),
-          ),
+          child: Center(child: icon),
         ),
       ),
     );

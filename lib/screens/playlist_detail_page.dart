@@ -74,15 +74,17 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   Future<void> _loadSongs() async {
-    final isKugou = widget.playlist.source == SongSource.kugou;
+    final isKugou = widget.playlist.source.isKugou;
+    // 按歌单**自身**音源取实现（避免当前音源与歌单来源不一致时取错接口）
+    final src = SourceManager().sourceFor(widget.playlist.source);
     final List<SongModel> songs;
     if (widget.isDaily) {
       songs = isKugou
-          ? await SourceManager().source.dailyRecommend()
+          ? await src.dailyRecommend()
           : await _apiService.getDailyRecommendSongs();
     } else {
       songs = isKugou
-          ? await SourceManager().source.rankSongs(widget.playlist.id)
+          ? await src.rankSongs(widget.playlist.id)
           : await _apiService.playlistDetail(widget.playlist.id);
     }
     if (!mounted) return;

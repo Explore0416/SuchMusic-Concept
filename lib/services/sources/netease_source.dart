@@ -105,4 +105,24 @@ class NeteaseSource implements MusicSource {
       return [];
     }
   }
+
+  @override
+  Future<List<SongModel>> personalFm() async {
+    try {
+      return await _api.userRadio();
+    } catch (e) {
+      debugPrint('❌ 网易云私人FM失败: $e');
+      return [];
+    }
+  }
+
+  @override
+  Future<List<PlaylistModel>> topPlaylist({int limit = 30}) async {
+    try {
+      return await _api.topList();
+    } catch (e) {
+      debugPrint('❌ 网易云推荐歌单失败: $e');
+      return [];
+    }
+  }
 }

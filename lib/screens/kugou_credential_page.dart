@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 import '../services/kugou_credential_service.dart';
 import '../services/sources/kugou_credential_parser.dart';
@@ -13,7 +14,7 @@ import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
 import '../widgets/kugou_qr_panel.dart';
 
-/// 酷狗概念版凭证页（REQ-11 + 增量「扫码登录」）。
+/// 酷狗凭证页（REQ-11 + 增量「扫码登录」，支持概念版 / 原版）。
 ///
 /// - **扫码登录**（新增）：取码 → 轮询 → 拿 token/userid → 写入凭证；
 ///   页面退出 / 销毁**必须**取消在飞请求与轮询；
@@ -21,7 +22,10 @@ import '../widgets/kugou_qr_panel.dart';
 /// - 手工填写（既有，保留为高级 / 兜底）；
 /// - 与网易云 `user_cache.json` 隔离存储；全页脱敏展示。
 class KugouCredentialPage extends StatefulWidget {
-  const KugouCredentialPage({super.key});
+  const KugouCredentialPage({super.key, this.platform = KugouPlatform.lite});
+
+  /// 目标平台（决定 appid / 二维码授权目标 / 凭证分区）。
+  final KugouPlatform platform;
 
   @override
   State<KugouCredentialPage> createState() => _KugouCredentialPageState();
@@ -33,7 +37,10 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
   final _nicknameController = TextEditingController();
 
   final _credential = KugouCredentialService.instance;
-  final _loginService = KugouLoginService.instance;
+
+  /// 按平台取登录服务（概念版 / 原版各自独立单例）。
+  KugouLoginService get _loginService =>
+      KugouLoginService.forPlatform(widget.platform);
 
   bool _configured = false;
 
@@ -46,8 +53,8 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
   @override
   void initState() {
     super.initState();
-    _configured = _credential.hasCredentials;
-    _nicknameController.text = _credential.nickname ?? '';
+    _configured = _credential.hasCredentialsFor(widget.platform);
+    _nicknameController.text = _credential.nicknameOf(widget.platform) ?? '';
   }
 
   @override
@@ -89,7 +96,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
   }
 
   Future<void> _persistLogin(String token, String userId) async {
-    final ok = await _credential.saveFromLogin(token, userId);
+    final ok = await _credential.saveFromLogin(token, userId, platform: widget.platform);
     if (!mounted) return;
     if (ok) {
       setState(() {
@@ -165,13 +172,13 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
       DesignToast.show(context, 'token 与 userid 均不能为空');
       return;
     }
-    final ok = await _credential.save(token, userId);
+    final ok = await _credential.saveFor(widget.platform, token, userId);
     if (!mounted) return;
     if (!ok) {
       DesignToast.show(context, '凭证保存失败，请检查格式');
       return;
     }
-    await _credential.setNickname(_nicknameController.text.trim());
+    await _credential.setNickname(_nicknameController.text.trim(), platform: widget.platform);
     if (!mounted) return;
     setState(() {
       _configured = true;
@@ -188,7 +195,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
       contentText: '退出后酷狗音源将不可用，并自动回退网易云，确定继续？',
       onConfirm: () async {
         _stopScan();
-        await _credential.clear();
+        await _credential.clearFor(widget.platform);
         await SourceManager().switchTo(SongSource.netease);
         if (!mounted) return;
         setState(() {
@@ -240,7 +247,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                   ),
                   Center(
                     child: Text(
-                      '酷狗概念版',
+                      widget.platform.label,
                       style: TextStyle(
                         color: Colors.black,
                         fontSize: 17.5 * s,
@@ -260,7 +267,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(height: 17 * s),
-                    _buildSectionHeader('扫码登录（酷狗概念版）', s),
+                    _buildSectionHeader('扫码登录（${widget.platform.label}）', s),
                     SizedBox(height: 10 * s),
                     _buildScanCard(s),
                     SizedBox(height: 16 * s),
@@ -277,7 +284,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
                           TextField(
                             controller: _tokenController,
                             decoration: InputDecoration(
-                              hintText: '酷狗概念版 token',
+                              hintText: '${widget.platform.label} token',
                               border: InputBorder.none,
                               hintStyle: TextStyle(
                                   fontSize: 14 * s, color: Colors.black38),
@@ -359,7 +366,7 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
             Padding(
               padding: EdgeInsets.only(bottom: 10 * s),
               child: Text(
-                '请使用「酷狗概念版」App 扫码授权，登录后即可使用概念版 VIP 权益',
+                '请使用「${widget.platform.label}」App 扫码授权，登录后即可使用对应 VIP 权益',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 12.5 * s, color: const Color(0xFF838383)),
@@ -444,8 +451,8 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
   }
 
   Widget _buildStatusCard(double s) {
-    final masked = _credential.maskedToken;
-    final maskedUid = AppConstants.maskToken(_credential.userId);
+    final masked = _credential.maskedTokenOf(widget.platform);
+    final maskedUid = AppConstants.maskToken(_credential.userIdOf(widget.platform));
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -483,10 +490,10 @@ class _KugouCredentialPageState extends State<KugouCredentialPage> {
           Text('UserID：${_configured ? maskedUid : '—'}',
               style: TextStyle(fontSize: 13 * s, color: Colors.black54)),
           if (_configured &&
-              _credential.nickname != null &&
-              _credential.nickname!.isNotEmpty) ...[
+              _credential.nicknameOf(widget.platform) != null &&
+              _credential.nicknameOf(widget.platform)!.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text('昵称：${_credential.nickname}',
+            Text('昵称：${_credential.nicknameOf(widget.platform)}',
                 style: TextStyle(fontSize: 13 * s, color: Colors.black54)),
           ],
           if (_configured) ...[

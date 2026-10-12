@@ -28,24 +28,30 @@ String sanitizePlayUrlForLog(String url) {
   return '${uri.scheme}://${uri.host}$path';
 }
 
-/// 酷狗概念版音源实现（ARCH §4.6）。
+/// 酷狗音源实现（支持概念版 lite / 原版 standard，ARCH §4.6）。
 ///
-/// - 搜索：**主路径** `complexsearch`（需签名）；仅在主路径返回空时
-///   才走免签名 `mobilecdn` 兜底（该域名实测常不可达，需容忍其失败）。
-/// - 播放：`gateway/v3/url`，请求头 `x-router: tracker.kugou.com`；
-///   `key` 使用**概念版 lite 盐值**。
+/// - 搜索：**主路径** `complexsearch`（需签名，Web 盐两平台共用）；
+/// - 播放：`gateway/v5/url`，请求头 `x-router: trackercdn.kugou.com`；
+///   `key` / 签名盐值按 [platform] 取。
 /// - 歌词：`krcs` 取 id/accesskey → `lyrics/download` 取 base64 LRC（不解 KRC）。
 /// - 任何失败一律返回空 / null + 日志，交由 [SourceManager] 回退网易云。
 class KugouSource implements MusicSource {
-  KugouSource._internal(this._dio);
+  KugouSource._internal(this._dio, this.platform);
 
-  static final KugouSource _instance = KugouSource._internal(_createDio());
+  static final KugouSource _instanceLite =
+      KugouSource._internal(_createDio(), KugouPlatform.lite);
+  static final KugouSource _instanceStandard =
+      KugouSource._internal(_createDio(), KugouPlatform.standard);
 
-  factory KugouSource() => _instance;
+  /// 按平台取共享实例（缺省 = 概念版，兼容既有调用）。
+  factory KugouSource({KugouPlatform platform = KugouPlatform.lite}) =>
+      platform == KugouPlatform.lite ? _instanceLite : _instanceStandard;
 
   /// 测试专用：注入自定义 [Dio]（记录请求 / 假应答）。
   @visibleForTesting
-  factory KugouSource.withDio(Dio dio) => KugouSource._internal(dio);
+  factory KugouSource.withDio(Dio dio,
+          {KugouPlatform platform = KugouPlatform.lite}) =>
+      KugouSource._internal(dio, platform);
 
   static Dio _createDio() => Dio(BaseOptions(
         connectTimeout: const Duration(seconds: 10),
@@ -54,23 +60,27 @@ class KugouSource implements MusicSource {
 
   final Dio _dio;
 
+  /// 平台变体（概念版 / 原版）。
+  final KugouPlatform platform;
+
   /// 搜索 / 歌词请求的取消令牌（竞态保护：新请求先取消旧请求）。
   CancelToken? _searchCancel;
 
   @override
-  String get id => 'kugou';
+  String get id => kind.code;
 
   @override
-  String get displayName => '酷狗概念版';
+  String get displayName => platform.label;
 
   @override
-  SongSource get kind => SongSource.kugou;
+  SongSource get kind => SongSource.fromKugouPlatform(platform);
 
   @override
   bool get needsCredentials => true;
 
   @override
-  bool get isConfigured => KugouCredentialService.instance.hasCredentials;
+  bool get isConfigured =>
+      KugouCredentialService.instance.hasCredentialsFor(platform);
 
   // ── 搜索 ──────────────────────────────────────────────────
 
@@ -97,11 +107,11 @@ class KugouSource implements MusicSource {
     try {
       // 概念版 Web 端签名所需**完整**参数集（漏参数 → error_code=20006）
       final params = <String, dynamic>{
-        'appid': KugouConfig.appid, // 概念版 1005
+        'appid': KugouConfig.appidOf(platform), // 按平台取（概念版 3116 / 原版 1005）
         'srcappid': KugouConfig.srcappid, // 2919
-        'clientver': KugouConfig.clientver,
+        'clientver': KugouConfig.clientverOf(platform),
         'clienttime': DateTime.now().millisecondsSinceEpoch,
-        'dfid': KugouDevice.dfid,
+        'dfid': KugouDevice.dfidOf(platform),
         'mid': KugouDevice.mid,
         'uuid': KugouDevice.uuid,
         'keyword': kw,
@@ -193,7 +203,7 @@ class KugouSource implements MusicSource {
     final hashLower = hash.toLowerCase();
 
     // 关键：必须先完成设备注册（否则服务端风控 → 20028 → 取不到直链）
-    final dfid = await KugouDeviceService.instance.ensureDfid();
+    final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
     if (dfid == null || dfid.isEmpty) {
       debugPrint('⚠️ 酷狗设备未注册成功，无法取播放直链');
       return null;
@@ -211,15 +221,15 @@ class KugouSource implements MusicSource {
         'hash': hashLower,
         'ssa_flag': 'is_fromtrack',
         'version': KugouConfig.playVersion,
-        'page_id': KugouConfig.playPageId,
+        'page_id': KugouConfig.playPageIdOf(platform),
         'quality': 128,
         'album_audio_id': albumAudioId,
         'behavior': 'play',
-        'pid': KugouConfig.playPid,
+        'pid': KugouConfig.playPidOf(platform),
         'cmd': KugouConfig.playCmd,
         'pidversion': KugouConfig.playPidVersion,
         'IsFreePart': 0,
-        'ppage_id': KugouConfig.playPpageId,
+        'ppage_id': KugouConfig.playPpageIdOf(platform),
         'cdnBackup': 1,
         'module': '',
         'clientver': KugouConfig.playVersion,
@@ -227,20 +237,20 @@ class KugouSource implements MusicSource {
         'dfid': dfid,
         'mid': KugouDevice.mid,
         'uuid': '-',
-        'appid': KugouConfig.appid,
+        'appid': KugouConfig.appidOf(platform),
         'clienttime': clienttime,
       };
       if (userToken.isNotEmpty) params['token'] = userToken;
       if (userId != '0') params['userid'] = userId;
-      // encryptKey：key = md5(hash + lite盐 + appid + mid + userid)
+      // encryptKey：key = md5(hash + 平台key盐 + appid + mid + userid)
       params['key'] = KugouSign.playKey(
         hash: hashLower,
         mid: KugouDevice.mid,
         userId: userId,
-        salt: KugouConfig.keySaltLite,
+        platform: platform,
       );
-      // Android 端签名（lite 盐）
-      final signature = KugouSign.androidSignature(params);
+      // Android 端签名（按平台盐值）
+      final signature = KugouSign.androidSignature(params, platform: platform);
 
       final res = await _dio.get(
         '${KugouConfig.gatewayHost}${KugouConfig.playUrlPath}',
@@ -351,7 +361,7 @@ class KugouSource implements MusicSource {
         return null;
       }
       debugPrint('🔎 酷狗匹配到对端歌曲: 《${best.name}》- ${best.artist}');
-      return best.copyWith(source: SongSource.kugou);
+      return best.copyWith(source: kind);
     } catch (e) {
       debugPrint('⚠️ 酷狗匹配对端歌曲失败: $e');
       return null;
@@ -363,19 +373,19 @@ class KugouSource implements MusicSource {
   @override
   Future<List<PlaylistModel>> topList() async {
     try {
-      final dfid = await KugouDeviceService.instance.ensureDfid();
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
       final params = <String, dynamic>{
         'dfid': dfid ?? '-',
         'mid': KugouDevice.mid,
         'uuid': '-',
-        'appid': KugouConfig.appid,
-        'clientver': KugouConfig.clientver,
+        'appid': KugouConfig.appidOf(platform),
+        'clientver': KugouConfig.clientverOf(platform),
         'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
         'plat': 2,
         'withsong': 1,
         'parentid': 0,
       };
-      params['signature'] = KugouSign.androidSignature(params);
+      params['signature'] = KugouSign.androidSignature(params, platform: platform);
       final res = await _dio.get(
         '${KugouConfig.gatewayHost}${KugouConfig.rankListPath}',
         queryParameters: params,
@@ -398,16 +408,20 @@ class KugouSource implements MusicSource {
   /// 榜单歌曲（`/openapi/kmr/v2/rank/audio`）。
   @override
   Future<List<SongModel>> rankSongs(String playlistId, {int limit = 50}) async {
+    // 歌单（`collection_...` 形式）→ 走歌单歌曲接口；否则按榜单 rankid 处理。
+    if (playlistId.startsWith('collection_')) {
+      return playlistSongs(playlistId, limit: limit);
+    }
     final rankId = int.tryParse(playlistId);
     if (rankId == null) return const [];
     try {
-      final dfid = await KugouDeviceService.instance.ensureDfid();
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
       final params = <String, dynamic>{
         'dfid': dfid ?? '-',
         'mid': KugouDevice.mid,
         'uuid': '-',
-        'appid': KugouConfig.appid,
-        'clientver': KugouConfig.clientver,
+        'appid': KugouConfig.appidOf(platform),
+        'clientver': KugouConfig.clientverOf(platform),
         'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
       };
       final body = <String, dynamic>{
@@ -422,7 +436,7 @@ class KugouSource implements MusicSource {
         'rank_id': rankId,
       };
       final bodyStr = jsonEncode(body);
-      params['signature'] = KugouSign.androidSignatureWithBody(params, bodyStr);
+      params['signature'] = KugouSign.androidSignatureWithBody(params, bodyStr, platform: platform);
       final res = await _dio.post(
         '${KugouConfig.gatewayHost}${KugouConfig.rankAudioPath}',
         data: bodyStr,
@@ -447,6 +461,397 @@ class KugouSource implements MusicSource {
     }
   }
 
+  // ── 用户歌单 / 歌单导入 ────────────────────────────────────
+
+  /// 从用户输入（歌单链接 / `listid` 查询串 / 直接 `collection_...`）
+  /// 解析酷狗 `global_collection_id`；解析不到返回 `null`。
+  static String? parsePlaylistId(String input) {
+    final s = input.trim();
+    if (s.isEmpty) return null;
+    const pattern = r'collection_\d+_\d+_\d+_\d+';
+    var m = RegExp(pattern).firstMatch(s);
+    if (m != null) return m.group(0);
+    // `listid=` / `list_id=` 查询参数
+    final li = RegExp(r'[?&]list_?id=([^&#\s]+)').firstMatch(s);
+    if (li != null) {
+      final v = Uri.decodeComponent(li.group(1)!);
+      m = RegExp(pattern).firstMatch(v);
+      if (m != null) return m.group(0);
+    }
+    return null;
+  }
+
+  static String? _firstUrl(String input) {
+    final m = RegExp(r'https?://[^\s]+').firstMatch(input.trim());
+    return m?.group(0);
+  }
+
+  /// 解析歌单 ID：优先直接解析；若是分享短链 / 分享页，则请求页面再提取。
+  Future<String?> resolvePlaylistId(String input) async {
+    final direct = parsePlaylistId(input);
+    if (direct != null) return direct;
+    final url = _firstUrl(input);
+    if (url == null) return null;
+    try {
+      final res = await _dio.get<String>(
+        url,
+        options: Options(
+          responseType: ResponseType.plain,
+          followRedirects: true,
+          headers: {'User-Agent': KugouConfig.mobileUserAgent},
+        ),
+      );
+      final text = res.data ?? '';
+      return parsePlaylistId(text) ??
+          parsePlaylistId(res.realUri.toString());
+    } catch (e) {
+      debugPrint('⚠️ 解析歌单链接失败: $e');
+      return null;
+    }
+  }
+
+  /// 推荐歌单（`/v2/special_recommend`，无需登录）。
+  Future<List<PlaylistModel>> topPlaylist({int limit = 30}) async {
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
+      final clienttime = DateTime.now().millisecondsSinceEpoch;
+      final clienttimeSec = clienttime ~/ 1000;
+      final appid = KugouConfig.appidOf(platform);
+      final clientver = KugouConfig.clientverOf(platform);
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': appid,
+        'clientver': clientver,
+        'clienttime': clienttimeSec,
+      };
+      // 字段顺序对齐上游（签名含 body，顺序敏感）
+      final body = <String, dynamic>{
+        'appid': appid,
+        'mid': KugouDevice.mid,
+        'clientver': clientver,
+        'platform': 'android',
+        'clienttime': clienttimeSec.toString(),
+        'userid': 0,
+        'module_id': 1,
+        'page': 1,
+        'pagesize': limit,
+        'key': KugouSign.paramsKey(clienttimeSec, platform: platform),
+        'special_recommend': {
+          'withtag': 1,
+          'withsong': 1,
+          'sort': 1,
+          'ugc': 1,
+          'is_selected': 0,
+          'withrecommend': 1,
+          'area_code': 1,
+          'categoryid': 0,
+        },
+        'req_multi': 1,
+        'retrun_min': 5,
+        'return_special_falg': 1,
+      };
+      final bodyStr = jsonEncode(body);
+      params['signature'] = KugouSign.androidSignatureWithBody(params, bodyStr,
+          platform: platform);
+      final res = await _dio.post(
+        '${KugouConfig.gatewayHost}${KugouConfig.topPlaylistPath}',
+        data: bodyStr,
+        queryParameters: params,
+        options: Options(
+          contentType: 'application/json;charset=utf-8',
+          headers: {
+            'User-Agent': KugouConfig.androidUserAgent,
+            'x-router': KugouConfig.topPlaylistRouter,
+            ...KugouConfig.androidCommonHeaders,
+          },
+        ),
+      );
+      final list = _extractList(res.data, ['data', 'special_list']);
+      return list
+          .map(_mapTopPlaylist)
+          .where((p) => p.id.startsWith('collection_') && p.name.isNotEmpty)
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ 酷狗推荐歌单失败: $e');
+      return const [];
+    }
+  }
+
+  PlaylistModel _mapTopPlaylist(Map<String, dynamic> j) {
+    final gcid = (j['global_collection_id'] ?? '').toString();
+    final name = (j['specialname'] ?? j['name'] ?? '').toString();
+    var cover = (j['flexible_cover'] ?? j['imgurl'] ?? '').toString();
+    cover = cover.replaceAll('{size}', '480');
+    final count = int.tryParse((j['songcount'] ?? j['percount'] ?? '').toString());
+    return PlaylistModel(
+      id: gcid,
+      name: name,
+      coverUrl: cover.isEmpty ? null : cover,
+      trackCount: count,
+      creatorName: (j['nickname'] ?? '')?.toString(),
+      source: kind,
+    );
+  }
+
+  /// 歌单歌曲（`/pubsongs/v2/get_other_list_file_nofilt`，**无 x-router**）。
+  Future<List<SongModel>> playlistSongs(String globalCollectionId,
+      {int limit = 100}) async {
+    if (!globalCollectionId.startsWith('collection_')) return const [];
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': KugouConfig.appidOf(platform),
+        'clientver': KugouConfig.clientverOf(platform),
+        'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'area_code': 1,
+        'begin_idx': 0,
+        'plat': 1,
+        'type': 1,
+        'mode': 1,
+        'personal_switch': 1,
+        'extend_fields': 'abtags,hot_cmt,popularization',
+        'pagesize': limit,
+        'global_collection_id': globalCollectionId,
+      };
+      params['signature'] =
+          KugouSign.androidSignature(params, platform: platform);
+      final res = await _dio.get(
+        '${KugouConfig.gatewayHost}${KugouConfig.playlistSongsPath}',
+        queryParameters: params,
+        options: Options(headers: {
+          'User-Agent': KugouConfig.androidUserAgent,
+          ...KugouConfig.androidCommonHeaders,
+        }),
+      );
+      final list = _extractList(res.data, ['data', 'songs']);
+      return list
+          .map(_mapPlaylistSong)
+          .where((s) => s.name.isNotEmpty && (s.hash?.isNotEmpty ?? false))
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ 酷狗歌单歌曲失败: $e');
+      return const [];
+    }
+  }
+
+  /// 歌单元信息（`/v3/get_list_info`，x-router: pubsongs）。
+  Future<PlaylistModel?> playlistInfo(String globalCollectionId) async {
+    if (!globalCollectionId.startsWith('collection_')) return null;
+    try {
+      final cred = KugouCredentialService.instance;
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': KugouConfig.appidOf(platform),
+        'clientver': KugouConfig.clientverOf(platform),
+        'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      };
+      final body = <String, dynamic>{
+        'data': [
+          {'global_collection_id': globalCollectionId}
+        ],
+        'userid': cred.userIdOf(platform) ?? '0',
+        'token': cred.tokenOf(platform) ?? '',
+      };
+      final bodyStr = jsonEncode(body);
+      params['signature'] = KugouSign.androidSignatureWithBody(params, bodyStr,
+          platform: platform);
+      final res = await _dio.post(
+        '${KugouConfig.gatewayHost}${KugouConfig.playlistDetailPath}',
+        data: bodyStr,
+        queryParameters: params,
+        options: Options(
+          contentType: 'application/json;charset=utf-8',
+          headers: {
+            'User-Agent': KugouConfig.androidUserAgent,
+            'x-router': KugouConfig.playlistDetailRouter,
+            ...KugouConfig.androidCommonHeaders,
+          },
+        ),
+      );
+      final data = _asMap(res.data)?['data'];
+      Map<String, dynamic>? item;
+      if (data is Map) {
+        // data 形如 {"0": {...}} 或直接为对象
+        final first = data.values.firstWhere((v) => v is Map, orElse: () => null);
+        item = first is Map ? Map<String, dynamic>.from(first) : null;
+      }
+      if (item == null) return null;
+      return _mapPlaylistInfo(item, globalCollectionId);
+    } catch (e) {
+      debugPrint('⚠️ 酷狗歌单详情失败: $e');
+      return null;
+    }
+  }
+
+  /// 用户自己的歌单（`/v7/get_all_list`，**需登录态** userid + token）。
+  Future<List<PlaylistModel>> userPlaylists({int limit = 100}) async {
+    final cred = KugouCredentialService.instance;
+    final userId = cred.userIdOf(platform);
+    final token = cred.tokenOf(platform);
+    if (userId == null || userId.isEmpty || token == null || token.isEmpty) {
+      return const [];
+    }
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': KugouConfig.appidOf(platform),
+        'clientver': KugouConfig.clientverOf(platform),
+        'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'token': token,
+        'userid': userId,
+        'plat': 1,
+      };
+      final body = <String, dynamic>{
+        'userid': userId,
+        'token': token,
+        'total_ver': 979,
+        'type': 2,
+        'page': 1,
+        'pagesize': limit,
+      };
+      final bodyStr = jsonEncode(body);
+      params['signature'] = KugouSign.androidSignatureWithBody(params, bodyStr,
+          platform: platform);
+      final res = await _dio.post(
+        '${KugouConfig.gatewayHost}${KugouConfig.userPlaylistPath}',
+        data: bodyStr,
+        queryParameters: params,
+        options: Options(
+          contentType: 'application/json;charset=utf-8',
+          headers: {
+            'User-Agent': KugouConfig.androidUserAgent,
+            'x-router': KugouConfig.userPlaylistRouter,
+            ...KugouConfig.androidCommonHeaders,
+          },
+        ),
+      );
+      final list = _extractUserPlaylists(res.data);
+      return list.map(_mapUserPlaylist).toList();
+    } catch (e) {
+      debugPrint('⚠️ 酷狗用户歌单失败: $e');
+      return const [];
+    }
+  }
+
+  /// 从用户歌单响应中提取列表（结构随版本变化，做多重兜底）。
+  List<Map<String, dynamic>> _extractUserPlaylists(dynamic data) {
+    final root = _asMap(data);
+    if (root == null) return const [];
+    final d = _asMap(root['data']);
+    for (final key in ['info', 'list', 'lists', 'data']) {
+      final v = d?[key] ?? root[key];
+      if (v is List) {
+        return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+    }
+    if (d != null) {
+      final first = d.values.firstWhere((v) => v is List, orElse: () => null);
+      if (first is List) {
+        return first
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+    }
+    return const [];
+  }
+
+  PlaylistModel _mapUserPlaylist(Map<String, dynamic> j) {
+    final gcid = (j['global_collection_id'] ??
+            j['listid'] ??
+            j['specialid'] ??
+            j['id'] ??
+            '')
+        .toString();
+    final name = (j['name'] ?? j['specialname'] ?? j['listname'] ?? '').toString();
+    var cover = (j['pic'] ?? j['cover'] ?? j['imgurl'] ?? j['flexible_cover'] ?? '')
+        .toString();
+    cover = cover.replaceAll('{size}', '480');
+    final count = int.tryParse((j['songcount'] ?? j['count'] ?? '').toString());
+    return PlaylistModel(
+      id: gcid.startsWith('collection_') ? gcid : 'collection_3_${gcid}_1_0',
+      name: name,
+      coverUrl: cover.isEmpty ? null : cover,
+      trackCount: count,
+      source: kind,
+    );
+  }
+
+  PlaylistModel _mapPlaylistInfo(
+      Map<String, dynamic> j, String globalCollectionId) {
+    final name = (j['specialname'] ?? j['name'] ?? j['listname'] ?? '').toString();
+    var cover =
+        (j['flexible_cover'] ?? j['imgurl'] ?? j['pic'] ?? j['cover'] ?? '')
+            .toString();
+    cover = cover.replaceAll('{size}', '480');
+    final count = int.tryParse((j['songcount'] ?? j['count'] ?? '').toString());
+    final intro = (j['intro'] ?? '').toString();
+    return PlaylistModel(
+      id: globalCollectionId,
+      name: name.isEmpty ? '酷狗歌单' : name,
+      coverUrl: cover.isEmpty ? null : cover,
+      description: intro.isEmpty ? null : intro,
+      trackCount: count,
+      creatorName: (j['nickname'] ?? j['username'] ?? '')?.toString(),
+      source: kind,
+    );
+  }
+
+  /// 歌单歌曲条目 → [SongModel]。
+  ///
+  /// 该接口 `name` 形如「歌手 - 歌名」，且无独立歌手字段，故按**最后一个**
+  /// ` - ` 拆分（歌名可能自带 ` - `）。
+  SongModel _mapPlaylistSong(Map<String, dynamic> j) {
+    final raw = (j['name'] ?? '').toString();
+    var songName = raw;
+    var artist = '';
+    final idx = raw.lastIndexOf(' - ');
+    if (idx > 0) {
+      artist = raw.substring(0, idx).trim();
+      songName = raw.substring(idx + 3).trim();
+    }
+    final trans = _asMap(j['trans_param']);
+    var cover = (j['cover'] ?? trans?['union_cover'] ?? '').toString();
+    cover = cover.replaceAll('{size}', '480');
+    final durationMs =
+        int.tryParse((j['timelen'] ?? j['time_length'] ?? '').toString()) ?? 0;
+    return SongModel(
+      id: (j['audio_id'] ?? j['mixsongid'] ?? '').toString(),
+      name: songName,
+      artist: artist,
+      album: (j['album_name'] ?? '').toString(),
+      source: kind,
+      coverUrl: cover.isEmpty ? null : cover,
+      duration: durationMs > 0 ? durationMs : null,
+      hash: (j['hash'] ?? '').toString().toLowerCase(),
+      albumId: (j['album_id'] ?? '').toString(),
+      albumAudioId:
+          (j['mixsongid'] ?? j['add_mixsongid'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic>? _asMap(dynamic v) {
+    if (v is Map) return Map<String, dynamic>.from(v);
+    if (v is String && v.isNotEmpty) {
+      try {
+        final d = jsonDecode(v);
+        if (d is Map) return Map<String, dynamic>.from(d);
+      } catch (_) {}
+    }
+    return null;
+  }
+
   /// 榜单条目 → [PlaylistModel]。
   PlaylistModel _mapRank(Map<String, dynamic> j) {
     final id = (j['rankid'] ?? j['rank_id'] ?? j['id'] ?? '').toString();
@@ -460,7 +865,7 @@ class KugouSource implements MusicSource {
       coverUrl: cover.isEmpty ? null : cover,
       description: j['intro']?.toString(),
       playCount: playTimes,
-      source: SongSource.kugou,
+      source: kind,
     );
   }
 
@@ -490,7 +895,7 @@ class KugouSource implements MusicSource {
       name: (j['songname'] ?? '').toString(),
       artist: (j['author_name'] ?? '').toString(),
       album: album,
-      source: SongSource.kugou,
+      source: kind,
       coverUrl: cover.isEmpty ? null : cover,
       duration: durationMs > 0 ? durationMs : null,
       hash: hash.isEmpty ? null : hash.toLowerCase(),
@@ -503,17 +908,17 @@ class KugouSource implements MusicSource {
   @override
   Future<List<SongModel>> dailyRecommend() async {
     try {
-      final dfid = await KugouDeviceService.instance.ensureDfid();
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
       final params = <String, dynamic>{
         'dfid': dfid ?? '-',
         'mid': KugouDevice.mid,
         'uuid': '-',
-        'appid': KugouConfig.appid,
-        'clientver': KugouConfig.clientver,
+        'appid': KugouConfig.appidOf(platform),
+        'clientver': KugouConfig.clientverOf(platform),
         'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
         'platform': 'ios',
       };
-      params['signature'] = KugouSign.androidSignature(params);
+      params['signature'] = KugouSign.androidSignature(params, platform: platform);
       final res = await _dio.post(
         '${KugouConfig.gatewayHost}${KugouConfig.dailyRecommendPath}',
         queryParameters: params,
@@ -534,6 +939,91 @@ class KugouSource implements MusicSource {
     }
   }
 
+  /// 私人 FM（登录态个性化推荐，`/v2/personal_recommend`）。
+  ///
+  /// ⚠️ 需 token + userid（**按平台**）：未登录或请求失败返回空列表，
+  /// 由 `AudioPlayerService` 以「每日推荐随机取曲」兜底。
+  @override
+  Future<List<SongModel>> personalFm() async {
+    final cred = KugouCredentialService.instance;
+    final userId = cred.userIdOf(platform);
+    final token = cred.tokenOf(platform);
+    if (userId == null ||
+        userId.isEmpty ||
+        token == null ||
+        token.isEmpty) {
+      debugPrint('ℹ️ 酷狗(${platform.label})未登录，私人FM 交给兜底源');
+      return const [];
+    }
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid(platform: platform);
+      final clienttimeMs = DateTime.now().millisecondsSinceEpoch;
+      final appid = KugouConfig.appidOf(platform);
+      final clientver = KugouConfig.clientverOf(platform);
+
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': appid,
+        'clientver': clientver,
+        'clienttime': clienttimeMs ~/ 1000,
+      };
+
+      // 请求体（对齐 KuGouMusicApi module/personal_fm.js）
+      final body = <String, dynamic>{
+        'appid': appid,
+        'clienttime': clienttimeMs,
+        'mid': KugouDevice.mid,
+        'action': 'play',
+        'recommend_source_locked': 0,
+        'song_pool_id': 0,
+        'callerid': 0,
+        'm_type': 1,
+        'platform': 'ios',
+        'area_code': 1,
+        'remain_songcnt': 0,
+        'clientver': clientver,
+        'is_overplay': 0,
+        'mode': 'normal',
+        'fakem': 'ca981cfc583a4c37f28d2d49000013c16a0a',
+        'key': KugouSign.paramsKey(clienttimeMs, platform: platform),
+        'userid': userId,
+        'kguid': userId,
+        'token': token,
+      };
+      final bodyStr = jsonEncode(body);
+      final signature = KugouSign.androidSignatureWithBody(params, bodyStr,
+          platform: platform);
+
+      final res = await _dio.post(
+        '${KugouConfig.gatewayHost}${KugouConfig.personalFmPath}',
+        data: bodyStr,
+        queryParameters: {...params, 'signature': signature},
+        options: Options(
+          contentType: 'application/json;charset=utf-8',
+          headers: {
+            'User-Agent': KugouConfig.androidUserAgent,
+            'x-router': KugouConfig.personalFmRouter,
+            'dfid': dfid ?? '-',
+            'mid': KugouDevice.mid,
+            ...KugouConfig.androidCommonHeaders,
+          },
+        ),
+      );
+      final list = _extractList(res.data, ['data']);
+      final songs = list
+          .map(_mapDailySong)
+          .where((s) => s.name.isNotEmpty && (s.hash?.isNotEmpty ?? false))
+          .toList();
+      debugPrint('🎧 酷狗(${platform.label})私人FM 取到 ${songs.length} 首');
+      return songs;
+    } catch (e) {
+      debugPrint('⚠️ 酷狗私人FM失败: $e');
+      return const [];
+    }
+  }
+
   /// 每日推荐条目 → [SongModel]（hash 取顶层 `hash`）。
   SongModel _mapDailySong(Map<String, dynamic> j) {
     final hash = (j['hash'] ?? j['hash_128'] ?? '').toString();
@@ -547,7 +1037,7 @@ class KugouSource implements MusicSource {
       name: (j['songname'] ?? j['ori_audio_name'] ?? '').toString(),
       artist: (j['author_name'] ?? '').toString(),
       album: (j['album_name'] ?? '').toString(),
-      source: SongSource.kugou,
+      source: kind,
       coverUrl: cover.isEmpty ? null : cover,
       duration: durationMs > 0 ? durationMs : null,
       hash: hash.isEmpty ? null : hash.toLowerCase(),
@@ -585,7 +1075,7 @@ class KugouSource implements MusicSource {
 
   List<SongModel> _mapSongs(List<Map<String, dynamic>> raw) {
     return raw
-        .map(SongModel.fromKugouJson)
+        .map((j) => SongModel.fromKugouJson(j, source: kind))
         .where((s) => s.name.isNotEmpty)
         .toList();
   }

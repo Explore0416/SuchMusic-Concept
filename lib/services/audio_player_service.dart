@@ -715,25 +715,21 @@ class AudioPlayerService {
 
   Future<void> _fetchAndPlayFm() async {
     final sm = SourceManager();
-    // 酷狗音源：无开放的个人电台接口，用已验证的「每日推荐」随机取曲兜底，
-    // 否则 FM 会拿到网易云歌曲 → 取不到播放地址 → 播放失败。
-    List<SongModel> songs;
-    if (sm.currentSource == SongSource.kugou) {
+    // FM 统一走各音源的个人电台；酷狗在**未登录 / 失败**时用
+    // 「每日推荐随机取曲」兜底（网易云 userRadio 本身即个性化电台）。
+    var songs = await sm.source.personalFm();
+    if (songs.isEmpty && sm.currentSource.isKugou) {
       final daily = await sm.source.dailyRecommend();
-      if (daily.isEmpty) {
-        _updateState(PlayerState.error);
-        return;
+      if (daily.isNotEmpty) {
+        songs = [daily[Random().nextInt(daily.length)]];
       }
-      songs = [daily[Random().nextInt(daily.length)]];
-    } else {
-      songs = await MusicApiService().userRadio();
     }
     if (songs.isEmpty) {
       _updateState(PlayerState.error);
       return;
     }
     _playlist.clear();
-    _playlist.add(songs.first);
+    _playlist.addAll(songs);
     _currentIndex = 0;
     _playlistController.add(_playlist);
     await play(songs.first, exitFm: false);

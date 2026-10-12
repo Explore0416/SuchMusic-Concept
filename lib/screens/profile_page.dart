@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:netease_music_api/netease_music_api.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 
 import '../services/music_api_service.dart';
@@ -14,6 +15,7 @@ import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/fade_slide_in.dart';
 import 'kugou_credential_page.dart';
+import 'kugou_playlist_page.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
 
@@ -415,17 +417,56 @@ class _ProfilePageState extends State<ProfilePage> {
           left: 25,
           right: 25,
           top: topPadding + 115,
-          child: _buildAccountCard(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildAccountCard(),
+              const SizedBox(height: 12),
+              _buildKugouPlaylistEntry(),
+            ],
+          ),
         ),
       ],
     );
   }
 
-  /// 音源账号卡片：可在「我的」页直接选择登录网易云 / 酷狗概念版。
+  /// 酷狗歌单入口（查看已登录账号的歌单 / 导入任意歌单）。
+  Widget _buildKugouPlaylistEntry() {
+    final cred = KugouCredentialService.instance;
+    final logged = KugouPlatform.values.any(cred.hasCredentialsFor);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: _buildAccountRow(
+        icon: Icons.queue_music,
+        title: '酷狗歌单',
+        subtitle: logged ? '查看我的歌单，或粘贴链接导入' : '粘贴链接即可导入任意酷狗歌单',
+        actionText: '进入',
+        onTap: _openKugouPlaylists,
+      ),
+    );
+  }
+
+  Future<void> _openKugouPlaylists() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const KugouPlaylistPage()),
+    );
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  /// 音源账号卡片：可在「我的」页直接登录网易云 / 酷狗概念版 / 酷狗音乐。
   Widget _buildAccountCard() {
-    final kugouLogged = KugouCredentialService.instance.hasCredentials;
-    final kugouUid =
-        AppConstants.maskToken(KugouCredentialService.instance.userId);
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -447,16 +488,27 @@ class _ProfilePageState extends State<ProfilePage> {
             actionText: '扫码登录',
             onTap: _showQrCodeLoginDialog,
           ),
-          const Divider(height: 1, indent: 56, endIndent: 16),
-          _buildAccountRow(
-            icon: Icons.library_music_outlined,
-            title: '酷狗概念版',
-            subtitle: kugouLogged ? '已登录（$kugouUid）' : '扫码登录后可使用概念版 VIP',
-            actionText: kugouLogged ? '管理' : '扫码登录',
-            onTap: _openKugouLogin,
-          ),
+          for (final platform in KugouPlatform.values) ...[
+            const Divider(height: 1, indent: 56, endIndent: 16),
+            _buildKugouAccountRow(platform),
+          ],
         ],
       ),
+    );
+  }
+
+  /// 单个酷狗平台（概念版 / 原版）的账号行。
+  Widget _buildKugouAccountRow(KugouPlatform platform) {
+    final logged =
+        KugouCredentialService.instance.hasCredentialsFor(platform);
+    final uid = AppConstants.maskToken(
+        KugouCredentialService.instance.userIdOf(platform));
+    return _buildAccountRow(
+      icon: Icons.library_music_outlined,
+      title: platform.label,
+      subtitle: logged ? '已登录（$uid）' : '扫码登录后可使用对应 VIP',
+      actionText: logged ? '管理' : '扫码登录',
+      onTap: () => _openKugouLogin(platform),
     );
   }
 
@@ -522,11 +574,13 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 打开酷狗概念版凭证页（内置扫码登录），返回后刷新登录态。
-  Future<void> _openKugouLogin() async {
+  /// 打开酷狗凭证页（内置扫码登录），返回后刷新登录态。
+  Future<void> _openKugouLogin(KugouPlatform platform) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const KugouCredentialPage()),
+      MaterialPageRoute(
+        builder: (_) => KugouCredentialPage(platform: platform),
+      ),
     );
     if (!mounted) return;
     setState(() {});

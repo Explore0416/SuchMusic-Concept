@@ -784,7 +784,7 @@ class MusicApiService {
   ///
   /// 旧的 [getSongUrl] 保留并始终指向网易云，不破坏既有调用。
   Future<String?> getSongUrlForSong(SongModel song) async {
-    if (song.source == SongSource.kugou) {
+    if (song.source.isKugou) {
       return KugouSource().getSongUrl(song);
     }
     return getSongUrl(song.id);
@@ -792,7 +792,7 @@ class MusicApiService {
 
   /// 按歌曲归属音源取歌词（酷狗走 KugouSource，其余走网易云）。
   Future<String?> getLyricsForSong(SongModel song) async {
-    if (song.source == SongSource.kugou) {
+    if (song.source.isKugou) {
       return KugouSource().getLyrics(song);
     }
     return getLyrics(song.id);

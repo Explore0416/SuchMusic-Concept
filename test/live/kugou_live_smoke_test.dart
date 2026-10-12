@@ -16,6 +16,7 @@ import 'package:such_music/services/sources/kugou_device.dart';
 import 'package:such_music/services/sources/kugou_device_service.dart';
 import 'package:such_music/services/sources/kugou_login_models.dart';
 import 'package:such_music/services/sources/kugou_login_service.dart';
+import 'package:such_music/models/kugou_platform.dart';
 import 'package:such_music/services/sources/kugou_source.dart';
 
 /// 是否开启联网（--dart-define=LIVE=1 或 环境变量 LIVE=1）。
@@ -157,6 +158,52 @@ void main() {
         expect(songs.first.hash, isNotNull, reason: '每日推荐应有 hash 供取直链');
         expect(songs.first.source, SongSource.kugou);
       }, timeout: const Timeout(Duration(seconds: 120)));
+
+      test('LIVE-SMOKE·酷狗原版(standard)：搜索 + 取播放直链', () async {
+        final src = KugouSource(platform: KugouPlatform.standard);
+        await KugouDeviceService.instance.ensureDfid();
+
+        final songs = await src.search('生日快乐 纯音乐', limit: 10);
+        // ignore: avoid_print
+        print('[SMOKE] 原版搜索结果=${songs.length}');
+        expect(songs, isNotEmpty, reason: '酷狗原版搜索应非空');
+        expect(songs.first.source, SongSource.kugouStandard);
+
+        // 逐首尝试（VIP 曲取不到属正常，需命中免费曲）
+        String? url;
+        for (final s in songs) {
+          url = await src.getSongUrl(s, strict: true);
+          if (url != null) break;
+        }
+        // ignore: avoid_print
+        print('[SMOKE] 原版直链=${url == null ? "(无)" : url.substring(0, 60)}');
+        expect(url, isNotNull, reason: '酷狗原版应能取到免费曲直链');
+        expect(url!.startsWith('http'), isTrue);
+      }, timeout: const Timeout(Duration(seconds: 150)));
+
+      test('LIVE-SMOKE·酷狗歌单（推荐歌单 → 取歌单歌曲）', () async {
+        final src = KugouSource();
+        await KugouDeviceService.instance.ensureDfid();
+
+        final playlists = await src.topPlaylist(limit: 5);
+        // ignore: avoid_print
+        print('[SMOKE] 推荐歌单数=${playlists.length}');
+        expect(playlists, isNotEmpty, reason: '酷狗推荐歌单应非空');
+        final first = playlists.first;
+        // ignore: avoid_print
+        print('   - ${first.name} id=${first.id}');
+
+        final songs = await src.playlistSongs(first.id, limit: 10);
+        // ignore: avoid_print
+        print('[SMOKE] 歌单「${first.name}」歌曲数=${songs.length}');
+        for (final s in songs.take(3)) {
+          // ignore: avoid_print
+          print('   - ${s.name} / ${s.artist} hash=${(s.hash ?? "").substring(0, 8)}');
+        }
+        expect(songs, isNotEmpty, reason: '酷狗歌单歌曲应非空');
+        expect(songs.first.hash, isNotNull, reason: '歌单歌曲应有 hash 供取直链');
+        expect(songs.first.source, SongSource.kugou);
+      }, timeout: const Timeout(Duration(seconds: 150)));
     },
     skip: _liveEnabled()
         ? false

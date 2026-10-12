@@ -48,4 +48,14 @@ abstract class MusicSource {
 
   /// 仅网易云实现；其它音源返回空
   Future<List<SongModel>> dailyRecommend() => Future.value(const []);
+
+  /// 私人 FM（登录态个性化推荐）。
+  ///
+  /// 酷狗实现：登录态下走 `/v2/personal_recommend`（需 token + userid）；
+  /// 未登录 / 失败返回空列表，由上层以「每日推荐随机取曲」兜底。
+  Future<List<SongModel>> personalFm() => Future.value(const []);
+
+  /// 推荐歌单（发现用）。默认空实现。
+  Future<List<PlaylistModel>> topPlaylist({int limit = 30}) =>
+      Future.value(const []);
 }

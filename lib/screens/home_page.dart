@@ -77,7 +77,7 @@ class _HomePageState extends State<HomePage> {
     await ensureInitialized;
     final sm = SourceManager();
     // 酷狗音源：榜单走酷狗（否则会拿到网易云榜单却取不到歌 → 「为空或加载失败」）
-    if (sm.currentSource == SongSource.kugou) {
+    if (sm.currentSource.isKugou) {
       final rankings = await sm.source.topList();
       final hotChart = rankings.firstWhere(
         (r) => r.name.contains('热歌') || r.name.contains('飙升'),
@@ -126,7 +126,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final sm = SourceManager();
       // 酷狗音源：每日推荐走酷狗（否则会拿到网易云歌曲却取不到播放地址）
-      final songs = sm.currentSource == SongSource.kugou
+      final songs = sm.currentSource.isKugou
           ? await sm.source.dailyRecommend()
           : await _apiService.getDailyRecommendSongs();
       if (!mounted) return;
@@ -148,7 +148,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final sm = SourceManager();
       // 与 FM 播放保持一致：酷狗音源用每日推荐（网易云 userRadio 的歌在酷狗下取不到地址）
-      final songs = sm.currentSource == SongSource.kugou
+      final songs = sm.currentSource.isKugou
           ? await sm.source.dailyRecommend()
           : await _apiService.userRadio();
       if (!mounted) return;

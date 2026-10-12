@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../models/kugou_platform.dart';
 import '../../models/song_model.dart';
 import '../../utils/app_constants.dart';
 import '../kugou_credential_service.dart';
@@ -19,7 +20,9 @@ class SourceManager {
   factory SourceManager() => _instance;
 
   final NeteaseSource _netease = NeteaseSource();
-  final KugouSource _kugou = KugouSource();
+  final KugouSource _kugouLite = KugouSource(platform: KugouPlatform.lite);
+  final KugouSource _kugouStandard =
+      KugouSource(platform: KugouPlatform.standard);
 
   SongSource _current = SongSource.netease;
   bool _fallbackEnabled = AppConstants.defaultKugouFallbackEnabled;
@@ -46,8 +49,11 @@ class SourceManager {
   /// 失败自动回退开关
   bool get fallbackEnabled => _fallbackEnabled;
 
-  MusicSource sourceFor(SongSource kind) =>
-      kind == SongSource.kugou ? _kugou : _netease;
+  MusicSource sourceFor(SongSource kind) => switch (kind) {
+        SongSource.netease => _netease,
+        SongSource.kugou => _kugouLite,
+        SongSource.kugouStandard => _kugouStandard,
+      };
 
   /// 读取 prefs 恢复当前音源 + 校验凭证
   Future<void> init() async {
@@ -59,9 +65,9 @@ class SourceManager {
       _fallbackEnabled = prefs.getBool(AppConstants.kugouFallbackEnabled) ??
           AppConstants.defaultKugouFallbackEnabled;
       await KugouCredentialService.instance.init();
-      // 未配置凭证时不允许默认停在酷狗
-      if (_current == SongSource.kugou && !_kugou.isConfigured) {
-        debugPrint('⚠️ 酷狗凭证缺失，自动回退网易云');
+      // 未配置凭证时不允许默认停在酷狗（含原版）
+      if (_current.isKugou && !sourceFor(_current).isConfigured) {
+        debugPrint('⚠️ ${_current.label} 凭证缺失，自动回退网易云');
         _current = SongSource.netease;
       }
       debugPrint('🎵 当前音源: ${_current.label}');

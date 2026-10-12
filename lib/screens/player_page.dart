@@ -654,12 +654,33 @@ class _PlayerPageState extends State<PlayerPage> {
                           PlayMode.shuffle =>
                             'assets/images/svg/shuffle-one.svg',
                         };
-                        return SvgPicture.asset(
-                          icon,
-                          width: 24,
-                          height: 24,
-                          colorFilter: const ColorFilter.mode(
-                              Colors.white, BlendMode.srcIn),
+                        // 播放模式切换：淡入淡出 + 轻微缩放/旋转，避免生硬跳变
+                        return AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 320),
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) {
+                            return FadeTransition(
+                              opacity: animation,
+                              child: ScaleTransition(
+                                scale: Tween<double>(begin: 0.65, end: 1.0)
+                                    .animate(animation),
+                                child: RotationTransition(
+                                  turns: Tween<double>(begin: -0.28, end: 0.0)
+                                      .animate(animation),
+                                  child: child,
+                                ),
+                              ),
+                            );
+                          },
+                          child: SvgPicture.asset(
+                            icon,
+                            key: ValueKey<PlayMode>(mode),
+                            width: 24,
+                            height: 24,
+                            colorFilter: const ColorFilter.mode(
+                                Colors.white, BlendMode.srcIn),
+                          ),
                         );
                       },
                     ),

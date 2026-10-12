@@ -20,6 +20,7 @@ class KugouLoginService {
   KugouLoginService({
     Dio? dio,
     DateTime Function()? now,
+    this.platform = KugouPlatform.lite,
     this.pollInterval = const Duration(seconds: 2),
     this.sessionTtl = const Duration(seconds: 120),
     this.maxWait = const Duration(minutes: 3),
@@ -27,11 +28,22 @@ class KugouLoginService {
   })  : _dio = dio ?? _defaultDio(),
         _now = now ?? DateTime.now;
 
-  /// 生产单例（App 使用）。
+  /// 生产单例（App 使用，概念版）。
   static final KugouLoginService instance = KugouLoginService();
+
+  /// 生产单例（酷狗音乐原版）。
+  static final KugouLoginService instanceStandard =
+      KugouLoginService(platform: KugouPlatform.standard);
+
+  /// 按平台取登录服务。
+  static KugouLoginService forPlatform(KugouPlatform p) =>
+      p == KugouPlatform.lite ? instance : instanceStandard;
 
   final Dio _dio;
   final DateTime Function() _now;
+
+  /// 登录平台（决定 appid / clientver / qrcode_txt → 授权到哪个平台）。
+  final KugouPlatform platform;
 
   /// 轮询间隔（默认 2s）。
   final Duration pollInterval;
@@ -61,16 +73,16 @@ class KugouLoginService {
     _inflight = token;
     try {
       final params = <String, dynamic>{
-        'appid': KugouConfig.appid,
+        'appid': KugouConfig.appidOf(platform),
         'srcappid': KugouConfig.srcappid,
-        'clientver': KugouConfig.loginClientver,
+        'clientver': KugouConfig.loginClientverOf(platform),
         'clienttime': _now().millisecondsSinceEpoch.toString(),
         'mid': KugouDevice.mid,
         'uuid': KugouDevice.uuid,
         'dfid': KugouDevice.dfid,
         'type': KugouConfig.qrcodeType,
         'plat': KugouConfig.platWeb,
-        'qrcode_txt': KugouConfig.qrTxt,
+        'qrcode_txt': KugouConfig.qrTxtOf(platform),
       };
       final signature = KugouSign.loginSignature(params);
       final res = await _dio.get(
@@ -117,10 +129,10 @@ class KugouLoginService {
     try {
       final params = <String, dynamic>{
         'plat': KugouConfig.platWeb,
-        'appid': KugouConfig.appid,
+        'appid': KugouConfig.appidOf(platform),
         'srcappid': KugouConfig.srcappid,
         'qrcode': key,
-        'clientver': KugouConfig.loginClientver,
+        'clientver': KugouConfig.loginClientverOf(platform),
         'clienttime': _now().millisecondsSinceEpoch.toString(),
         'mid': KugouDevice.mid,
         'uuid': KugouDevice.uuid,

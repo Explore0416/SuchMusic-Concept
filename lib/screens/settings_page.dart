@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/kugou_credential_service.dart';
@@ -80,12 +81,14 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     if (selected == null || selected == _source) return;
 
-    if (selected == SongSource.kugou &&
-        !KugouCredentialService.instance.hasCredentials) {
-      DesignToast.show(context, '请先配置酷狗凭证');
-      await _openCredentialPage();
+    // 酷狗家族（概念版 / 原版）按平台校验凭证
+    final platform = selected.kugouPlatform;
+    if (platform != null &&
+        !KugouCredentialService.instance.hasCredentialsFor(platform)) {
+      DesignToast.show(context, '请先配置${selected.label}凭证');
+      await _openCredentialPage(platform);
       if (!mounted) return;
-      if (!KugouCredentialService.instance.hasCredentials) return;
+      if (!KugouCredentialService.instance.hasCredentialsFor(platform)) return;
     }
 
     await SourceManager().switchTo(selected);
@@ -99,17 +102,23 @@ class _SettingsPageState extends State<SettingsPage> {
     await SourceManager().setFallbackEnabled(value);
   }
 
-  Future<void> _openCredentialPage() async {
+  Future<void> _openCredentialPage([KugouPlatform? platform]) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const KugouCredentialPage()),
+      MaterialPageRoute(
+        builder: (_) => KugouCredentialPage(
+          platform: platform ?? KugouPlatform.lite,
+        ),
+      ),
     );
     if (!mounted) return;
     setState(() {
       _kugouConfigured = KugouCredentialService.instance.hasCredentials;
     });
     // 清除凭证后若当前为酷狗，自动回退网易云
-    if (_source == SongSource.kugou && !_kugouConfigured) {
+    final cur = _source.kugouPlatform;
+    if (cur != null &&
+        !KugouCredentialService.instance.hasCredentialsFor(cur)) {
       await SourceManager().switchTo(SongSource.netease);
       if (mounted) setState(() => _source = SourceManager().currentSource);
     }

@@ -1,10 +1,13 @@
 import 'package:netease_music_api/netease_music_api.dart';
 
+import 'kugou_platform.dart';
+
 /// 音源标识（ARCH §4.2）。
 ///
 /// [code] 用于持久化，[label] 用于 UI 展示。
 enum SongSource {
   netease('netease', '网易云'),
+  kugouStandard('kugou_std', '酷狗音乐'),
   kugou('kugou', '酷狗概念版');
 
   const SongSource(this.code, this.label);
@@ -12,11 +15,25 @@ enum SongSource {
   final String code;
   final String label;
 
+  /// 是否属于酷狗家族（概念版 / 原版）——用于「是否走酷狗接口」的语义判断。
+  bool get isKugou => this == kugou || this == kugouStandard;
+
+  /// 对应的酷狗平台变体（非酷狗音源返回 null）。
+  KugouPlatform? get kugouPlatform => switch (this) {
+        SongSource.kugou => KugouPlatform.lite,
+        SongSource.kugouStandard => KugouPlatform.standard,
+        _ => null,
+      };
+
   /// 旧数据（无 source 键）默认网易云，保证向后兼容
   static SongSource fromCode(String? code) => SongSource.values.firstWhere(
         (e) => e.code == code,
         orElse: () => SongSource.netease,
       );
+
+  /// 由酷狗平台变体反查音源标识。
+  static SongSource fromKugouPlatform(KugouPlatform platform) =>
+      platform == KugouPlatform.lite ? SongSource.kugou : SongSource.kugouStandard;
 }
 
 class SongModel {
@@ -107,7 +124,8 @@ class SongModel {
   ///   （complexsearch v2 实测**不含** `timelength` 键，仅 `Duration` 秒值。）
   /// - 封面：[Image]（=`http://imge.kugou.com/.../{size}/...jpg`，占位符
   ///   `{size}` → 480）；另有嵌套 `trans_param.union_cover`（同图，作兜底）。
-  factory SongModel.fromKugouJson(Map<String, dynamic> json) {
+  factory SongModel.fromKugouJson(Map<String, dynamic> json,
+      {SongSource source = SongSource.kugou}) {
     String pick(List<String> keys) {
       for (final k in keys) {
         final v = json[k];
@@ -192,7 +210,7 @@ class SongModel {
       album: album,
       coverUrl: cover.isEmpty ? null : cover,
       duration: duration,
-      source: SongSource.kugou,
+      source: source,
       hash: hash.isEmpty ? null : hash,
       albumId: albumId.isEmpty ? null : albumId,
       albumAudioId: albumAudioId.isEmpty ? null : albumAudioId,
