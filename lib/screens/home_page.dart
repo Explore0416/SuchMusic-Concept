@@ -146,7 +146,11 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadFmCover() async {
     await ensureInitialized;
     try {
-      final songs = await _apiService.userRadio();
+      final sm = SourceManager();
+      // 与 FM 播放保持一致：酷狗音源用每日推荐（网易云 userRadio 的歌在酷狗下取不到地址）
+      final songs = sm.currentSource == SongSource.kugou
+          ? await sm.source.dailyRecommend()
+          : await _apiService.userRadio();
       if (!mounted) return;
       if (songs.isNotEmpty && songs.first.coverUrl != null) {
         setState(() {
