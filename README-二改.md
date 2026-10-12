@@ -309,3 +309,32 @@ flutter build apk --debug     # 或 --release
 | 取播放直链 | ✅ 真实 mp3（HTTP 200/206） |
 | 全量单测 | ✅ 211 passed / 7 skipped |
 | 静态分析 | ✅ 0 issues |
+
+---
+
+## 十、每日推荐 / 私人FM 按音源分流（v1.5.2）
+
+承接第 3 项「适配酷狗概念版功能」的同类问题：**首页每日推荐与私人FM 原本固定走网易云接口**，
+酷狗音源下会拿到网易云歌曲 → 取不到播放地址 → 播放失败/空态。
+
+| 入口 | 网易云音源 | 酷狗音源 |
+|------|-----------|---------|
+| 首页「每日推荐」 | `MusicApiService.getDailyRecommendSongs()` | `KugouSource.dailyRecommend()`（实测 30 首） |
+| 私人 FM | `MusicApiService.userRadio()` | 每日推荐**随机取曲**兜底 |
+
+酷狗每日推荐接口：`POST gateway.kugou.com/everyday_song_recommend`
+（`x-router: everydayrec.service.kugou.com`，hash 取 `audio_info.hash_128`）。
+
+> FM 说明：酷狗未开放无需资质的个人电台接口（实测 `/v1/get_fm_song` 等均 404），
+> 故用已验证的每日推荐做随机播放源，语义一致且带有效 hash。
+
+### 验证（真实联网）
+
+| 项 | 结果 |
+|----|------|
+| 酷狗每日推荐 | ✅ 30 首，带 hash |
+| 酷狗榜单列表 / 歌曲 | ✅ 56 榜 / 可播放 |
+| 取播放直链 | ✅ 真实 mp3（HTTP 206） |
+| 联网冒烟 | ✅ 8/8 |
+| 离线单测 | ✅ 212 passed / 7 skipped |
+| 静态分析 | ✅ 0 issues |
