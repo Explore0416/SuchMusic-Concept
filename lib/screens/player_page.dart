@@ -291,7 +291,11 @@ class _PlayerPageState extends State<PlayerPage> {
             ),
           ),
           const SizedBox(height: 12),
-          _buildSongInfo(collapsed: true),
+          // 与上方封面（Center 居中）对齐：歌名/歌手同样居中
+          SizedBox(
+            width: double.infinity,
+            child: _buildSongInfo(collapsed: true, center: true),
+          ),
           const SizedBox(height: 12),
           const ProgressBar(),
           const SizedBox(height: 8),
@@ -552,40 +556,50 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  Widget _buildSongInfo({required bool collapsed}) {
+  /// 歌名 / 歌手（+ 可选歌词）。
+  ///
+  /// [center] 为 true 时**整体居中** —— 分栏（横屏）形态下封面由 Center 居中，
+  /// 歌名/歌手必须同样居中，否则会明显偏左、与封面不对齐。
+  Widget _buildSongInfo({required bool collapsed, bool center = false}) {
     final song = _audioPlayer.currentSong;
+    final cross =
+        center ? CrossAxisAlignment.center : CrossAxisAlignment.start;
+    final textAlign = center ? TextAlign.center : TextAlign.left;
 
     if (song == null) {
-      return const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      return Column(
+        crossAxisAlignment: cross,
         children: [
           Text(
             '暂无播放歌曲',
             maxLines: 1,
+            textAlign: textAlign,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
               color: Colors.white,
             ),
           ),
-          SizedBox(height: 4),
+          const SizedBox(height: 4),
           Text(
             '快去挑一首喜欢的歌吧',
             maxLines: 1,
+            textAlign: textAlign,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 13, color: Colors.white70),
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
           ),
         ],
       );
     }
 
     final child = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: cross,
       children: [
         Text(
           song.name,
           maxLines: 1,
+          textAlign: textAlign,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             fontSize: 18,
@@ -597,6 +611,7 @@ class _PlayerPageState extends State<PlayerPage> {
         Text(
           song.artist,
           maxLines: 1,
+          textAlign: textAlign,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             fontSize: 14,

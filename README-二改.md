@@ -392,3 +392,20 @@ flutter build apk --debug     # 或 --release
 | 联网冒烟 | ✅ **10/10** |
 | 离线单测 | ✅ 212 passed / 10 skipped |
 | 静态分析 | ✅ 0 issues |
+
+---
+
+## 十二、横屏分栏：歌名/歌手对齐修复（v1.6.1）
+
+### 问题
+
+横屏（分栏）布局中，封面由 `Center` **居中**，但下方的歌名 / 歌手是
+`CrossAxisAlignment.start`（**左对齐**）→ 视觉上明显**偏左、与封面不对齐**。
+
+### 修复
+
+`_buildSongInfo` 新增 `center` 参数（居中时同时设置 `crossAxisAlignment` 与
+`textAlign`），分栏形态下以 `SizedBox(width: double.infinity)` + 居中渲染，
+使歌名 / 歌手与封面共用同一中心轴；竖屏与「收起小封面」形态保持左对齐不变。
+
+> 仅布局对齐调整，无逻辑变更；离线 212 passed / 10 skipped；analyze 0 issues。
