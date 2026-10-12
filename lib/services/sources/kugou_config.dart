@@ -183,4 +183,12 @@ class KugouConfig {
 
   /// 排行榜歌曲请求头。
   static const Map<String, String> rankAudioHeaders = {'kg-tid': '369'};
+
+  // ── 每日推荐 ─────────────────────────────────────────────
+
+  /// 每日推荐路径（POST，x-router 到 everydayrec 服务）。
+  static const String dailyRecommendPath = '/everyday_song_recommend';
+
+  /// 每日推荐 x-router。
+  static const String dailyRecommendRouter = 'everydayrec.service.kugou.com';
 }

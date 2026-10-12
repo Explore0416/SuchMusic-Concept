@@ -124,7 +124,11 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadDailySongs() async {
     await ensureInitialized;
     try {
-      final songs = await _apiService.getDailyRecommendSongs();
+      final sm = SourceManager();
+      // 酷狗音源：每日推荐走酷狗（否则会拿到网易云歌曲却取不到播放地址）
+      final songs = sm.currentSource == SongSource.kugou
+          ? await sm.source.dailyRecommend()
+          : await _apiService.getDailyRecommendSongs();
       if (!mounted) return;
       setState(() {
         _dailySongs = songs.take(12).toList();

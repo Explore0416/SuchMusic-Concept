@@ -499,8 +499,62 @@ class KugouSource implements MusicSource {
     );
   }
 
+  /// 每日推荐（`/everyday_song_recommend`，无需登录）。
   @override
-  Future<List<SongModel>> dailyRecommend() async => const [];
+  Future<List<SongModel>> dailyRecommend() async {
+    try {
+      final dfid = await KugouDeviceService.instance.ensureDfid();
+      final params = <String, dynamic>{
+        'dfid': dfid ?? '-',
+        'mid': KugouDevice.mid,
+        'uuid': '-',
+        'appid': KugouConfig.appid,
+        'clientver': KugouConfig.clientver,
+        'clienttime': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        'platform': 'ios',
+      };
+      params['signature'] = KugouSign.androidSignature(params);
+      final res = await _dio.post(
+        '${KugouConfig.gatewayHost}${KugouConfig.dailyRecommendPath}',
+        queryParameters: params,
+        options: Options(headers: {
+          'User-Agent': KugouConfig.androidUserAgent,
+          'x-router': KugouConfig.dailyRecommendRouter,
+          ...KugouConfig.androidCommonHeaders,
+        }),
+      );
+      final list = _extractList(res.data, ['data', 'song_list']);
+      return list
+          .map(_mapDailySong)
+          .where((s) => s.name.isNotEmpty && (s.hash?.isNotEmpty ?? false))
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ 酷狗每日推荐失败: $e');
+      return const [];
+    }
+  }
+
+  /// 每日推荐条目 → [SongModel]（hash 取顶层 `hash`）。
+  SongModel _mapDailySong(Map<String, dynamic> j) {
+    final hash = (j['hash'] ?? j['hash_128'] ?? '').toString();
+    var cover = (j['sizable_cover'] ?? j['cover'] ?? '').toString();
+    cover = cover.replaceAll('{size}', '480');
+    final durationMs = int.tryParse(
+            (j['time_length'] ?? j['timelength'] ?? '').toString()) ??
+        0;
+    return SongModel(
+      id: (j['audio_id'] ?? j['songid'] ?? '').toString(),
+      name: (j['songname'] ?? j['ori_audio_name'] ?? '').toString(),
+      artist: (j['author_name'] ?? '').toString(),
+      album: (j['album_name'] ?? '').toString(),
+      source: SongSource.kugou,
+      coverUrl: cover.isEmpty ? null : cover,
+      duration: durationMs > 0 ? durationMs : null,
+      hash: hash.isEmpty ? null : hash.toLowerCase(),
+      albumId: (j['album_id'] ?? '').toString(),
+      albumAudioId: (j['album_audio_id'] ?? '').toString(),
+    );
+  }
 
   // ── 解析工具 ──────────────────────────────────────────────
 

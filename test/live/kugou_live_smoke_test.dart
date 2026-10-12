@@ -140,6 +140,23 @@ void main() {
         expect(songs.first.hash, isNotNull, reason: '歌曲应有 hash 供取直链');
         expect(songs.first.source, SongSource.kugou);
       }, timeout: const Timeout(Duration(seconds: 120)));
+
+      test('LIVE-SMOKE·每日推荐（酷狗，FM 兜底数据源）', () async {
+        final src = KugouSource();
+        await KugouDeviceService.instance.ensureDfid();
+
+        final songs = await src.dailyRecommend();
+        // ignore: avoid_print
+        print('[SMOKE] 每日推荐数=${songs.length}');
+        for (final s in songs.take(3)) {
+          // ignore: avoid_print
+          print('   - ${s.name} / ${s.artist} hash=${(s.hash ?? "").substring(0, 8)}');
+        }
+        expect(songs, isNotEmpty, reason: '酷狗每日推荐应非空');
+        expect(songs.first.name, isNotEmpty);
+        expect(songs.first.hash, isNotNull, reason: '每日推荐应有 hash 供取直链');
+        expect(songs.first.source, SongSource.kugou);
+      }, timeout: const Timeout(Duration(seconds: 120)));
     },
     skip: _liveEnabled()
         ? false
