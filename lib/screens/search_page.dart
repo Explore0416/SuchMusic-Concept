@@ -9,7 +9,8 @@ import '../services/search_history_service.dart';
 import '../services/sources/source_manager.dart';
 import '../services/app_init.dart';
 import '../utils/responsive.dart';
-import 'player_page.dart';
+import '../utils/player_route.dart';
+import '../widgets/fade_slide_in.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -35,6 +36,7 @@ class _SearchPageState extends State<SearchPage> {
   String _errorMessage = '';
 
   StreamSubscription<SongSource>? _sourceSub;
+  Timer? _suggestDebounce;
 
   @override
   void initState() {
@@ -45,6 +47,7 @@ class _SearchPageState extends State<SearchPage> {
     // 音源切换后刷新热搜并清空旧结果
     _sourceSub = SourceManager().onSourceChanged.listen((_) {
       if (!mounted) return;
+      _suggestDebounce?.cancel();
       setState(() {
         _searchResults = [];
         _suggestions = [];
@@ -79,6 +82,7 @@ class _SearchPageState extends State<SearchPage> {
 
   void _onSearchTextChanged() {
     final query = _searchController.text.trim();
+    _suggestDebounce?.cancel();
     if (query.isEmpty) {
       setState(() {
         _suggestions = [];
@@ -91,16 +95,25 @@ class _SearchPageState extends State<SearchPage> {
       _searchResults = [];
       _errorMessage = '';
     });
-    _loadSuggestions(query);
+    // 输入防抖：停止输入 250ms 后再请求联想，避免逐字高频打接口
+    _suggestDebounce = Timer(
+      const Duration(milliseconds: 250),
+      () => _loadSuggestions(query),
+    );
   }
 
   Future<void> _loadSuggestions(String query) async {
-    // 搜索联想为网易云专属；其它音源下不提供
-    if (SourceManager().currentSource != SongSource.netease) {
-      if (mounted) setState(() => _suggestions = []);
-      return;
+    // 优先当前音源的联想；为空时回退网易云，保证任意音源下都有输入提示
+    var suggestions = <String>[];
+    try {
+      suggestions = await SourceManager().source.searchSuggest(query);
+    } catch (_) {
+      suggestions = <String>[];
     }
-    final suggestions = await _apiService.searchSuggest(query);
+    if (suggestions.isEmpty &&
+        SourceManager().currentSource != SongSource.netease) {
+      suggestions = await _apiService.searchSuggest(query);
+    }
     if (mounted && _searchController.text.trim() == query) {
       setState(() {
         _suggestions = suggestions;
@@ -149,35 +162,28 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _playSong(SongModel song) async {
-    SongModel playSong = song;
-    final detail = await SourceManager().source.getSongDetail(song);
-    if (detail != null) {
-      playSong = detail;
-    }
+    // 立即进入播放页（不等网络请求），播放在后台异步进行。
+    // 这样点击歌名/歌手区域一定会跳转播放页，不会再出现「已播放但停在搜索页」。
+    openPlayerPage(context);
 
-    final success = await _audioPlayer.playAndAdd(playSong);
-    if (playSong.coverUrl != null) {
-      AudioPlayerService.preFetchCover(playSong.coverUrl!);
+    if (song.coverUrl != null && song.coverUrl!.isNotEmpty) {
+      AudioPlayerService.preFetchCover(song.coverUrl!);
     }
-    if (!mounted) return;
+    // play() 内部会在封面缺失时自动补取歌曲详情，无需在此重复请求
+    final success = await _audioPlayer.playAndAdd(song);
+    if (!mounted || success) return;
 
-    if (success) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const PlayerPage()),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('播放失败，请检查网络或登录状态'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('播放失败，请检查网络或登录状态'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
   void dispose() {
+    _suggestDebounce?.cancel();
     _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     _sourceSub?.cancel();
@@ -584,7 +590,10 @@ class _SearchPageState extends State<SearchPage> {
     return ListView.builder(
       itemCount: _searchResults.length,
       itemBuilder: (context, index) {
-        return _buildSongItem(_searchResults[index]);
+        return FadeSlideIn(
+          index: index,
+          child: _buildSongItem(_searchResults[index]),
+        );
       },
     );
   }

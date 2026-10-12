@@ -11,9 +11,9 @@ import '../services/app_init.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
 import 'playlist_detail_page.dart';
-import 'player_page.dart';
 import 'search_page.dart';
 import '../utils/navigation_guard.dart';
+import '../utils/player_route.dart';
 
 enum CardType { fm, placeholder }
 
@@ -350,27 +350,7 @@ class _HomePageState extends State<HomePage> {
     final audioPlayer = AudioPlayerService();
     await audioPlayer.enterFmMode(startSong: _fmFirstSong);
     if (!mounted || NavigationGuard.isPlayerPageOpen) return;
-    NavigationGuard.isPlayerPageOpen = true;
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            const PlayerPage(),
-        transitionsBuilder:
-            (context, animation, secondaryAnimation, child) {
-          final tween = Tween(
-            begin: const Offset(0.0, 1.0),
-            end: Offset.zero,
-          ).chain(CurveTween(curve: Curves.easeOutCubic));
-          return SlideTransition(
-            position: animation.drive(tween),
-            child: child,
-          );
-        },
-      ),
-    ).then((_) {
-      NavigationGuard.isPlayerPageOpen = false;
-    });
+    await openPlayerPage(context);
   }
 
   Widget _buildSlidingCards() {

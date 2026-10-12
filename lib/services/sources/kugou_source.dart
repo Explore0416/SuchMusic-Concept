@@ -28,6 +28,41 @@ String sanitizePlayUrlForLog(String url) {
   return '${uri.scheme}://${uri.host}$path';
 }
 
+/// 解析酷狗搜索联想响应（`searchtip.kugou.com/getSearchTip`）。
+///
+/// 结构：`{ "data": [ { "RecordDatas": [ { "HintInfo": "东风破 周杰伦" }, ... ] } ] }`。
+/// 兼容 `data` 为多段、`HintInfo` 缺失 / 非字符串、整体非 Map 等异常形态，
+/// 一律**返回已解析出的合法提示词**（去重、保序、最多 [limit] 条），不抛异常。
+@visibleForTesting
+List<String> parseKugouSuggest(dynamic data, {int limit = 10}) {
+  try {
+    final root = data is String ? jsonDecode(data) : data;
+    if (root is! Map) return const [];
+    final blocks = root['data'];
+    if (blocks is! List) return const [];
+    final out = <String>[];
+    for (final block in blocks) {
+      if (block is! Map) continue;
+      final records = block['RecordDatas'];
+      if (records is! List) continue;
+      for (final record in records) {
+        if (record is! Map) continue;
+        final hint = record['HintInfo'];
+        if (hint is String) {
+          final trimmed = hint.trim();
+          if (trimmed.isNotEmpty && !out.contains(trimmed)) {
+            out.add(trimmed);
+            if (out.length >= limit) return out;
+          }
+        }
+      }
+    }
+    return out;
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// 酷狗音源实现（支持概念版 lite / 原版 standard，ARCH §4.6）。
 ///
 /// - 搜索：**主路径** `complexsearch`（需签名，Web 盐两平台共用）；
@@ -186,6 +221,29 @@ class KugouSource implements MusicSource {
     // （search_page）回退到本地默认热词 / 空态提示，避免界面卡在无结果且无提示。
     debugPrint('ℹ️ 酷狗热搜接口已失效，返回空列表由上层回退');
     return const [];
+  }
+
+  /// 搜索联想：酷狗公开提示接口（免签名、GET），概念版 / 原版共用。
+  @override
+  Future<List<String>> searchSuggest(String keyword) async {
+    final kw = keyword.trim();
+    if (kw.isEmpty) return const [];
+    try {
+      final res = await _dio.get(
+        '${KugouConfig.searchTipHost}/getSearchTip',
+        queryParameters: {
+          'MusicTipCount': 10,
+          'keyword': kw,
+          'KugouTipCount': 3,
+          'fmt': 'json',
+        },
+      );
+      final list = parseKugouSuggest(res.data);
+      return list;
+    } catch (e) {
+      debugPrint('⚠️ 酷狗联想失败: $e');
+      return const [];
+    }
   }
 
   // ── 播放地址 ──────────────────────────────────────────────

@@ -23,6 +23,12 @@ abstract class MusicSource {
 
   Future<List<String>> hotSearch();
 
+  /// 搜索联想（可选能力）：搜索框输入时的实时提示词。
+  ///
+  /// 默认不支持（返回空列表），由具备联想接口的音源覆写；
+  /// 任何失败一律返回空，不外抛（由上层决定是否回退其它音源）。
+  Future<List<String>> searchSuggest(String keyword) => Future.value(const []);
+
   /// 取播放地址。
   ///
   /// [strict] 为 true 时启用**严格模式**：仅在 API 真正返回有效 url 时才返回，

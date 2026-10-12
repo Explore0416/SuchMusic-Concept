@@ -306,44 +306,40 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
+  /// 背景：封面（或占位图）**自身高斯模糊** + 暗色蒙层。
+  ///
+  /// 用 [ImageFiltered] 直接模糊图片，而非 [BackdropFilter] 采样背板——
+  /// 后者在页面转场 / 频繁重建时**每帧都要重算整屏模糊**，是播放页关闭时
+  /// 卡顿、掉帧的主因；前者配合 [RepaintBoundary] 只需光栅化一次，
+  /// 转场时仅做位图位移，开销极低。
   Widget _buildBlurredBackground() {
-    final defaultBg = Stack(
-      fit: StackFit.expand,
-      children: [
-        Container(
-          color: const Color(0xFF1A1A2E),
-          child: Image.asset(
+    final blur = ImageFilter.blur(sigmaX: 30, sigmaY: 30);
+    final Widget image = _coverBytes != null
+        ? Image.memory(
+            _coverBytes!,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            gaplessPlayback: true,
+          )
+        : Image.asset(
             'assets/images/Such_Music_Logo.png',
             fit: BoxFit.cover,
             width: double.infinity,
             height: double.infinity,
+          );
+
+    return RepaintBoundary(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(
+            color: const Color(0xFF1A1A2E),
+            child: ImageFiltered(imageFilter: blur, child: image),
           ),
-        ),
-        BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-          child: Container(
-            color: Colors.black.withValues(alpha: 0.4),
-          ),
-        ),
-      ],
-    );
-    if (_coverBytes == null) return defaultBg;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Image.memory(
-          _coverBytes!,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-        ),
-        BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-          child: Container(
-            color: Colors.black.withValues(alpha: 0.4),
-          ),
-        ),
-      ],
+          ColoredBox(color: Colors.black.withValues(alpha: 0.4)),
+        ],
+      ),
     );
   }
 

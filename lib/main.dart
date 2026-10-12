@@ -7,14 +7,13 @@ import 'package:marquee/marquee.dart';
 import 'package:netease_music_api/netease_music_api.dart';
 import 'screens/agreement_page.dart';
 import 'screens/home_page.dart';
-import 'screens/player_page.dart';
 import 'screens/profile_page.dart';
 import 'services/audio_player_handler.dart';
 import 'services/audio_player_service.dart';
 import 'services/app_init.dart';
 import 'services/sources/kugou_device_service.dart';
 import 'models/song_model.dart';
-import 'utils/navigation_guard.dart';
+import 'utils/player_route.dart';
 import 'utils/responsive.dart';
 import 'widgets/responsive_scaffold.dart';
 import 'widgets/player_bar.dart';
@@ -165,30 +164,8 @@ class _MainShellState extends State<MainShell> {
     super.dispose();
   }
 
-  /// 打开播放页（带底部滑入转场；防重复打开）。
-  void _openPlayerPage() {
-    if (NavigationGuard.isPlayerPageOpen) return;
-    NavigationGuard.isPlayerPageOpen = true;
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            const PlayerPage(),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          final tween = Tween(
-            begin: const Offset(0.0, 1.0),
-            end: Offset.zero,
-          ).chain(CurveTween(curve: Curves.easeOutCubic));
-          return SlideTransition(
-            position: animation.drive(tween),
-            child: child,
-          );
-        },
-      ),
-    ).then((_) {
-      NavigationGuard.isPlayerPageOpen = false;
-    });
-  }
+  /// 打开播放页（统一底部滑入转场 + 防重复打开）。
+  void _openPlayerPage() => openPlayerPage(context);
 
   @override
   Widget build(BuildContext context) {

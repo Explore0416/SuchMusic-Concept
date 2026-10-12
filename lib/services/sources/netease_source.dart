@@ -46,6 +46,16 @@ class NeteaseSource implements MusicSource {
   Future<List<String>> hotSearch() => _api.getHotSearchKeys();
 
   @override
+  Future<List<String>> searchSuggest(String keyword) async {
+    try {
+      return await _api.searchSuggest(keyword);
+    } catch (e) {
+      debugPrint('❌ 网易云联想失败: $e');
+      return const [];
+    }
+  }
+
+  @override
   Future<String?> getSongUrl(SongModel song, {bool strict = false}) =>
       _api.getSongUrl(song.id, strict: strict);
 

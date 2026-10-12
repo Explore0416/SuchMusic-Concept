@@ -110,6 +110,9 @@ class KugouConfig {
   /// 免签名兜底搜索（**仅**在主路径返回空时使用）。
   static const String mobileCdnHost = 'https://mobilecdn.kugou.com';
 
+  /// 搜索联想（公开提示接口，免签名、GET）。
+  static const String searchTipHost = 'https://searchtip.kugou.com';
+
   /// 播放地址网关（需 Header x-router: tracker.kugou.com）。
   static const String gatewayHost = 'https://gateway.kugou.com';
 
