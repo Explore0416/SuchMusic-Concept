@@ -8,6 +8,27 @@
 
 ---
 
+## [0.11.0] - 2026-10-15
+
+### 修复
+- **「检查更新」以前查的是原作者的仓库（重要修复）**：`UpdateService` 内的更新源
+  一直写死为上游作者的 Gitee / GitHub 地址（其 `update.json` 里 `versionCode=2`），
+  导致本地版本号远大于远端判定值，检查更新永远提示「已是最新版本」，实际早已有新包。
+  现已改为读取**自建的 Cloudflare 分发链路**，并随每次发布自动更新清单。
+
+### 新增
+- **Cloudflare 全球加速分发（国内下载更快）**：
+  - 新增仓库 `Lightning-technology-team/SuchMusic-Updates`：托管更新清单
+    `update.json` 与下载落地页，由 **Cloudflare Pages** 连接该 Git 仓库自动构建。
+  - 自定义域名 **`dl.lightning-team.de5.net`** 由 **Cloudflare Worker** 提供：
+    `/update.json` 返回清单（与 Git 同步），`/latest.apk` 从公开 Release 资源
+    边缘代理并缓存 1 小时，用户侧全程走 Cloudflare 节点。
+  - 说明：Cloudflare Pages 对单个文件有 **25 MiB 上限**，而安装包约 46 MiB，
+    因此安装包由 Worker 代理而非直接放在 Pages 上。
+  - App 端下载链路优先级：**Cloudflare → GitHub**（任一可用即下载成功）。
+- CI 发布 v* 标签时，自动把安装包与更新清单同步到上述分发链路
+  （`scripts/publish_updates.sh`）。
+
 ## [0.10.0] - 2026-10-14
 
 > 🔒 **隐私声明（重要）**：本次新增的「猜你想听」**完全基于本机的播放历史计算，

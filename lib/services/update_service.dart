@@ -7,11 +7,12 @@ import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// 远端版本信息（对应 Gitee/GitHub 仓库里的 update.json）
+/// 远端版本信息（对应分发仓库里的 update.json）
 class AppUpdateInfo {
   final String versionName; // 版本名，如 1.0.1（仅展示用）
   final int versionCode; // 版本号，比本地大才算有更新
-  final String giteeUrl; // APK 下载直链（Gitee，主链路）
+  final String cfUrl; // APK 下载直链（Cloudflare Pages，国内快，主链路）
+  final String giteeUrl; // APK 下载直链（Gitee，历史兼容）
   final String githubUrl; // APK 下载直链（GitHub，备用链路）
   final String changelog; // 更新日志
   final bool force; // 是否强制更新（true 时弹窗不可关闭，必须完成更新）
@@ -19,8 +20,9 @@ class AppUpdateInfo {
   const AppUpdateInfo({
     required this.versionName,
     required this.versionCode,
-    required this.giteeUrl,
-    required this.githubUrl,
+    this.cfUrl = '',
+    this.giteeUrl = '',
+    this.githubUrl = '',
     required this.changelog,
     this.force = false,
   });
@@ -29,6 +31,7 @@ class AppUpdateInfo {
     return AppUpdateInfo(
       versionName: json['versionName']?.toString() ?? '',
       versionCode: int.tryParse(json['versionCode']?.toString() ?? '') ?? 0,
+      cfUrl: json['cf']?.toString() ?? '',
       giteeUrl: json['gitee']?.toString() ?? '',
       githubUrl: json['github']?.toString() ?? '',
       changelog: json['changelog']?.toString() ?? '',
@@ -36,26 +39,34 @@ class AppUpdateInfo {
     );
   }
 
-  /// 双链路下载地址列表（过滤空项）
+  /// 下载地址列表（过滤空项）：Cloudflare 优先（国内快），GitHub 兜底
   List<String> get downloadUrls =>
-      [giteeUrl, githubUrl].where((u) => u.isNotEmpty).toList();
+      [cfUrl, githubUrl, giteeUrl].where((u) => u.isNotEmpty).toList();
 }
 
 /// App 更新服务：请求版本信息 / 下载 APK / 调起系统安装器
-/// 双链路策略：Gitee 为主（国内快），GitHub 兜底，按顺序尝试直到成功
+/// 多链路策略：Cloudflare Pages 为主（国内访问快），GitHub 兜底
 class UpdateService {
   UpdateService._();
 
-  /// Gitee 仓库 update.json raw 地址（主链路，国内快，默认分支 master）
-  static const String _giteeJsonUrl =
-      'https://gitee.com/Sunset_5277/such-music-update/raw/master/update.json';
+  /// Cloudflare Pages 自定义域名 —— 主链路（国内快）
+  static const String _cfJsonUrl =
+      'https://dl.lightning-team.de5.net/update.json';
 
-  /// GitHub 仓库 update.json raw 地址（主链路，分支 main）
+  /// Cloudflare Pages 默认域名 —— 备用（自定义域名未就绪时可用）
+  static const String _cfPagesJsonUrl =
+      'https://suchmusic-updates.pages.dev/update.json';
+
+  /// 分发仓库 raw —— 兜底
   static const String _githubJsonUrl =
-      'https://raw.githubusercontent.com/sunset5277/such-music-update/main/update.json';
+      'https://raw.githubusercontent.com/Lightning-technology-team/SuchMusic-Updates/main/public/update.json';
 
-  /// 版本信息源，按顺序尝试（Gitee 为主国内快，GitHub 兜底）
-  static const List<String> _updateJsonUrls = [_giteeJsonUrl, _githubJsonUrl];
+  /// 版本信息源，按顺序尝试（Cloudflare 优先，GitHub 兜底）
+  static const List<String> _updateJsonUrls = [
+    _cfJsonUrl,
+    _cfPagesJsonUrl,
+    _githubJsonUrl,
+  ];
 
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
@@ -92,7 +103,7 @@ class UpdateService {
 
   /// 下载 APK：依次尝试多个直链，任一成功即返回保存路径
   /// 用户主动取消时直接抛出，不再尝试下一个链接
-  /// [onRouteChanged] 在每次切换下载源时回调线路名称（Gitee 主线路 / GitHub 备用线路）
+  /// [onRouteChanged] 在每次切换下载源时回调线路名称（Cloudflare 主线路 / GitHub 备用线路）
   static Future<String> downloadApk(
     List<String> urls, {
     void Function(int received, int total)? onProgress,
@@ -102,9 +113,7 @@ class UpdateService {
     Object? lastError;
     for (final url in urls.where((u) => u.isNotEmpty)) {
       try {
-        onRouteChanged?.call(
-          url.contains('gitee.com') ? 'Gitee 主线路' : 'GitHub 备用线路',
-        );
+        onRouteChanged?.call(_routeNameOf(url));
         return await _downloadOne(
           url,
           onProgress: onProgress,
@@ -117,6 +126,15 @@ class UpdateService {
       }
     }
     throw lastError ?? Exception('无可用的下载地址');
+  }
+
+  /// 下载线路显示名（供下载对话框提示用）。
+  static String _routeNameOf(String url) {
+    if (url.contains('de5.net') || url.contains('pages.dev')) {
+      return 'Cloudflare 主线路';
+    }
+    if (url.contains('gitee.com')) return 'Gitee 线路';
+    return 'GitHub 备用线路';
   }
 
   /// 从单个直链下载 APK 到缓存目录

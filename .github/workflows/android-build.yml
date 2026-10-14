@@ -141,6 +141,17 @@ jobs:
             echo '__RELEASE_BODY_EOF__'
           } >> "$GITHUB_ENV"
 
+      # 发布到 Cloudflare Pages 分发仓库（国内下载加速）：
+      # 写入新安装包 + update.json，推送后 CF Pages 自动构建，App 端「检查更新」读该域名。
+      - name: Publish to CF Pages distribution repo
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          UPDATES_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          bash scripts/changelog_extract.sh "$VERSION_NAME" CHANGELOG.md > /tmp/changelog_section.md || true
+          bash scripts/publish_updates.sh \
+            "artifacts/${APK_NAME}" "$VERSION_NAME" "$VERSION_CODE" /tmp/changelog_section.md
+
       # 正式发布：推送 v* 标签时触发，以标签为 Release 名，写入更新日志
       - name: Create Release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
