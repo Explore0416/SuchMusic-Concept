@@ -10,7 +10,7 @@ import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
 import 'about_page.dart';
-import 'kugou_credential_page.dart';
+import '../widgets/kugou_login_dialog.dart';
 
 /// 设置页面
 /// 布局参考 cankao/1.txt 设计稿（430x932）：
@@ -45,7 +45,13 @@ class _SettingsPageState extends State<SettingsPage> {
     final manager = SourceManager();
     _source = manager.currentSource;
     _fallback = manager.fallbackEnabled;
-    _kugouConfigured = KugouCredentialService.instance.hasCredentials;
+    _kugouConfigured = _anyKugouConfigured();
+  }
+
+  /// 任意酷狗平台（概念版 / 原版）是否已登录。
+  bool _anyKugouConfigured() {
+    final credential = KugouCredentialService.instance;
+    return KugouPlatform.values.any(credential.hasCredentialsFor);
   }
 
   /// 音源选择：未配置酷狗凭证时先引导配置（REQ-07 边界）
@@ -86,7 +92,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (platform != null &&
         !KugouCredentialService.instance.hasCredentialsFor(platform)) {
       DesignToast.show(context, '请先配置${selected.label}凭证');
-      await _openCredentialPage(platform);
+      await _manageKugouAccount(platform);
       if (!mounted) return;
       if (!KugouCredentialService.instance.hasCredentialsFor(platform)) return;
     }
@@ -102,26 +108,79 @@ class _SettingsPageState extends State<SettingsPage> {
     await SourceManager().setFallbackEnabled(value);
   }
 
-  Future<void> _openCredentialPage([KugouPlatform? platform]) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => KugouCredentialPage(
-          platform: platform ?? KugouPlatform.lite,
-        ),
-      ),
-    );
+  /// 打开酷狗扫码登录弹窗（与网易云登录 UI 形态一致）。
+  Future<void> _openKugouLogin(KugouPlatform platform) async {
+    await showKugouLoginDialog(context, platform: platform);
     if (!mounted) return;
     setState(() {
-      _kugouConfigured = KugouCredentialService.instance.hasCredentials;
+      _kugouConfigured = _anyKugouConfigured();
     });
-    // 清除凭证后若当前为酷狗，自动回退网易云
+    // 若当前音源的酷狗凭证已失效（如被清除），自动回退网易云
     final cur = _source.kugouPlatform;
     if (cur != null &&
         !KugouCredentialService.instance.hasCredentialsFor(cur)) {
       await SourceManager().switchTo(SongSource.netease);
       if (mounted) setState(() => _source = SourceManager().currentSource);
     }
+  }
+
+  /// 酷狗账号管理：未登录直接拉起扫码弹窗；已登录提供「重新登录 / 退出登录」。
+  Future<void> _manageKugouAccount(KugouPlatform platform) async {
+    final credential = KugouCredentialService.instance;
+    if (!credential.hasCredentialsFor(platform)) {
+      return _openKugouLogin(platform);
+    }
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('${platform.label}账号'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'relogin'),
+            child: const Text('重新扫码登录'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'logout'),
+            child: const Text('退出登录'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'relogin') {
+      await _openKugouLogin(platform);
+      return;
+    }
+    await credential.clearFor(platform);
+    if (!mounted) return;
+    setState(() => _kugouConfigured = _anyKugouConfigured());
+    if (_source.kugouPlatform == platform) {
+      await SourceManager().switchTo(SongSource.netease);
+      if (mounted) setState(() => _source = SourceManager().currentSource);
+    }
+    if (mounted) DesignToast.show(context, '已退出登录');
+  }
+
+  /// 设置页「酷狗账号」入口：先选平台，再进入扫码 / 管理。
+  Future<void> _openKugouAccountPicker() async {
+    final credential = KugouCredentialService.instance;
+    final platform = await showDialog<KugouPlatform>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('酷狗账号'),
+        children: [
+          for (final p in KugouPlatform.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, p),
+              child: Text(
+                credential.hasCredentialsFor(p) ? '${p.label}（已登录）' : p.label,
+              ),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || platform == null) return;
+    await _manageKugouAccount(platform);
   }
 
   Future<void> _loadMixSetting() async {
@@ -351,7 +410,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   SizedBox(height: 10 * s),
                   _buildCard(
                     s: s,
-                    onTap: _openCredentialPage,
+                    onTap: _openKugouAccountPicker,
                     child: Row(
                       children: [
                         Expanded(
@@ -359,7 +418,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '酷狗概念版凭证',
+                                '酷狗账号',
                                 style: TextStyle(
                                   color: Colors.black,
                                   fontSize: 16 * s,
@@ -367,7 +426,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               ),
                               SizedBox(height: 2 * s),
                               Text(
-                                '支持扫码登录 / 粘贴凭证',
+                                '扫码登录（与网易云一致），可粘贴凭证兜底',
                                 style: TextStyle(
                                   color: const Color(0xFF838383),
                                   fontSize: 11 * s,

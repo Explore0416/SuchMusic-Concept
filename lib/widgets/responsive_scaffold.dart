@@ -15,12 +15,13 @@ class NavDestination {
   final String label;
 }
 
-/// 通用外壳：按断点在「左侧边栏 + 底部播放条（平板/横屏）」与
-/// 「底部悬浮胶囊栏（手机竖屏）」之间切换，并把页面内容夹到内容上限居中。
+/// 通用外壳：按断点在「左侧边栏 + 底部播放条（横屏大屏）」与
+/// 「底部悬浮胶囊栏（竖屏 / 手机）」之间切换，并把页面内容夹到内容上限居中。
 ///
-/// - 手机竖屏（B1）：body 铺满 + [bottomBar] 悬浮于底部居中（改造前基线，不回归）。
-/// - 平板 / 横屏（B3/B4/B5）：参照 PC 版布局 —— 左侧边栏（Logo + 导航）
-///   + 右侧内容区 + **底部全宽常驻播放条** [playerBar]。
+/// - 竖屏（B1 手机竖屏 / B3 平板竖屏）与手机横屏（B2）：body 铺满 +
+///   [bottomBar] 悬浮于底部居中（**与上游原版一致**）。
+/// - 横屏大屏（B4 平板横屏 / B5 超宽屏）：参照 PC 版布局 —— 左侧边栏
+///   （Logo + 导航）+ 右侧内容区 + **底部全宽常驻播放条** [playerBar]。
 class ResponsiveScaffold extends StatelessWidget {
   const ResponsiveScaffold({
     super.key,
@@ -46,10 +47,10 @@ class ResponsiveScaffold extends StatelessWidget {
   /// 页面内容
   final Widget body;
 
-  /// 手机竖屏下的底部自定义栏（悬浮胶囊栏）；平板形态忽略
+  /// 竖屏 / 手机横屏下的底部自定义栏（悬浮胶囊栏）；PC 形态忽略
   final Widget? bottomBar;
 
-  /// 平板/横屏下的底部常驻播放条（全宽）；手机竖屏忽略
+  /// 横屏大屏（B4/B5）下的底部常驻播放条（全宽）；竖屏形态忽略
   final Widget? playerBar;
 
   final Color backgroundColor;

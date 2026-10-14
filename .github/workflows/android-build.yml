@@ -116,13 +116,38 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 正式发布：推送 v* 标签时触发，以标签为 Release 名，自动生成变更说明
+      # 生成 Release 更新日志（保证「有实质内容」）：
+      #   · tag 发布：从 CHANGELOG.md 摘取对应版本章节；
+      #   · main 滚动发布：附最近提交列表。
+      - name: Compose release notes
+        run: |
+          {
+            echo 'RELEASE_BODY<<__RELEASE_BODY_EOF__'
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              NOTES="$(bash scripts/changelog_extract.sh "$VERSION_NAME" || true)"
+              if [ -z "${NOTES//[[:space:]]/}" ]; then
+                NOTES="未在 CHANGELOG.md 找到 $VERSION_NAME 的章节，请查看仓库 CHANGELOG.md。"
+              fi
+              echo "$NOTES"
+            else
+              echo "本次为 main 分支自动构建（内测版 ${VERSION_NAME}，build ${VERSION_CODE}）。"
+              echo ""
+              echo "### 最近提交"
+              git log --no-merges --pretty=format:'- %s' -n 12
+              echo ""
+            fi
+            echo ""
+            echo "> 完整变更记录见仓库 CHANGELOG.md。"
+            echo '__RELEASE_BODY_EOF__'
+          } >> "$GITHUB_ENV"
+
+      # 正式发布：推送 v* 标签时触发，以标签为 Release 名，写入更新日志
       - name: Create Release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/${{ env.APK_NAME }}
-          generate_release_notes: true
+          body: ${{ env.RELEASE_BODY }}
 
       # 滚动发布：每次 push 到 main/master 自动构建签名 APK，
       # 并覆盖更新固定 tag `latest` 的预发布版（同资源名自动替换）
@@ -135,3 +160,4 @@ jobs:
           prerelease: true
           make_latest: false
           files: artifacts/${{ env.APK_NAME }}
+          body: ${{ env.RELEASE_BODY }}

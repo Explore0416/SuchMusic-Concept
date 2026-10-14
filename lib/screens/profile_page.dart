@@ -14,7 +14,7 @@ import '../services/kugou_credential_service.dart';
 import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/fade_slide_in.dart';
-import 'kugou_credential_page.dart';
+import '../widgets/kugou_login_dialog.dart';
 import 'kugou_playlist_page.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
@@ -507,7 +507,7 @@ class _ProfilePageState extends State<ProfilePage> {
       icon: Icons.library_music_outlined,
       title: platform.label,
       subtitle: logged ? '已登录（$uid）' : '扫码登录后可使用对应 VIP',
-      actionText: logged ? '管理' : '扫码登录',
+      actionText: logged ? '重新登录' : '扫码登录',
       onTap: () => _openKugouLogin(platform),
     );
   }
@@ -574,14 +574,9 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 打开酷狗凭证页（内置扫码登录），返回后刷新登录态。
+  /// 打开酷狗扫码登录弹窗（与网易云登录 UI 形态一致），登录成功后刷新登录态。
   Future<void> _openKugouLogin(KugouPlatform platform) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => KugouCredentialPage(platform: platform),
-      ),
-    );
+    await showKugouLoginDialog(context, platform: platform);
     if (!mounted) return;
     setState(() {});
   }

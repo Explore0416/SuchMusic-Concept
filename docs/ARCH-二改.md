@@ -467,7 +467,7 @@ final lrc = await SourceManager().withFallback(song, (src) => src.getLyrics(song
 | `lib/services/kugou_credential_service.dart` | 酷狗凭证存取 + 脱敏 |
 | `lib/services/island_service.dart` | MethodChannel 封装 + 能力检测缓存 |
 | `lib/services/notification_lyric_service.dart` | 歌词去抖/节流 → 副标题文本流 |
-| `lib/screens/kugou_credential_page.dart` | 酷狗凭证录入/清除页（REQ-11） |
+| `lib/widgets/kugou_login_dialog.dart` | 酷狗扫码登录弹窗（0.9.0 起取代原 `kugou_credential_page.dart` 凭证页） |
 | `android/app/src/main/kotlin/.../IslandBridge.kt` | 能力检测 + `miui.focus.param` 注入 |
 | `docs/ARCH-二改.md`、`docs/class-diagram.mermaid`、`docs/sequence-diagram.mermaid` | 本文档产出 |
 
@@ -673,7 +673,7 @@ dependencies:
 - **目标**：REQ-08/REQ-11/REQ-12 收口 + Q8 免责声明，完成全链路走查。
 - **涉及文件**：
   - `lib/screens/settings_page.dart`（音源选择 + 失败回退开关 + 凭证入口 + 歌词开关聚合）
-  - `lib/screens/kugou_credential_page.dart`（新增：录入/清除/状态/VIP 展示）
+  - `lib/widgets/kugou_login_dialog.dart`（0.9.0 起：扫码登录弹窗，取代原凭证页；录入/清除迁至「设置 → 酷狗账号」）
   - `lib/screens/home_page.dart`、`lib/screens/search_page.dart`（顶栏音源标识）
   - `lib/screens/about_page.dart`（免责声明）
   - `lib/screens/player_page.dart`（音源相关提示/回退提示）

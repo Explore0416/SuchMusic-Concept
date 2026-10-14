@@ -11,9 +11,9 @@
 
 | 需求 | 实现要点 | 对应代码 |
 |---|---|---|
-| **1. 横屏 / 平板适配（含小米平板）** | 新增响应式「单一真源」`Responsive`，按最短边划分 5 档断点 B1~B5：手机竖屏 / 手机横屏 / 平板竖屏 / 平板横屏 / 超宽屏。平板与横屏下：底部胶囊栏 → 左侧 `NavigationRail`；播放页改为「左封面+控制 / 右歌词」分栏；首页改多列网格；内容区限宽 960dp 居中；封面封顶 420dp。原有 12 处硬编码尺寸点全部替换为响应式取值。 | `lib/utils/responsive.dart`、`lib/widgets/responsive_scaffold.dart`、`lib/main.dart`、各 `lib/screens/*` |
+| **1. 横屏 / 平板适配（含小米平板）** | 新增响应式「单一真源」`Responsive`，按最短边划分 5 档断点 B1~B5：手机竖屏 / 手机横屏 / 平板竖屏 / 平板横屏 / 超宽屏。**竖屏（手机 B1 / 平板 B3）与手机横屏 B2 一律沿用原版底部悬浮胶囊栏**；**横屏大屏（B4 / B5）**改为 PC 风格「左侧边栏 + 底部全宽常驻播放条」；播放页横屏改「左封面+控制 / 右歌词」分栏；首页平板改多列网格；内容区限宽 960dp 居中；封面封顶 420dp。原有 12 处硬编码尺寸点全部替换为响应式取值。 | `lib/utils/responsive.dart`、`lib/widgets/responsive_scaffold.dart`、`lib/main.dart`、各 `lib/screens/*` |
 | **2. 小米无极缩放 + 灵动岛歌词** | ① `resizeableActivity="true"` + 保留 `configChanges`（旋转/缩放不重启 Activity，播放不中断）；② 全局字体缩放夹取 `[0.85, 1.3]` 防溢出；③ **歌词写入系统媒体通知副标题**（`MediaItem.artist`），全 Android 生效，小米灵动岛/超级岛区域、锁屏、通知栏均可显示；④ 额外提供小米超级岛增强（MethodChannel + `miui.focus.param`），**先做设备能力检测，不支持/未授权则静默跳过**，绝不阻断播放。 | `lib/services/notification_lyric_service.dart`、`lib/services/island_service.dart`、`lib/services/audio_player_handler.dart`、`android/.../IslandBridge.kt`、`android/.../MainActivity.kt`、`AndroidManifest.xml` |
-| **3. 酷狗概念版音源** | 新增音源抽象层：搜索 / 取播放地址 / 歌词 / 详情。使用**酷狗概念版（appid 1005）**参数取地址，可播放概念版 VIP 资源；签名算法自实现（MD5），常量集中可热修。支持音源切换、失败自动回退网易云（回退时按「歌名+歌手」解析出网易云对端歌曲，而不是拿酷狗 ID 去请求网易云）。 | `lib/services/sources/*`、`lib/services/kugou_credential_service.dart`、`lib/screens/kugou_credential_page.dart` |
+| **3. 酷狗概念版音源** | 新增音源抽象层：搜索 / 取播放地址 / 歌词 / 详情。使用**酷狗概念版（lite，appid 3116 / clientver 11440）**参数取地址，可播放概念版 VIP 资源；签名算法自实现（MD5），常量集中可热修。支持音源切换、失败自动回退网易云（回退时按「歌名+歌手」解析出网易云对端歌曲，而不是拿酷狗 ID 去请求网易云）。另支持酷狗原版（standard）。 | `lib/services/sources/*`、`lib/services/kugou_credential_service.dart`、`lib/widgets/kugou_login_dialog.dart` |
 | **4. 不出现 Bug** | 修复了原仓库**无法在他人机器构建**的问题（`pubspec.yaml` 里 `netease_music_api` 是硬编码 Windows 路径 `D:/laji/...`）。已 vendor 到 `packages/netease_music_api` 并补回上游缺失的 `n` 参数。静态分析 0 issue，105 个单元测试全绿。 | `pubspec.yaml`、`packages/netease_music_api/` |
 
 ---
@@ -57,18 +57,15 @@ flutter build apk --debug     # 或 --release
 
 「我的 → 设置 → 音源」：
 
-- **当前音源**：网易云 / 酷狗概念版。
+- **当前音源**：网易云 / 酷狗概念版 / 酷狗音乐。
 - **失败自动回退**：酷狗取源失败时自动改用网易云（默认开）。
-- **酷狗概念版凭证**：点击进入凭证页，提供 **3 种** 配置方式：
-  - **扫码登录（推荐，v1.1 新增）**：点「扫码登录」→ 用**酷狗概念版 App** 扫码 → 手机上确认 →
-    自动拿到 `token`/`userid` 并写入。二维码优先用接口直返的 base64 图片，缺失时回退 `qr_flutter`
-    渲染；过期或本地 TTL 到期**自动换码**；退出页面会**取消**在飞请求与轮询。轮询间隔 2s，
-    连续 5 次网络错误或超时即停止（不无限刷风控）。
-  - **粘贴凭证（v1.1 新增兜底）**：点「粘贴凭证」，粘贴整段 cookie 或 JSON
-    （如 `token=...; userid=...` 或 `{"token":"...","userid":123}`），自动提取并保存。
-  - **手工填写（高级 / 兜底）**：直接填 `token` / `userid`（可从酷狗概念版 App 抓包获得），
-    可选填昵称用于展示。
+- **酷狗账号登录（内测 0.9.0 起）**：在「我的」页点对应音源的「扫码登录」，弹出与**网易云一致的
+  扫码弹窗** → 用「酷狗概念版 / 酷狗音乐 App」扫码 → 手机上确认 → 自动拿到 `token`/`userid` 并写入。
+  二维码优先用接口直返的 base64 图片，缺失时回退 `qr_flutter` 渲染；过期或本地 TTL 到期**自动换码**；
+  关闭弹窗会**取消**在飞请求与轮询。轮询间隔 2s，连续 5 次网络错误或超时即停止（不无限刷风控）。
+  扫码不便时，弹窗内提供「手动输入凭证」兜底：粘贴整段 cookie / JSON（如 `token=...; userid=...`）自动解析。
   凭证本地保存、界面与日志**一律脱敏**（`前4****后4`，`AppConstants.maskToken`）。
+  已登录后可在「设置 → 酷狗账号」中「重新扫码登录」或「退出登录」。
 
 > 未配置凭证时选择酷狗会先引导你去配置，不会清空网易云登录态。
 
@@ -154,7 +151,8 @@ flutter build apk --debug     # 或 --release
 1. `kugou_config.dart`：新增 `liteAppid=3116` / `liteClientver=11440`（与 `standardAppid/standardClientver` 并列保留），
    并将 `appid` / `clientver` / `loginClientver` / `qrTxt` 全部切换到**概念版 lite** 参数；
 2. `kugou_source.dart`：搜索、取播放地址自动使用新配置（概念版 `appid=3116` + 概念版 android 盐 + 概念版 key 盐）；
-3. `kugou_credential_page.dart`：页面与扫码区文案明确为「酷狗概念版」，并提示使用**酷狗概念版 App** 扫码。
+3. `lib/widgets/kugou_login_dialog.dart`（原 `kugou_credential_page.dart`，0.9.0 起改为登录弹窗）：
+   弹窗与扫码区文案按所选平台显示为「酷狗概念版」/「酷狗音乐」，并提示用对应 App 扫码。
 
 > 说明：`qrcode_txt` 中的 `appid` 决定扫码授权的目标平台，是本次修复的关键。
 
@@ -273,14 +271,15 @@ flutter build apk --debug     # 或 --release
 
 **问题**：登录酷狗后「我的」页仍只显示「扫码登录网易云账号」，且酷狗登录入口只在设置里。
 
-**修复**：`profile_page.dart` 未登录态由单个按钮改为**音源账号卡片**，两行分别展示：
+**修复**：`profile_page.dart` 未登录态由单个按钮改为**音源账号卡片**，三行分别展示：
 
 | 行 | 状态 | 操作 |
 |----|------|------|
-| 网易云音乐 | — | 扫码登录（原弹窗） |
-| 酷狗概念版 | 未登录 / 已登录（脱敏 uid） | 扫码登录 / 管理 → 打开酷狗凭证页（内置扫码） |
+| 网易云音乐 | — | 扫码登录（弹窗） |
+| 酷狗概念版 | 未登录 / 已登录（脱敏 uid） | 扫码登录 / 重新登录 → 打开**扫码弹窗**（与网易云一致） |
+| 酷狗音乐 | 未登录 / 已登录（脱敏 uid） | 扫码登录 / 重新登录 → 打开**扫码弹窗**（与网易云一致） |
 
-现在**不需要进设置**，直接在「我的」页就能登录酷狗概念版并看到其登录状态。
+现在**不需要进设置**，直接在「我的」页就能登录酷狗各平台并看到其登录状态。
 
 ### 2. 酷狗榜单（修复「歌单"飙升榜"为空或加载失败」）
 

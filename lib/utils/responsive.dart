@@ -148,9 +148,14 @@ class Responsive {
   // ── 形态开关（各屏据此选择布局分支）───────────────────────
 
   /// 平板形态使用左侧 NavigationRail
+  /// 是否使用 PC 风格布局（左侧边栏 + 底部全宽常驻播放条）。
+  ///
+  /// **仅横屏大屏**（B4 平板横屏 / B5 超宽屏）启用；竖屏（B1 手机竖屏 /
+  /// B3 平板竖屏）一律沿用上游原版的底部悬浮胶囊栏，保证竖屏底部控制栏
+  /// 与原版体验一致。
   static bool showRail(AppBreakpoint bp) =>
-      bp != AppBreakpoint.b1PhonePortrait &&
-      bp != AppBreakpoint.b2PhoneLandscape;
+      bp == AppBreakpoint.b4TabletLandscape ||
+      bp == AppBreakpoint.b5UltraWide;
 
   /// 播放页左右分栏形态（B2/B4/B5）
   static bool isPlayerSplit(AppBreakpoint bp) =>

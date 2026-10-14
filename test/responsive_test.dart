@@ -62,10 +62,10 @@ void main() {
   });
 
   group('形态开关 showRail / isPlayerSplit / isGridHome', () {
-    test('showRail：仅 B3/B4/B5', () {
+    test('showRail：仅 B4/B5（竖屏一律用原版胶囊栏）', () {
       expect(Responsive.showRail(AppBreakpoint.b1PhonePortrait), isFalse);
       expect(Responsive.showRail(AppBreakpoint.b2PhoneLandscape), isFalse);
-      expect(Responsive.showRail(AppBreakpoint.b3TabletPortrait), isTrue);
+      expect(Responsive.showRail(AppBreakpoint.b3TabletPortrait), isFalse);
       expect(Responsive.showRail(AppBreakpoint.b4TabletLandscape), isTrue);
       expect(Responsive.showRail(AppBreakpoint.b5UltraWide), isTrue);
     });
