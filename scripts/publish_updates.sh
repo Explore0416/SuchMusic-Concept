@@ -30,14 +30,16 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 echo "▶ 1/3 上传安装包到公开 Release（${REPO}@${APK_TAG}）"
 if gh release view "$APK_TAG" --repo "$REPO" >/dev/null 2>&1; then
-  gh release upload "$APK_TAG" "$APK_PATH#SuchMusic-latest.apk" --repo "$REPO" --clobber
+  cp "$APK_PATH" "$WORKDIR/SuchMusic-latest.apk"
+  gh release upload "$APK_TAG" "$WORKDIR/SuchMusic-latest.apk" --repo "$REPO" --clobber
 else
   gh release create "$APK_TAG" --repo "$REPO" \
     --title "最新安装包（供 Cloudflare 边缘分发）" \
     --notes "该 Release 的 SuchMusic-latest.apk 始终指向当前内测版安装包，由 Cloudflare Worker 边缘代理缓存后提供下载。" \
-    "$APK_PATH#SuchMusic-latest.apk"
+    "$WORKDIR/SuchMusic-latest.apk"
 fi
-gh release upload "$APK_TAG" "$APK_PATH#SuchMusic-${VERSION_NAME}.apk" --repo "$REPO" --clobber
+cp "$APK_PATH" "$WORKDIR/SuchMusic-${VERSION_NAME}.apk"
+gh release upload "$APK_TAG" "$WORKDIR/SuchMusic-${VERSION_NAME}.apk" --repo "$REPO" --clobber
 
 echo "▶ 2/3 更新更新清单（public/update.json）"
 git clone --depth 1 --branch "$BRANCH" \
