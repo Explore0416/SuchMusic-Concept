@@ -8,6 +8,7 @@ import '../models/song_model.dart';
 import '../services/music_api_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/app_init.dart';
+import '../services/play_history_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
 import 'playlist_detail_page.dart';
@@ -30,6 +31,9 @@ class _HomePageState extends State<HomePage> {
   bool _loadingRankings = true;
   List<SongModel> _hotSongs = [];
   bool _loadingHotSongs = true;
+
+  /// 「猜你想听」：由**本机播放历史**算出，不上传任何数据；为空则不显示该区块
+  List<SongModel> _localPicks = [];
   PlaylistModel? _hotChart;
   List<SongModel> _dailySongs = [];
   bool _loadingDailySongs = true;
@@ -45,12 +49,20 @@ class _HomePageState extends State<HomePage> {
   final PageController _recommendPageController = PageController(viewportFraction: 0.95 / 1.05);
   final PageController _recommendPageController2 = PageController(viewportFraction: 0.95 / 1.05);
 
+  /// 「猜你想听」：完全基于**本机播放历史**计算，不上传任何数据。
+  void _loadLocalPicks() {
+    final picks = PlayHistoryService().suggest(limit: 12);
+    if (!mounted || picks.isEmpty) return;
+    setState(() => _localPicks = picks);
+  }
+
   @override
   void initState() {
     super.initState();
     _loadRankings();
     _loadDailySongs();
     _loadFmCover();
+    _loadLocalPicks();
     // FM模式切歌时，同步更新首页卡片封面
     _fmSongSub = AudioPlayerService().onCurrentSongChanged.listen((song) {
       final player = AudioPlayerService();
@@ -305,6 +317,18 @@ class _HomePageState extends State<HomePage> {
                 children: [
                   // 滑动卡片铺满全屏宽（父级已无水平边距）
                   _buildSlidingCards(),
+                  // 本地个性化推荐（仅在有播放历史时出现）
+                  if (_localPicks.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 15),
+                      child: _buildRecommendPlaylists(
+                        title: '猜你想听',
+                        songs: _localPicks,
+                        loading: false,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Padding(
                     padding: const EdgeInsets.only(left: 15),

@@ -1,16 +1,22 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/kugou_credential_service.dart';
 import '../services/notification_lyric_service.dart';
+import '../services/settings_backup_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
 import 'about_page.dart';
 import '../widgets/kugou_login_dialog.dart';
+import '../widgets/sound_effect_sheet.dart';
 
 /// 设置页面
 /// 布局参考 cankao/1.txt 设计稿（430x932）：
@@ -61,7 +67,7 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (ctx) => SimpleDialog(
         title: const Text('选择音源'),
         children: [
-          for (final kind in SongSource.values)
+          for (final kind in SongSource.selectable)
             SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, kind),
               child: Row(
@@ -159,6 +165,95 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) setState(() => _source = SourceManager().currentSource);
     }
     if (mounted) DesignToast.show(context, '已退出登录');
+  }
+
+  // ── 音效 / 配置备份 ──────────────────────────────────────
+
+  Future<void> _openSoundEffect() async {
+    await showSoundEffectSheet(context);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _openBackupDialog() async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('配置备份'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'export'),
+            child: const Text('导出配置到文件'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'import'),
+            child: const Text('从内容导入配置'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'export') {
+      await _exportSettings();
+    } else {
+      await _importSettings();
+    }
+  }
+
+  /// 导出：写成 JSON 文件到应用文档目录并尝试用系统方式打开。
+  Future<void> _exportSettings() async {
+    try {
+      final json = await SettingsBackupService().exportToJson();
+      final name = await SettingsBackupService().defaultExportFileName();
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/$name');
+      await file.writeAsString(json);
+      await OpenFilex.open(file.path);
+      if (!mounted) return;
+      DesignToast.show(context, '已导出配置：${file.path}');
+    } catch (e) {
+      if (mounted) DesignToast.show(context, '导出失败：$e');
+    }
+  }
+
+  /// 导入：粘贴此前导出的 JSON 恢复（不含登录凭证，凭证需重新登录）。
+  Future<void> _importSettings() async {
+    final controller = TextEditingController();
+    final raw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导入配置'),
+        content: TextField(
+          controller: controller,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: '粘贴此前导出的配置 JSON 内容',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('导入'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (raw == null || !mounted) return;
+    try {
+      final n = await SettingsBackupService().importFromJson(raw);
+      if (!mounted) return;
+      DesignToast.show(context, '已恢复 $n 项配置');
+      setState(_loadSourceSetting);
+    } on FormatException catch (e) {
+      if (mounted) DesignToast.show(context, '配置格式不正确：${e.message}');
+    } catch (e) {
+      if (mounted) DesignToast.show(context, '导入失败：$e');
+    }
   }
 
   /// 设置页「酷狗账号」入口：先选平台，再进入扫码 / 管理。
@@ -445,6 +540,58 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                         ),
                         const SizedBox(width: 4),
+                        const Icon(Icons.chevron_right,
+                            size: 20, color: Color(0xFFCCCCCC)),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 10 * s),
+                  _buildCard(
+                    s: s,
+                    onTap: _openSoundEffect,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('音效',
+                                  style: TextStyle(
+                                      color: Colors.black, fontSize: 16 * s)),
+                              SizedBox(height: 2 * s),
+                              Text('均衡器预设：流行 / 人声 / 重低音 / 环绕',
+                                  style: TextStyle(
+                                      color: const Color(0xFF838383),
+                                      fontSize: 11 * s)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right,
+                            size: 20, color: Color(0xFFCCCCCC)),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 10 * s),
+                  _buildCard(
+                    s: s,
+                    onTap: _openBackupDialog,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('配置备份',
+                                  style: TextStyle(
+                                      color: Colors.black, fontSize: 16 * s)),
+                              SizedBox(height: 2 * s),
+                              Text('导出个性化设置，清除数据后可导入恢复',
+                                  style: TextStyle(
+                                      color: const Color(0xFF838383),
+                                      fontSize: 11 * s)),
+                            ],
+                          ),
+                        ),
                         const Icon(Icons.chevron_right,
                             size: 20, color: Color(0xFFCCCCCC)),
                       ],

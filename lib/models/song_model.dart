@@ -8,9 +8,17 @@ import 'kugou_platform.dart';
 enum SongSource {
   netease('netease', '网易云'),
   kugouStandard('kugou_std', '酷狗音乐'),
-  kugou('kugou', '酷狗概念版');
+  kugou('kugou', '酷狗概念版'),
+  local('local', '本地音乐');
 
   const SongSource(this.code, this.label);
+
+  /// 是否本地文件（不参与在线音源切换、不请求任何接口）
+  bool get isLocal => this == local;
+
+  /// 可在「设置 → 音源」中切换的在线音源（本地音乐不在其中）。
+  static List<SongSource> get selectable =>
+      values.where((e) => e != local).toList();
 
   final String code;
   final String label;
@@ -56,6 +64,11 @@ class SongModel {
   /// 酷狗 album_audio_id（新增）
   final String? albumAudioId;
 
+  /// 本地音频 Uri（仅 [SongSource.local] 有值；形如 `content://...` 或 `file://...`）。
+  ///
+  /// 非空时播放器直接用该 Uri 播放，**不请求任何在线接口**。
+  final String? localUri;
+
   const SongModel({
     required this.id,
     required this.name,
@@ -67,7 +80,37 @@ class SongModel {
     this.hash,
     this.albumId,
     this.albumAudioId,
+    this.localUri,
   });
+
+  /// 用系统「打开方式」/分享进来的本地音频构造歌曲。
+  ///
+  /// [displayName] 为原生侧解析出的文件名（形如 `xxx.mp3`），用于展示歌名；
+  /// 去掉扩展名后作为歌名，无法解析时使用「本地音乐」兜底。
+  factory SongModel.fromLocalUri(
+    String uri, {
+    String? displayName,
+  }) {
+    var title = (displayName ?? '').trim();
+    if (title.isEmpty) {
+      title = Uri.tryParse(uri)?.pathSegments.isNotEmpty == true
+          ? Uri.parse(uri).pathSegments.last
+          : '本地音乐';
+    }
+    // 去掉常见音频扩展名，展示更干净
+    title = title.replaceAll(
+      RegExp(r'\.(mp3|flac|wav|aac|m4a|ogg|opus)$', caseSensitive: false),
+      '',
+    );
+    return SongModel(
+      id: 'local:$uri',
+      name: title.isEmpty ? '本地音乐' : title,
+      artist: '本地音乐',
+      album: '本地文件',
+      source: SongSource.local,
+      localUri: uri,
+    );
+  }
 
   /// 从库的 Song 类型创建
   factory SongModel.fromNeteaseSong(Song song) {

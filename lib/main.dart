@@ -10,6 +10,10 @@ import 'screens/home_page.dart';
 import 'screens/profile_page.dart';
 import 'services/audio_player_handler.dart';
 import 'services/audio_player_service.dart';
+import 'services/local_audio_intent_service.dart';
+import 'services/local_lyric_service.dart';
+import 'services/play_history_service.dart';
+import 'services/sound_effect_service.dart';
 import 'services/app_init.dart';
 import 'services/sources/kugou_device_service.dart';
 import 'models/song_model.dart';
@@ -44,6 +48,17 @@ void main() async {
   runApp(const MyApp());
   await NeteaseMusicApi.init(debug: true);
   await AudioPlayerService().init();
+  // 监听系统「打开方式 / 分享」进来的本地音频（Android）
+  LocalAudioIntentService.instance.start();
+  // 本地播放历史 + 手动歌词映射（**只存本机，不上传任何数据**）
+  await PlayHistoryService().init();
+  await LocalLyricService().init();
+  // 播放历史用于首页本地个性化推荐；明确不上传云端
+  AudioPlayerService().onCurrentSongChanged.listen((song) {
+    if (song != null) unawaited(PlayHistoryService().record(song));
+  });
+  // 恢复上次选择的音效预设
+  unawaited(SoundEffectService.instance.restore());
   // 酷狗设备注册（取播放直链前置，未注册会被风控拒绝）；
   // 后台进行、失败静默，取链时会自动再补一次。
   unawaited(KugouDeviceService.instance.init());

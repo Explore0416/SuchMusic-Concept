@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song_model.dart';
 import '../utils/app_constants.dart';
 import 'island_service.dart';
+import 'local_lyric_service.dart';
 import 'lyrics_parser.dart';
 import 'music_api_service.dart';
 import 'notification_lyric_service.dart';
@@ -365,11 +366,32 @@ class AudioPlayerService {
     }
   }
 
+  /// 重新为当前歌曲取歌词（用户在播放页手动「搜索歌词」后调用）。
+  Future<void> reloadLyrics() async {
+    final song = _currentSong;
+    if (song == null) return;
+    await _fetchLyrics(song);
+  }
+
   Future<void> _fetchLyrics(SongModel song) async {
     _lyrics = [];
     _currentLyric = '';
     _lyricController.add('');
     _lyricsController.add([]);
+
+    // 优先用用户手动指定的歌词（本地音乐识别不到歌词时由用户搜索选择，仅存本机）
+    String? manual;
+    try {
+      manual = LocalLyricService().get(song.id);
+    } catch (_) {
+      manual = null;
+    }
+    if (manual != null && manual.isNotEmpty) {
+      _lyrics = parseLrc(manual);
+      _lyricsController.add(List.unmodifiable(_lyrics));
+      _updateCurrentLyric(_position);
+      return;
+    }
 
     // 按歌曲归属音源取歌词；失败静默无歌词（与现有行为一致，不回退音源）
     final lrcText = await SourceManager()
@@ -401,9 +423,10 @@ class AudioPlayerService {
 
       _fetchLyrics(song);
 
-      // 按 song.source 路由 + 失败回退网易云（回退分支 strict 判定）
-      final url = await SourceManager().withFallback<String>(
-          song, (src, s, strict) => src.getSongUrl(s, strict: strict));
+      // 本地音乐：直接用入站 Uri 播放，不请求任何在线接口
+      final url = song.localUri ??
+          await SourceManager().withFallback<String>(
+              song, (src, s, strict) => src.getSongUrl(s, strict: strict));
       if (seq != _playSeq) return false; // 已切到更新请求，丢弃过期结果
       if (url == null) {
         _updateState(PlayerState.error);

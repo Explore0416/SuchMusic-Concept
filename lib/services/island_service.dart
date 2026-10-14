@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'brand_island_service.dart';
 
 /// 超级岛能力检测结果。
 class IslandCapability {
@@ -86,8 +89,13 @@ class IslandService {
     required String content,
     String islandId = defaultIslandId,
   }) async {
+    // 非小米设备：交给多品牌适配器（vivo 原子通知 / OPPO 流体云原生规范 /
+    // 荣耀与未知小厂 → 标准 MediaStyle 通知兜底）。内部按品牌自行判定，失败静默。
+    if (!supported) {
+      unawaited(BrandIslandService.instance.applyFocus(title: title, content: content));
+      return false;
+    }
     if (_focusDisabled) return false; // 已熔断：不再发起 channel 调用
-    if (!supported) return false;
     try {
       final ok = await _channel.invokeMethod<bool>('applyFocus', {
         'title': title,
@@ -109,8 +117,11 @@ class IslandService {
   ///
   /// 与 [applyFocus] 共用熔断标志：一旦熔断，后续调用直接返回 false。
   Future<bool> clearFocus() async {
+    if (!supported) {
+      unawaited(BrandIslandService.instance.clearFocus());
+      return false;
+    }
     if (_focusDisabled) return false; // 已熔断：不再发起 channel 调用
-    if (!supported) return false;
     try {
       final ok = await _channel.invokeMethod<bool>('clearFocus');
       return ok == true;

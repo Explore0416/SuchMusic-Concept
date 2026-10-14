@@ -8,6 +8,8 @@ import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
+import '../widgets/lyric_picker_sheet.dart';
+import '../widgets/sound_effect_sheet.dart';
 
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key});
@@ -368,6 +370,18 @@ class _PlayerPageState extends State<PlayerPage> {
             ),
           ),
           const Spacer(),
+          // 音效入口（与设置页共用同一弹层）
+          GestureDetector(
+            onTap: () async {
+              final ok = await showSoundEffectSheet(context);
+              if (ok == null || !mounted) return;
+              setState(() {});
+            },
+            child: const Padding(
+              padding: EdgeInsets.only(right: 14),
+              child: Icon(Icons.graphic_eq, size: 22, color: Colors.white),
+            ),
+          ),
           _buildPlayerSourceBadge(),
         ],
       ),
@@ -1353,9 +1367,43 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
 
   @override
   Widget build(BuildContext context) {
-    // 没有歌词时不显示任何占位内容
+    // 没有歌词：给出明确提示 + 「搜索歌词」入口（本地音乐常见场景）
     if (_lyrics.isEmpty) {
-      return const SizedBox.shrink();
+      final song = AudioPlayerService().currentSong;
+      if (song == null) return const SizedBox.shrink();
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lyrics_outlined,
+                size: 34, color: Colors.white54),
+            const SizedBox(height: 10),
+            const Text(
+              '这首歌暂时没有匹配到歌词',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: Colors.white38),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+              ),
+              onPressed: () async {
+                final ok = await showLyricPickerSheet(context, song);
+                if (ok) await AudioPlayerService().reloadLyrics();
+              },
+              icon: const Icon(Icons.search, size: 16),
+              label: const Text('搜索歌词',
+                  style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      );
     }
 
     // 歌词字号：以 430 设计稿为基准随 UI 缩放，封顶 lyricFontMax（不随宽度线性放大）

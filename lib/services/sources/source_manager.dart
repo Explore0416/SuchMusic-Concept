@@ -49,10 +49,13 @@ class SourceManager {
   /// 失败自动回退开关
   bool get fallbackEnabled => _fallbackEnabled;
 
+  /// 本地音乐没有在线音源实现；其播放地址直接取自 [SongModel.localUri]，
+  /// 这里回落网易云仅为满足穷尽匹配（本地歌曲查歌词必然失败 → 走「搜索选歌词」流程）。
   MusicSource sourceFor(SongSource kind) => switch (kind) {
         SongSource.netease => _netease,
         SongSource.kugou => _kugouLite,
         SongSource.kugouStandard => _kugouStandard,
+        SongSource.local => _netease,
       };
 
   /// 读取 prefs 恢复当前音源 + 校验凭证

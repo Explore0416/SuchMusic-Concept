@@ -1,14 +1,29 @@
 package com.lightningteam.suchmusic
 
+import android.content.ContentResolver
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.WindowManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
+    companion object {
+        /** 入站音频事件通道：系统在「打开方式」/分享中呼起本 App 时，把音频 Uri 送给 Flutter。 */
+        const val INBOUND_AUDIO_CHANNEL = "com.lightningteam.suchmusic/inbound_audio"
+    }
+
+    /** 尚未送达 Flutter 的入站音频（Flutter 侧监听通道后再投递）。 */
+    private var pendingAudioUri: String? = null
+    private var pendingAudioName: String? = null
+    private var audioSink: EventChannel.EventSink? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 原生兜底：窗口系统栏全透明。release 下 Flutter SystemChrome 的
@@ -21,6 +36,71 @@ class MainActivity : AudioServiceActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
         }
+        captureInboundAudio(intent)
+    }
+
+    /** 已在前台时再次被呼起（singleTop）→ 复用实例，走 onNewIntent。 */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureInboundAudio(intent)
+    }
+
+    /**
+     * 解析入站音频意图：`ACTION_VIEW`（打开方式）取 `data`，
+     * `ACTION_SEND`（分享）取 `EXTRA_STREAM`；命中则缓存 Uri + 显示名并尝试投递。
+     */
+    private fun captureInboundAudio(intent: Intent?) {
+        val i = intent ?: return
+        val action = i.action ?: return
+        if (action != Intent.ACTION_VIEW && action != Intent.ACTION_SEND) return
+
+        val uri: Uri? = if (action == Intent.ACTION_SEND) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+            }
+        } else {
+            i.data
+        }
+        if (uri == null) return
+
+        // 尽可能让后台播放服务也能长期读取该 Uri（部分 ROM 不支持则静默忽略）
+        try {
+            val takeFlags = i.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+            contentResolver.takePersistableUriPermission(uri, takeFlags)
+        } catch (_: Exception) {
+        }
+
+        pendingAudioUri = uri.toString()
+        pendingAudioName = resolveDisplayName(uri)
+        emitPendingAudio()
+    }
+
+    /** content Uri 查 DISPLAY_NAME，file Uri 取末段文件名；失败退回 null。 */
+    private fun resolveDisplayName(uri: Uri): String? {
+        return try {
+            if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+                }
+            } else {
+                uri.lastPathSegment
+            }
+        } catch (_: Exception) {
+            uri.lastPathSegment
+        }
+    }
+
+    /** 通道已监听则立即投递缓存的入站音频。 */
+    private fun emitPendingAudio() {
+        val sink = audioSink ?: return
+        val uri = pendingAudioUri ?: return
+        sink.success(mapOf("uri" to uri, "name" to (pendingAudioName ?: "")))
+        pendingAudioUri = null
+        pendingAudioName = null
     }
 
     /**
@@ -71,5 +151,37 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // 音效（DynamicsProcessing 均衡器 / 预设）
+        val soundFx = SoundEffectBridge(applicationContext)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SoundEffectBridge.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "available" -> result.success(soundFx.available())
+                    "presets" -> result.success(soundFx.listPresets())
+                    "apply" -> result.success(
+                        soundFx.apply(call.argument<String>("code") ?: "off")
+                    )
+                    "disable" -> result.success(soundFx.disable())
+                    "current" -> result.success(soundFx.current())
+                    else -> result.notImplemented()
+                }
+            }
+
+        // 多品牌灵动胶囊 / 小窗增强（小米 / vivo / OPPO / 荣耀 / 通用兜底）
+        flutterEngine.plugins.add(BrandIslandBridge())
+
+        // 入站音频：Flutter 侧监听后投递「打开方式 / 分享」带来的本地音频
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, INBOUND_AUDIO_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    audioSink = events
+                    emitPendingAudio()
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    audioSink = null
+                }
+            })
     }
 }
