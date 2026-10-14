@@ -6,7 +6,8 @@
 #   <version>  版本号，如 0.9.0（不带 v 前缀）
 #   [file]     CHANGELOG 路径，默认 CHANGELOG.md
 #
-# 行为：输出 `## [<version>]` 到下一个 `## [` 之间的内容；未找到则输出空、退出码 0。
+# 行为：输出 `## [<version>]` 到下一个二级标题（`## `）之间的内容；
+#       未找到则输出空、退出码 0。
 set -euo pipefail
 
 version="${1:?usage: changelog_extract.sh <version> [file]}"
@@ -18,6 +19,6 @@ fi
 
 awk -v ver="$version" '
   $0 ~ "^## \\[" ver "\\]" { inside = 1; next }
-  inside && /^## \[/ { exit }
+  inside && /^## / { exit }
   inside { print }
 ' "$file"
