@@ -167,6 +167,15 @@ stateDiagram-v2
 | 交集为空 | 手机回 `err E_UNSUPPORTED {code:"E_PROTO", message:"no common protocol"}`，仅允许 `sys.*`；手环降级为「仅提示升级」只读态 |
 | 将来 `V=2`、对端仍 `1` | 高版本端按 `v=1` 子集通信；高版本新增字段**不发送**给低版本端（发送前按对端 `v` 过滤） |
 
+**会话就绪闸门（v0.14.1）**
+
+> 令牌只是「入场券」，握手才是「使用许可」。**在会话 READY（成功 `sys.hello`）之前**，
+> 除 `sys.*`（`sys.hello` / `sys.ping` 等）外的**一切方法**一律拒绝，回
+> `err E_NOT_READY`，且**不产生任何副作用**（不触达播放器、不写去重缓存）。
+> 该闸门由共享 `BandRouter` 按**会话**实施，故**手环 interconnect 与局域网 WS 两条路径同时生效**：
+> 手环会话 id 固定为 `"band"`，WS 每个连接用其连接 id 作会话标识；
+> 一个连接握手成功**不会**让其它连接顺带变为就绪。
+
 **能力协商（caps）**
 
 能力令牌（最终值）：`playback` · `queue` · `search` · `lyric` · `playmode` · `volume` · `cover` · `transfer`。
@@ -299,7 +308,7 @@ stateDiagram-v2
 | `E_BADREQ` | 信封/JSON schema 非法 | 丢弃 + 记录，不重试 |
 | `E_UNSUPPORTED` | 版本/方法/能力不支持（附 `missing`） | 标记能力缺失，不再重试 |
 | `E_TIMEOUT` | 处理超时 | 同 id 重试（§3.11） |
-| `E_NOT_READY` | 播放器未就绪（无歌/加载中） | 稍后重试，UI 提示 |
+| `E_NOT_READY` | 播放器未就绪（无歌/加载中）**或会话未就绪**（READY 前发非 `sys.*` 方法，见 §3.3 会话就绪闸门） | 先完成 `sys.hello` / 稍后重试，UI 提示 |
 | `E_EMPTY` | 队列为空（next/prev/queue.play） | UI 提示，不重试 |
 | `E_NOT_FOUND` | 歌曲/歌词行不存在 | UI 提示 |
 | `E_LINK` | 链路断开/发送失败 | 进入重连 |
@@ -542,9 +551,11 @@ SuchMusic-NG/
 | `band_relay_service.dart` | 门面单例：开关 / 令牌 / 地址 / 连接数 / 状态流（对 UI） |
 
 **统一路由（关键）**：手环 interconnect 与局域网 WS **共用同一个 `BandRouter` 实例**
-（`BandService.instance.router`）与同一入口 `BandRouter.handleRaw(rawJson)`：
+（`BandService.instance.router`）与同一入口 `BandRouter.handleRaw(rawJson, session: …)`：
 解码 → 处理 `req` → 返回响应。因此两条传输路径**行为一致**，且 `req.id` 的 LRU(64)
-去重**跨连接、跨路径**幂等。手环侧产生的事件经 `router.onOutgoing` 广播给全部 Windows 客户端，
+去重**跨连接、跨路径**幂等。下行帧经 `router.onOutgoing` 按 `BandEnvelope.target` **定向投递**：
+全局事件（`player.*` 等，`target == null`）广播给全部在线会话；请求-响应类（`xfer.chunk` 分片、
+`sys.hello_ack` 等，`target == 会话 id`）只回发发起该请求的连接（v0.14.1 修正串扰，见 §3.3 / 安全边界）。
 Windows 侧命令产生的状态变化同样回推给手环（§阶段 5）。
 
 **启用步骤（手机端）**
@@ -561,8 +572,10 @@ Windows 侧命令产生的状态变化同样回推给手环（§阶段 5）。
 |---|---|
 | 默认状态 | **默认关闭**，须用户在 App 内显式开启（持久化键 `band_relay_enabled`） |
 | 监听范围 | 仅绑定 `NetworkInterface.list()` 选出的**私网地址**，**绝不绑定 `0.0.0.0`**；不监听公网 |
-| 来源限制 | 升级前校验远端地址，**非私网来源一律拒绝**（HTTP 403） |
+| 来源限制 | 升级前校验远端地址，**非私网来源一律拒绝**（HTTP 403）；**回环来源（`127.0.0.0/8`、`::1`）亦一律拒绝**（v0.14.1 收紧；仅保留私网 / 链路本地 / IPv4-mapped 判定） |
 | 令牌 | 开启时生成一次性、可轮换令牌；首次连接**必须携带并通过校验**，否则立即断开（HTTP 401） |
+| 会话就绪闸门 | 连接建立后**必须**先 `sys.hello`；READY 之前仅放行 `sys.*`，其余方法回 `err E_NOT_READY` 且无副作用（v0.14.1；见 §3.3） |
+| 定向投递 | 请求-响应类（`res`、`xfer.chunk`、`sys.hello_ack`）**只回发发起该请求的连接**；仅真正的全局事件（`player.*` 等）才广播（v0.14.1） |
 | 令牌比较 | 常量时间比较，降低时序侧信道 |
 | 日志 | **不将令牌写入任何日志** |
 | 生命周期 | 关闭即停监听、断连接、令牌失效 |
@@ -579,7 +592,7 @@ Windows 侧命令产生的状态变化同样回推给手环（§阶段 5）。
 | 保活 / 重同步 | 建议 `sys.ping` 每 10s、`state.get` 每 15s（§3.11） |
 | 请求 id | 使用 `w-` 前缀（如 `w-0b12-0001`），避免与手环 `b-` 冲突 |
 | 握手超时 | 连接建立后 5s 内未收到 `sys.hello` 会被服务端关闭（WS 关闭码 1008） |
-| 错误响应 | 非法帧直接丢弃（`E_BADREQ` 语义）；未知方法 / 能力缺失回 `err`（§3.7），错误码语义与手环侧一致 |
+| 错误响应 | 非法帧直接丢弃（`E_BADREQ` 语义）；未知方法 / 能力缺失回 `err`（§3.7）；**握手前发非 `sys.*` 方法回 `err E_NOT_READY`**（§3.3 会话就绪闸门），错误码语义与手环侧一致 |
 
 > **与 §4.3 原文的差异**：原文提到「6 位配对码 + `sys.hello{pair}`」。本实现改为
 > **连接期令牌鉴权**（URL/头部携带），更贴合「首次连接必须携带令牌否则立即断开」的安全要求；

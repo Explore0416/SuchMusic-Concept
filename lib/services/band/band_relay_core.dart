@@ -160,6 +160,8 @@ class LanRelayCore {
     );
     _conns[connectionId] = conn;
     _last = conn;
+    // 新连接一律从「未就绪」开始（清掉可能复用的连接 id 的历史就绪状态）→ 强制先握手。
+    router.resetSession(connectionId);
     lastConnectionSummary = '已连接 ${conn.remoteAddress}';
     return const RelayDecision.accept();
   }
@@ -167,6 +169,8 @@ class LanRelayCore {
   /// 收到一帧（文本 [String] 或二进制 `List<int>`）：解码 → 统一路由 → 返回需回送的帧。
   ///
   /// 与手环 interconnect 路径共用 [BandRouter.handleRaw]，**行为完全一致**。
+  /// 以**连接 id 作为会话标识**传入路由器，从而让「会话就绪闸门」与「定向投递」按连接生效
+  /// （A 连接未握手 → 其命令被拒；A 触发的分片只回发 A）。
   /// 无响应（res/err/evt 或非法帧）时返回空列表。
   Future<List<String>> onFrame(String connectionId, Object frame) async {
     final conn = _conns[connectionId];
@@ -178,13 +182,14 @@ class LanRelayCore {
 
     _maybeAdvanceHandshake(conn, raw);
 
-    final response = await router.handleRaw(raw);
+    final response = await router.handleRaw(raw, session: connectionId);
     return response == null ? const <String>[] : <String>[response];
   }
 
-  /// 连接关闭：从登记表移除，状态置 [RelayConnState.closed]。
+  /// 连接关闭：从登记表移除，状态置 [RelayConnState.closed]，并清除会话就绪状态。
   void onClose(String connectionId) {
     final conn = _conns.remove(connectionId);
+    router.resetSession(connectionId);
     if (conn != null) {
       conn.state = RelayConnState.closed;
       lastConnectionSummary = '已断开 ${conn.remoteAddress}';

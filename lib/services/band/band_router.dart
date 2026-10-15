@@ -7,7 +7,8 @@
 /// - 信封编解码（复用 [BandEnvelope]）与**幂等去重**（最近 64 个 `req.id` 的 LRU，
 ///   重复命令直接回放缓存响应、不重复执行——**保证重复点「下一首」不会跳多首**）；
 /// - 版本 / 能力协商与能力门禁；
-/// - 大载荷分片（`xfer.chunk`）。
+/// - **会话就绪闸门**：会话 READY（成功 `sys.hello`）之前仅放行 `sys.*`，其余回 `E_NOT_READY`；
+/// - 大载荷分片（`xfer.chunk`）与**定向投递**（分片只回发触发它的会话）。
 ///
 /// 依赖通过 [BandPlayerPort] 抽象注入，便于确定性单测（时钟亦可注入）。
 library;
@@ -21,6 +22,22 @@ import '../audio_player_service.dart';
 import '../sources/source_manager.dart';
 import 'band_chunk.dart';
 import 'band_protocol.dart';
+
+/// 手环（interconnect）会话的固定标识。
+///
+/// `BandService` 在调用 [BandRouter.handleRaw] 时以该值作为会话 id——与局域网 WS 的
+/// 每连接会话（连接 id）区分开，从而让「会话就绪闸门」与「定向投递」在两条路径上一致生效。
+const String kBandSession = 'band';
+
+/// 计算下行帧 [env] 应投递的会话集合（纯函数，供各传输层复用，便于单测）。
+///
+/// - [BandEnvelope.target] 为 `null` → 全局事件，投递给 [onlineSessions] 中的**全部**会话（广播）；
+/// - 非 `null` → 仅投递给该目标会话；目标不在线则返回空集（丢弃，避免串扰）。
+Set<String> outgoingTargets(BandEnvelope env, Iterable<String> onlineSessions) {
+  final target = env.target;
+  if (target == null) return onlineSessions.toSet();
+  return onlineSessions.contains(target) ? <String>{target} : <String>{};
+}
 
 /// 播放器端口：把「手环命令落地」与「状态事件源」抽象出来。
 ///
@@ -258,6 +275,12 @@ class BandRouter {
       StreamController<BandEnvelope>.broadcast();
   final List<StreamSubscription<dynamic>> _subs = [];
 
+  /// 已就绪的会话集合（成功完成 `sys.hello` 协商的会话 id）。
+  ///
+  /// 该状态**按会话隔离**：一个会话握手成功不会让其它会话“顺手”变为就绪，
+  /// 从而在多客户端（局域网 WS）场景下仍能强制「先握手」。
+  final Set<String> _readySessions = <String>{};
+
   /// 会话协议版本（协商后固定；未协商时为 null）。
   int? sessionVersion;
 
@@ -311,12 +334,26 @@ class BandRouter {
   /// 是否已绑定播控端口。
   bool get hasPort => _port != null;
 
+  /// 会话是否已就绪（已成功完成 `sys.hello` 协商）。
+  bool isSessionReady(String session) => _readySessions.contains(session);
+
+  /// 重置会话就绪状态（清空 → 需重新握手）。
+  ///
+  /// 传输层在**建立连接 / 重连 / 断开**时调用：避免连接 id 复用导致新连接“继承”上一次的
+  /// 就绪状态（否则可绕过握手闸门）。
+  void resetSession(String session) => _readySessions.remove(session);
+
   /// 传输无关的**统一入口**：把来自任一传输（手环 interconnect / 局域网 WS）的原始帧
   /// （UTF-8 JSON 字符串）解码后路由，返回需回送的响应帧 JSON；无需回执时返回 null。
   ///
   /// 两条传输路径共用本方法 → **行为一致**；`req.id` 去重发生在 [handleRequest] 上，
   /// 故同样跨连接幂等。
-  Future<String?> handleRaw(String raw) async {
+  ///
+  /// [session] 为发起该帧的会话标识（手环传 [kBandSession]，局域网 WS 传连接 id）。
+  /// **非 null 时启用「会话就绪闸门」**：未完成 `sys.hello` 的会话发非 `sys.*` 方法会被
+  /// 拒绝（`E_NOT_READY`），且不产生任何副作用。为 null 表示进程内直连（纯单测 / 内部调用），
+  /// 不做闸门——**所有外部传输都必须传入真实会话 id**。
+  Future<String?> handleRaw(String raw, {String? session}) async {
     BandEnvelope env;
     try {
       env = BandEnvelope.decode(raw);
@@ -326,33 +363,59 @@ class BandRouter {
       return null; // 非法 JSON：丢弃
     }
     if (env.type != 'req') return null; // res/err/evt 无需回执
-    final res = await handleRequest(env);
+    final res = await handleRequest(env, session: session);
     return res.encode();
   }
 
-  /// 处理一条手环 `req`：幂等去重后分发，并缓存响应。
-  Future<BandEnvelope> handleRequest(BandEnvelope req) async {
+  /// 处理一条手环 `req`：**会话就绪闸门 → 幂等去重 → 分发**，并缓存响应。
+  ///
+  /// [session] 语义同 [handleRaw]。
+  ///
+  /// 注：`sys.hello` **不参与** LRU 去重——握手必须对**发起它的会话**生效（幂等），否则
+  /// 相同 `req.id` 的握手被跨会话去重回放时，新会话不会被登记为就绪，其后续命令会被闸门
+  /// 全部拒绝。命令类方法（`playback.*` / `queue.*` …）的去重语义保持不变。
+  Future<BandEnvelope> handleRequest(BandEnvelope req,
+      {String? session}) async {
     final id = req.id;
-    if (id != null) {
+    final method = req.method;
+    final isHello = method == 'sys.hello';
+
+    // ── 会话就绪闸门（READY 之前仅放行 `sys.*`）────────────────────────────
+    // 该判定**先于**去重与分发：未握手阶段的拒绝（a）不产生任何副作用，
+    // （b）不写进去重缓存，故「握手后同 id 重发」仍能正常执行——不破坏 `req.id` 幂等语义。
+    if (session != null &&
+        method != null &&
+        !isSessionReady(session) &&
+        !BandProtocol.isPreReadyMethod(method)) {
+      return BandEnvelope.error(id ?? '', BandErrorCode.notReady,
+          'session not ready: sys.hello required before $method');
+    }
+
+    if (id != null && !isHello) {
       final cached = _dedup.get(id);
       if (cached != null) return cached; // 幂等：重复 id 直接回放，不重复执行
     }
     BandEnvelope res;
     try {
-      res = await _dispatch(req);
+      res = await _dispatch(req, session);
     } catch (e) {
       res = BandEnvelope.error(req.id ?? '', BandErrorCode.internal, e.toString());
     }
-    if (id != null) _dedup.put(id, res);
+    if (id != null && !isHello) _dedup.put(id, res);
     return res;
   }
 
   /// 主动推送事件（供 `BandService` / UI 使用）。
-  void pushEvent(String event, Map<String, dynamic> payload, {String? cap}) {
+  ///
+  /// [target] 为内部路由提示：非空表示**定向投递**给该会话（如某请求触发的分片），
+  /// 为 null 表示全局事件（广播给全部会话）。详见 [outgoingTargets]。
+  void pushEvent(String event, Map<String, dynamic> payload,
+      {String? cap, String? target}) {
     final need = cap ?? BandProtocol.eventCap(event);
     // 能力门禁：手环未协商到该能力则不发送该事件（§3.3 降级）
     if (need != null && !effectiveCaps.contains(need)) return;
-    _outgoing.add(BandEnvelope.event(event, payload: payload, id: _nextId(), ts: _clock()));
+    _outgoing.add(BandEnvelope.event(event,
+        payload: payload, id: _nextId(), ts: _clock(), target: target));
   }
 
   /// 生成全量状态快照（§3.5.1）。
@@ -383,6 +446,7 @@ class BandRouter {
   void dispose() {
     detach();
     _dedup.clear();
+    _readySessions.clear();
     _outgoing.close();
   }
 
@@ -419,7 +483,7 @@ class BandRouter {
 
   // ── 请求分发 ──────────────────────────────────────────────
 
-  Future<BandEnvelope> _dispatch(BandEnvelope req) async {
+  Future<BandEnvelope> _dispatch(BandEnvelope req, String? session) async {
     final id = req.id ?? '';
     final method = req.method;
     if (method == null || method.isEmpty) {
@@ -443,7 +507,7 @@ class BandRouter {
 
     switch (method) {
       case 'sys.hello':
-        return _handleHello(id, req.payload);
+        return _handleHello(id, req.payload, session);
       case 'sys.ping':
         return BandEnvelope.response(id, payload: {'t': _clock()});
       case 'state.get':
@@ -561,7 +625,8 @@ class BandRouter {
             'total': results.length,
             'results': results,
           };
-          final payload = _maybeChunk('search_result', entity, {'query': keyword});
+          final payload = _maybeChunk('search_result', entity, {'query': keyword},
+              target: session);
           return BandEnvelope.response(id, payload: payload);
         }
       case 'search.suggest':
@@ -595,8 +660,9 @@ class BandRouter {
           final before = (req.payload['before'] as num?)?.toInt() ?? 3;
           final after = (req.payload['after'] as num?)?.toInt() ?? 8;
           final entity = _lyricWindow(port, songId, index, before, after);
-          final payload =
-              _maybeChunk('lyric_window', entity, {'songId': songId, 'start': entity['start']});
+          final payload = _maybeChunk(
+              'lyric_window', entity, {'songId': songId, 'start': entity['start']},
+              target: session);
           return BandEnvelope.response(id, payload: payload);
         }
 
@@ -639,7 +705,11 @@ class BandRouter {
   }
 
   /// 握手：版本 / 能力协商 + 回 `sys.hello_ack`。
-  BandEnvelope _handleHello(String id, Map<String, dynamic> payload) {
+  ///
+  /// 协商成功后把 [session] 标记为**就绪**（解除会话就绪闸门）；[session] 为 null 表示
+  /// 进程内直连，不登记会话。
+  BandEnvelope _handleHello(
+      String id, Map<String, dynamic> payload, String? session) {
     final bandProto = (payload['proto'] as List?)
             ?.map((e) => (e as num).toInt())
             .toList() ??
@@ -665,12 +735,16 @@ class BandRouter {
     sessionVersion = v;
     bandCaps = caps;
     effectiveCaps = BandProtocol.negotiateCaps(caps, kAllCaps);
+    // 握手成功 → 该会话就绪（仅对该会话生效，不波及其它连接的闸门状态）。
+    if (session != null) _readySessions.add(session);
 
-    // 回 hello_ack 事件（旁路能力门禁：握手帧无条件发送）
+    // 回 hello_ack 事件（旁路能力门禁：握手帧无条件发送）。
+    // **定向投递**给发起握手的会话（避免广播给无关的其它连接）。
     _outgoing.add(BandEnvelope.event(
       'sys.hello_ack',
       id: _nextId(),
       ts: _clock(),
+      target: session,
       payload: <String, dynamic>{
         'proto': kSupportedProtocols,
         'caps': effectiveCaps,
@@ -687,11 +761,15 @@ class BandRouter {
   }
 
   /// 大载荷分片：超阈值返回 `__chunked` 占位，并经 `xfer.chunk` 事件下发实体。
+  ///
+  /// [target] 为发起该请求的会话：分片**只定向投递**给该会话，绝不广播给其它连接
+  /// （否则多客户端时 A 触发的搜索分片可能被 B 误组装）。
   Map<String, dynamic> _maybeChunk(
     String kind,
     Map<String, dynamic> entity,
-    Map<String, dynamic>? meta,
-  ) {
+    Map<String, dynamic>? meta, {
+    String? target,
+  }) {
     final text = jsonEncode(entity);
     final bytes = utf8.encode(text);
     if (bytes.length <= BandChunkCodec.chunkMaxBytes) {
@@ -701,7 +779,7 @@ class BandRouter {
     final frames =
         BandChunkCodec.splitText(tid: tid, kind: kind, text: text, meta: meta);
     for (final frame in frames) {
-      pushEvent('xfer.chunk', frame);
+      pushEvent('xfer.chunk', frame, target: target);
     }
     return <String, dynamic>{
       '__chunked': true,

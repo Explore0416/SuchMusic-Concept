@@ -4,8 +4,8 @@
 /// 1. **配对令牌**：开启中继时生成一次性、可轮换的令牌；客户端首次连接必须携带并通过
 ///    校验，否则立即断开。比较采用「常量时间」实现，减少时序侧信道；调用方**不得**把
 ///    令牌写入任何日志（本文件不打印任何内容）。
-/// 2. **私网来源限制**：仅接受私网 / 回环 / 链路本地来源，其余一律拒绝——手机端中继
-///    只服务局域网，**不监听公网**。
+/// 2. **来源限制**：仅接受**私网 / 链路本地**来源，其余（含**回环**与一切公网地址）一律
+///    拒绝——手机端中继只服务局域网，**不监听公网、也不信任本机回环来源**。
 library;
 
 import 'dart:math';
@@ -51,11 +51,13 @@ class RelaySecurity {
     return tokenEquals(expected, presented);
   }
 
-  /// 是否为「私网 / 回环 / 链路本地」地址（同时支持 IPv4 与 IPv6）。
+  /// 是否为「可信来源」地址（同时支持 IPv4 与 IPv6）。
   ///
   /// 允许：`10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、`169.254.0.0/16`、
-  /// `127.0.0.0/8`、`::1`、`fe80::/10`、`fc00::/7`，以及 IPv4-mapped IPv6
-  /// （`::ffff:192.168.1.5`）。其余（含一切公网地址）一律视为非私网。
+  /// `fe80::/10`、`fc00::/7`，以及 IPv4-mapped IPv6（`::ffff:192.168.1.5`）。
+  /// **明确拒绝回环**（`127.0.0.0/8`、`::1`）与一切公网地址——与「拒绝回环」的安全目标一致。
+  ///
+  /// 命名保留 [isPrivate]（既有调用面），语义为「私网 / 链路本地（不含回环）」。
   static bool isPrivate(String? ip) {
     if (ip == null || ip.isEmpty) return false;
     var addr = ip;
@@ -81,13 +83,12 @@ class RelaySecurity {
     if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
     if (a == 192 && b == 168) return true; // 192.168.0.0/16
     if (a == 169 && b == 254) return true; // 169.254.0.0/16（链路本地）
-    if (a == 127) return true; // 127.0.0.0/8（回环）
+    // 显式拒绝回环 127.0.0.0/8（安全目标：不接受回环来源）
     return false;
   }
 
   static bool _isPrivateV6(String ip) {
     final lower = ip.toLowerCase();
-    if (lower == '::1') return true; // 回环
     // IPv4-mapped：::ffff:192.168.1.5
     if (lower.startsWith('::ffff:')) {
       return _isPrivateV4(lower.substring(7));
@@ -97,6 +98,7 @@ class RelaySecurity {
     if (hextet == null) return false;
     if (hextet >= 0xfe80 && hextet <= 0xfebf) return true; // fe80::/10 链路本地
     if (hextet >= 0xfc00 && hextet <= 0xfdff) return true; // fc00::/7 唯一本地
+    // 显式拒绝回环 ::1（安全目标：不接受回环来源）
     return false;
   }
 

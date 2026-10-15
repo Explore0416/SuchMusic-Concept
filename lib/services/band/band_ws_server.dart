@@ -5,7 +5,9 @@
 /// - 升级前先经 [LanRelayCore.handleConnect] 完成「路径 / 私网来源 / 令牌」三重校验，
 ///   未通过者直接以 HTTP 状态码拒绝（不升级、不留连接）；
 /// - 文本帧与二进制帧都能接收：文本按 JSON 原样处理，二进制按 UTF-8 解码为 JSON；
-/// - 订阅共享 [BandRouter.onOutgoing]，把手环事件与命令响应**广播**给全部 Windows 客户端。
+/// - 订阅共享 [BandRouter.onOutgoing]，按 [BandEnvelope.target] **定向投递**：
+///   全局事件（`target == null`，如 `player.*`）广播给全部客户端；请求-响应类
+///   （`xfer.chunk` 分片、`sys.hello_ack` 等定向帧）**只回发触发它的那条连接**。
 ///
 /// 传输被收敛为可注入的 [RelaySocket] 抽象，便于测试替换（核心逻辑则在
 /// `band_relay_core.dart` 内以纯逻辑单测覆盖，不依赖真实网络）。
@@ -128,7 +130,7 @@ class BandWsServer {
 
     _core = core;
     _server = server;
-    _outgoingSub = router.onOutgoing.listen(_broadcast);
+    _outgoingSub = router.onOutgoing.listen(_deliver);
     // 周期扫描握手超时，关闭未及时 sys.hello 的连接。
     _handshakeTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       for (final id in core.handshakeTimeouts()) {
@@ -146,6 +148,8 @@ class BandWsServer {
     await _outgoingSub?.cancel();
     _outgoingSub = null;
     for (final sock in List<RelaySocket>.from(_sockets)) {
+      // 先注销会话（清理共享 BandRouter 中的就绪状态），再关闭连接。
+      _core?.onClose(sock.id);
       await sock.close(1001, 'server closing');
     }
     _sockets.clear();
@@ -226,10 +230,18 @@ class BandWsServer {
     onConnectionChanged?.call();
   }
 
-  void _broadcast(BandEnvelope env) {
+  /// 下行帧投递：按 [BandEnvelope.target] 决定广播还是定向。
+  ///
+  /// 线协议字段不可变，`target` 仅为本进程内的路由提示（`BandEnvelope.target`，
+  /// **不参与序列化**）。投递裁决复用 [outgoingTargets]（纯函数，另在单测中覆盖）。
+  void _deliver(BandEnvelope env) {
+    final sockets = List<RelaySocket>.from(_sockets);
+    final targets =
+        outgoingTargets(env, sockets.map((s) => s.id));
+    if (targets.isEmpty) return; // 定向帧但目标连接不在线 → 丢弃（不误发给他人）
     final frame = env.encode();
-    for (final s in List<RelaySocket>.from(_sockets)) {
-      s.sendText(frame);
+    for (final s in sockets) {
+      if (targets.contains(s.id)) s.sendText(frame);
     }
   }
 

@@ -103,6 +103,7 @@ class BandEnvelope {
     this.event,
     this.payload = const {},
     this.ts,
+    this.target,
   });
 
   /// 协议主版本。
@@ -125,6 +126,16 @@ class BandEnvelope {
 
   /// 发送时间戳（ms），可空。
   final int? ts;
+
+  /// **内部路由提示**（不参与序列化，协议字段仍冻结）：本帧应投递的目标会话 id。
+  ///
+  /// - `null` → 全局事件（如 `player.*` 状态变化），传输层**广播**给全部在线会话；
+  /// - 非 `null` → 定向帧（如某次请求触发的 `xfer.chunk` 分片、`sys.hello_ack`），
+  ///   传输层**仅投递给该会话**。
+  ///
+  /// 仅在下行 `evt` 上使用；不影响 [encode] / [toJson] 的输出，[decode] 也不会设置它
+  /// （避免改动已冻结的线上协议）。见 §4.3.1「定向投递」。
+  final String? target;
 
   /// 请求构造。
   factory BandEnvelope.request(String id, String method,
@@ -150,15 +161,21 @@ class BandEnvelope {
       });
 
   /// 事件构造（id 可空）。
+  ///
+  /// [target] 为内部路由提示（不参与序列化）：非空表示定向投递给该会话。
   factory BandEnvelope.event(String event,
-          {Map<String, dynamic> payload = const {}, String? id, int? ts}) =>
+          {Map<String, dynamic> payload = const {},
+          String? id,
+          int? ts,
+          String? target}) =>
       BandEnvelope(
           v: kProtocolVersion,
           id: id,
           type: 'evt',
           event: event,
           payload: payload,
-          ts: ts);
+          ts: ts,
+          target: target);
 
   /// 序列化为 UTF-8 JSON 字符串（字段顺序稳定，便于抓包对照）。
   String encode() => jsonEncode(toJson());
@@ -314,4 +331,10 @@ class BandProtocol {
   static bool isKnownMethod(String method) =>
       kMethodCaps.containsKey(method) ||
       const {'sys.hello', 'sys.ping', 'state.get', 'song.info'}.contains(method);
+
+  /// **会话就绪闸门**：会话 READY（已成功 `sys.hello`）之前允许的方法。
+  ///
+  /// 仅放行 `sys.*`（`sys.hello` / `sys.ping` 及必要的系统方法）；其余一律由
+  /// [BandRouter] 拒绝并回 `E_NOT_READY`（§3.3「交集为空 → 仅允许 `sys.*`」的推广）。
+  static bool isPreReadyMethod(String method) => method.startsWith('sys.');
 }
