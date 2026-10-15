@@ -18,6 +18,7 @@ import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
 import 'about_page.dart';
+import 'band_page.dart';
 import '../widgets/kugou_login_dialog.dart';
 import '../widgets/sound_effect_sheet.dart';
 
@@ -178,6 +179,14 @@ class _SettingsPageState extends State<SettingsPage> {
     // 全页重建，且其触发时刻恰好与历史上「关闭面板后整屏灰屏」重合，已移除。
     // 若日后需要在设置页展示当前音效，请在此按返回值按需刷新。
     await showSoundEffectSheet(context);
+  }
+
+  /// 手环：进入绑定与音乐控制设置页。
+  void _openBand() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const BandPage()),
+    );
   }
 
   /// 只读查看最近全局异常日志（仅本机存储，绝不上传）。
@@ -601,6 +610,32 @@ class _SettingsPageState extends State<SettingsPage> {
                                       color: Colors.black, fontSize: 16 * s)),
                               SizedBox(height: 2 * s),
                               Text('均衡器预设：流行 / 人声 / 重低音 / 环绕',
+                                  style: TextStyle(
+                                      color: const Color(0xFF838383),
+                                      fontSize: 11 * s)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right,
+                            size: 20, color: Color(0xFFCCCCCC)),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 10 * s),
+                  _buildCard(
+                    s: s,
+                    onTap: _openBand,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('手环',
+                                  style: TextStyle(
+                                      color: Colors.black, fontSize: 16 * s)),
+                              SizedBox(height: 2 * s),
+                              Text('小米手环：绑定与音乐控制（仅本机链路）',
                                   style: TextStyle(
                                       color: const Color(0xFF838383),
                                       fontSize: 11 * s)),

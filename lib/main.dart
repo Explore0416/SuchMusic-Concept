@@ -10,6 +10,7 @@ import 'screens/home_page.dart';
 import 'screens/profile_page.dart';
 import 'services/audio_player_handler.dart';
 import 'services/audio_player_service.dart';
+import 'services/band/band_service.dart';
 import 'services/local_audio_intent_service.dart';
 import 'services/local_lyric_service.dart';
 import 'services/play_history_service.dart';
@@ -83,6 +84,9 @@ void main() async {
   // AudioPlayerService 监听到 just_audio 会话就绪后调用 setSessionId 触发
   // （效果器必须绑定 App 自己的播放会话，而非全局混音会话 0）。
   unawaited(SoundEffectService.instance.restore());
+  // 手环桥接：读取「启用手环控制」开关，按需把 AudioPlayerService 接入手环链路
+  // （与 AudioPlayerHandler 同源订阅，命令直接落到 service）。SDK 未就绪时静默不可用。
+  unawaited(BandService.instance.init());
   // 酷狗设备注册（取播放直链前置，未注册会被风控拒绝）；
   // 后台进行、失败静默，取链时会自动再补一次。
   unawaited(KugouDeviceService.instance.init());

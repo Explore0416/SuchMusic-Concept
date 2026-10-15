@@ -1,0 +1,103 @@
+sequenceDiagram
+    autonumber
+    participant B as 手环快应用(Vela JS)
+    participant P as 手机 WearBridge(Kotlin)
+    participant R as BandRouter(Dart)
+    participant A as AudioPlayerService
+    participant W as Windows(Electron)
+
+    Note over B,A: 阶段0 · 连接建立与握手（含版本/能力协商）
+    B->>P: interconnect.instance() + getReadyState 轮询(2s)
+    P-->>B: onopen(isReconnected=false)
+    B->>P: req sys.hello {role:"band", proto:[1], caps:[playback,queue,search,lyric,playmode,transfer], fw, model, rpk}
+    P->>R: 解析 hello → negotiateVersion/Caps
+    R-->>P: v=1, caps=交集
+    P->>B: evt sys.hello_ack {proto:[1], caps:[...], server:{app,ver}, clock}
+    B->>P: req state.get {}
+    P->>R: 读取快照
+    R->>A: currentSong / state / mode / position
+    A-->>R: StateSnapshot
+    R-->>P: payload
+    P->>B: res state.get {StateSnapshot}
+
+    Note over B,A: 阶段1 · 播放控制（幂等 · 不重复切歌）
+    B->>P: req playback.next (id=b-7fa1-0007)
+    P->>R: route(method, id)
+    R->>R: LRU 去重(id)：未处理 → 执行；重复 → 回放缓存
+    R->>A: playNext()
+    A-->>R: onCurrentSongChanged(song)
+    R-->>P: evt player.song {song}
+    P->>B: evt player.song {song}
+    R-->>P: evt player.state {state:"playing"}
+    P->>B: evt player.state {state:"playing"}
+    R-->>P: res payload {ok:true, song}
+    P->>B: res playback.next {ok:true, song}
+
+    Note over B,A: 阶段2 · 状态同步（进度节流 ≤1Hz）
+    loop 每秒（或 seek/切歌立即）
+        A-->>R: onPositionChanged(pos)
+        R-->>P: evt player.progress {positionMs, durationMs, ts}
+        P->>B: evt player.progress {positionMs, durationMs, ts}
+        B->>B: 本地插值渲染，勿频繁重排
+    end
+
+    Note over B,A: 阶段3 · 歌词（增量 + 窗口 + 分片）
+    A-->>R: onLyricChanged(line)
+    R->>A: currentLyricIndex
+    A-->>R: index
+    R-->>P: evt lyric.line {songId, index, text, t}
+    P->>B: evt lyric.line {songId, index, text, t}
+    B->>P: 进入歌词页 req lyric.window {index, before:3, after:8}
+    P->>R: 切片 lyrics[start..end]
+    R-->>P: LyricWindow (bytes > 900 → __chunked)
+    P->>B: res lyric.window {__chunked:true, tid:t-0007, total:N, bytes, crc32}
+    P->>B: evt xfer.chunk {phase:"header", tid, total, bytes, crc32, meta}
+    loop seq = 0..N-1
+        P->>B: evt xfer.chunk {phase:"data", tid, seq, txt|b64}
+    end
+    P->>B: evt xfer.chunk {phase:"end", tid, total, crc32}
+    B->>B: 组装 + crc32 校验
+    alt 校验失败/缺片
+        B->>P: req xfer.nack {tid, seq}
+        P->>B: evt xfer.chunk {phase:"data", tid, seq, ...} (仅重发缺失)
+    end
+    Note over B: 离开歌词页即释放窗口，不落盘
+
+    Note over B,A: 阶段4 · 手环发起搜索（无键盘输入方案）
+    B->>P: req search.hot {}
+    P->>R: hotSearch()
+    R->>A: SourceManager().source.hotSearch()
+    A-->>R: [str]
+    R-->>P: payload
+    P->>B: res search.hot {items:[...]}
+    B->>P: req search.song {keyword:"晴天 周杰伦", limit:10}
+    P->>R: source.search(keyword, limit)
+    R->>A: SourceManager().source.search(...)
+    A-->>R: List<SongModel>
+    R-->>P: SearchResult（超阈值 → __chunked）
+    P->>B: res search.song {__chunked:true, tid:t-0008, ...}
+    P->>B: evt xfer.chunk {header/data*/end}
+    B->>B: 组装结果列表
+    Note over P,B: 备选：手机搜索页「发送到手环」 → evt search.preset {keyword}
+    P->>B: evt search.preset {keyword}
+
+    Note over B,W: 阶段5 · Windows 经手机中转
+    W->>P: ws connect (token) + req sys.hello {role:"windows", proto:[1], caps:[...]}
+    P-->>W: ws evt sys.hello_ack {caps}
+    W->>P: ws req playback.play (id=w-0b12-0001)
+    P->>R: route(origin=w)
+    R->>A: resume()
+    A-->>R: onStateChanged(playing)
+    R-->>P: evt player.state
+    P->>B: evt player.state (origin b)
+    P-->>W: ws evt player.state (origin w)
+    Note over W: 反向：手环命令同样经 R 广播给 Windows
+
+    Note over B,P: 阶段6 · 断线重连与重同步
+    P--x B: 链路断开
+    B->>B: onclose/onerror → CONNECTING（退避 1s→2s→4s，上限 8s）
+    B->>P: getReadyState 轮询 → onopen(isReconnected=true)
+    B->>P: req sys.hello（重新握手）
+    P->>B: evt sys.hello_ack
+    B->>P: req state.get（全量重同步）
+    P->>B: res state.get {StateSnapshot}

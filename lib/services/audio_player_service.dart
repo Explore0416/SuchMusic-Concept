@@ -656,6 +656,20 @@ class AudioPlayerService {
     _playModeController.add(_playMode);
   }
 
+  /// 直接设置播放模式（手环 `playback.setMode` 的落地方法，见 ARCH §4.2）。
+  ///
+  /// 与 [togglePlayMode] 语义一致：改变模式并广播 `onPlayModeChanged`。
+  /// 切换到乱序时同样预生成洗牌队列，保证行为与手动切换完全一致。
+  /// **新增方法，不改变既有行为**。
+  void setPlayMode(PlayMode mode) {
+    if (_playMode == mode) return;
+    _playMode = mode;
+    if (mode == PlayMode.shuffle) {
+      _generateShuffleQueue();
+    }
+    _playModeController.add(_playMode);
+  }
+
   void _generateShuffleQueue() {
     if (_playlist.isEmpty) return;
     _shuffleQueue = List.generate(_playlist.length, (i) => i);

@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowManager
+import com.lightningteam.suchmusic.band.BandChannelBridge
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -30,6 +31,12 @@ class MainActivity : AudioServiceActivity() {
      * 与当前音频会话 ID——因此不能每次调用都重建。
      */
     private val soundFx: SoundEffectBridge by lazy { SoundEffectBridge(applicationContext) }
+
+    /**
+     * 手环桥：同样**提升为实例字段**长期持有（连接、监听、路由状态需跨调用保持）。
+     * 没有官方 `xms-wearable-lib` AAR 时内部回退 Noop 适配器，通道仍可正常应答。
+     */
+    private val bandBridge: BandChannelBridge by lazy { BandChannelBridge(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -180,6 +187,9 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // 手环桥接（小米手环）：MethodChannel + EventChannel，SDK 调用经薄适配层反射访问
+        bandBridge.register(flutterEngine)
 
         // 多品牌灵动胶囊 / 小窗增强（小米 / vivo / OPPO / 荣耀 / 通用兜底）
         flutterEngine.plugins.add(BrandIslandBridge())
