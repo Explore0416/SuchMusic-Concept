@@ -1,12 +1,14 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
+import '../services/crash_log_service.dart';
 import '../services/kugou_credential_service.dart';
 import '../services/notification_lyric_service.dart';
 import '../services/settings_backup_service.dart';
@@ -170,9 +172,47 @@ class _SettingsPageState extends State<SettingsPage> {
   // ── 音效 / 配置备份 ──────────────────────────────────────
 
   Future<void> _openSoundEffect() async {
+    // 面板返回值为「预设 code / off / null」，而设置页并不展示当前音效，
+    // 因此**无需**为返回值重建整页。原实现无条件 `setState(() {})` 是一次多余的
+    // 全页重建，且其触发时刻恰好与历史上「关闭面板后整屏灰屏」重合，已移除。
+    // 若日后需要在设置页展示当前音效，请在此按返回值按需刷新。
     await showSoundEffectSheet(context);
+  }
+
+  /// 只读查看最近全局异常日志（仅本机存储，绝不上传）。
+  Future<void> _openErrorLog() async {
+    final raw = await CrashLogService.instance.readAll();
     if (!mounted) return;
-    setState(() {});
+    final content = raw.trim().isEmpty ? '暂无异常记录' : raw.trim();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('错误日志（只读）'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              content,
+              style: const TextStyle(fontSize: 11, height: 1.4),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: content));
+              Navigator.of(ctx).pop();
+              if (mounted) DesignToast.show(context, '已复制错误日志');
+            },
+            child: const Text('复制'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openBackupDialog() async {
@@ -627,6 +667,40 @@ class _SettingsPageState extends State<SettingsPage> {
                         color: Colors.black,
                         fontSize: 16 * s,
                       ),
+                    ),
+                  ),
+                  SizedBox(height: 10 * s),
+                  _buildCard(
+                    s: s,
+                    onTap: _openErrorLog,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '错误日志',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 16 * s,
+                                ),
+                              ),
+                              SizedBox(height: 2 * s),
+                              Text(
+                                '查看最近异常记录（仅本机，不上传）',
+                                style: TextStyle(
+                                  color: const Color(0xFF838383),
+                                  fontSize: 11 * s,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right,
+                            size: 20, color: Color(0xFFCCCCCC)),
+                      ],
                     ),
                   ),
                   // 退出登录（仅登录状态显示）

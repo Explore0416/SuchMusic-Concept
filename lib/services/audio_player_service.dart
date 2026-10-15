@@ -16,6 +16,7 @@ import 'local_lyric_service.dart';
 import 'lyrics_parser.dart';
 import 'music_api_service.dart';
 import 'notification_lyric_service.dart';
+import 'sound_effect_service.dart';
 import 'sources/source_manager.dart';
 
 // LyricLine / parseLrc 已提取至 lyrics_parser.dart，此处 re-export 保持既有引用兼容
@@ -192,6 +193,16 @@ class AudioPlayerService {
       _duration = dur ?? Duration.zero;
       _durationController.add(dur ?? Duration.zero);
     });
+
+    // 音效：监听 just_audio 的真实音频会话 ID。
+    // 这是修复「小米 13 等现代 ROM 挂全局混音导致音效不可用」的关键链路：
+    // 效果器必须绑定 App 自己的播放会话（sessionId），而非全局输出混音（0）。
+    // 会话变化（含首次就绪、切歌重建会话）时通知原生，让已选音效自动重新生效。
+    _player.androidAudioSessionIdStream.listen((id) {
+      if (id != null && id > 0) {
+        unawaited(SoundEffectService.instance.setSessionId(id));
+      }
+    });
   }
 
   static const _playlistFileName = 'playlist.json';
@@ -269,6 +280,11 @@ class AudioPlayerService {
   }
 
   final AudioPlayer _player = AudioPlayer();
+
+  /// 底层 just_audio / ExoPlayer 的真实音频会话 ID（由 `onAudioSessionIdChanged` 驱动）。
+  /// 音效（DynamicsProcessing）必须绑定此会话才能在主流安卓机型上生效；
+  /// 为空表示尚未创建播放会话（此时音效 apply 会失败，待会话就绪后自动重试）。
+  int? get androidAudioSessionId => _player.androidAudioSessionId;
 
   PlayerState _state = PlayerState.idle;
   SongModel? _currentSong;

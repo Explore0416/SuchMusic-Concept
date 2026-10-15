@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../utils/responsive.dart';
@@ -179,18 +181,115 @@ class DesignDialog {
   }
 }
 
-/// 设计稿风格轻提示（参照 cankao/1.txt：黑底白字圆角提示条，屏幕居中）
-/// 宽 261/430 屏宽、高 36、圆角 8、纯黑底、白字 15.6 号，2 秒后自动消失
+/// 设计稿风格轻提示（参照 cankao/1.txt：白底黑字圆角提示条，屏幕居中偏下）
+/// 宽 ≤ 屏宽 * 0.86、高 36、圆角 8、白底 + 轻投影、黑字 15.6 号，2 秒后自动消失。
+///
+/// **实现要点（健壮性，勿随意回退）**：
+/// - 使用**单个可复用的 [OverlayEntry]**：任意时刻最多一条全屏 layer，新提示到来时
+///   复用同一条目并复位 2 秒定时器，避免多条全屏 layer 叠加。
+/// - 条目内容**绝不引用调用方的 `BuildContext`**，只使用条目自身的 context。
+///   （历史教训：旧实现把调用方 context 闭包进 builder，调用方——如音效底部弹窗——
+///   被销毁后，条目在随后任意一次根 Overlay 重建时仍会执行
+///   `MediaQuery.of(已卸载 context)`，抛 `Null check operator used on a null value`，
+///   在 release 下表现为**整屏灰框 RenderErrorBox（0xF0C0C0C0）并自动恢复**。）
+/// - 移除操作**幂等**：定时器 / 手动关闭竞争、重复调用均安全。
+/// - 整体 try/catch 兜底 —— 该根 Overlay 条目在任何情况下都不得成为异常源。
 class DesignToast {
   DesignToast._();
 
+  /// 复用的条目（任意时刻至多一条）
+  static OverlayEntry? _entry;
+
+  /// 受管定时器（新提示到来时取消旧的，避免旧定时器提前移除新提示）
+  static Timer? _timer;
+
+  /// 复用的数据载体：条目通过 [ValueListenableBuilder] 监听其变化并刷新内容。
+  static final ValueNotifier<_ToastData?> _data =
+      ValueNotifier<_ToastData?>(null);
+
+  /// 显示一条轻提示（2 秒后自动消失；重复调用只刷新内容，不叠加）。
   static void show(BuildContext context, String text) {
-    final k = DesignDialog.s(context);
-    final overlay = Overlay.of(context, rootOverlay: true);
-    late final OverlayEntry entry;
-    entry = OverlayEntry(
-      builder: (_) => Positioned.fill(
-        child: IgnorePointer(
+    try {
+      final overlay = Overlay.of(context, rootOverlay: true);
+      // 调用方 context 此刻仍有效，仅取一次缩放系数（数字），不把 context 带进 builder。
+      final k = DesignDialog.s(context);
+      _data.value = _ToastData(text: text, k: k);
+
+      final entry = _entry;
+      if (entry == null) {
+        // 首次或上次已移除：新建条目并插入（全屏 Positioned.fill 作为条目根节点）。
+        // 注意：不要用 `!entry.mounted` 作为判断——insert 之后到首帧构建前，
+        // `OverlayEntry.mounted` 仍为 false，会导致同帧重复插入多条全屏 layer。
+        // `_dismiss()` 是唯一的移除点，且一定会把 `_entry` 置空，故 `_entry == null`
+        // 即代表「当前没有在屏条目」，可直接作为插入条件。
+        final created = OverlayEntry(
+          builder: (_) => Positioned.fill(
+            child: _DesignToastOverlay(data: _data),
+          ),
+        );
+        _entry = created;
+        overlay.insert(created);
+      } else {
+        // 复用同一条目：内容通过 ValueListenableBuilder 刷新，无需重新插入。
+        entry.markNeedsBuild();
+      }
+      // 复位定时器
+      _timer?.cancel();
+      _timer = Timer(const Duration(seconds: 2), _dismiss);
+    } catch (_) {
+      // 任何异常（如 context 已失效）都不得外溢：提示失败不影响主流程。
+    }
+  }
+
+  /// 幂等移除：可被定时器 / 外部安全地重复调用。
+  static void _dismiss() {
+    _timer?.cancel();
+    _timer = null;
+    final entry = _entry;
+    _entry = null;
+    if (entry == null) return;
+    try {
+      // 直接 remove：即便条目尚未完成首帧构建（mounted 仍为 false）也能正确移除，
+      // 避免「条目残留在 Overlay 中 + _entry 被置空」导致下次 show 叠加第二条 layer。
+      entry.remove();
+    } catch (_) {
+      // 条目已被移除 / 所在 Overlay 已销毁：忽略。
+    }
+  }
+
+  /// 测试专用：清空内部静态状态，避免用例之间相互影响。
+  @visibleForTesting
+  static void debugReset() {
+    _dismiss();
+    _data.value = null;
+  }
+}
+
+/// Toast 数据快照（值对象，避免把调用方 context 带进条目 builder）。
+class _ToastData {
+  const _ToastData({required this.text, required this.k});
+
+  final String text;
+
+  /// 缩放系数（显示时确定一次）
+  final double k;
+}
+
+/// Toast 内容层。**只使用自身 context**（根 Overlay 的 context，生命周期与条目一致），
+/// 因此不会因调用方被销毁而访问失效 context。
+class _DesignToastOverlay extends StatelessWidget {
+  const _DesignToastOverlay({required this.data});
+
+  final ValueNotifier<_ToastData?> data;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<_ToastData?>(
+      valueListenable: data,
+      builder: (context, value, _) {
+        if (value == null) return const SizedBox.shrink();
+        final k = value.k;
+        return IgnorePointer(
           child: Align(
             alignment: Alignment.bottomCenter,
             child: Padding(
@@ -199,7 +298,7 @@ class DesignToast {
                 color: Colors.transparent,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxWidth: MediaQuery.of(context).size.width * 0.86,
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.86,
                   ),
                   child: Container(
                     height: 36 * k,
@@ -217,7 +316,7 @@ class DesignToast {
                     ),
                     child: Center(
                       child: Text(
-                        text,
+                        value.text,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
@@ -234,12 +333,8 @@ class DesignToast {
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
-    overlay.insert(entry);
-    Future.delayed(const Duration(seconds: 2), () {
-      if (entry.mounted) entry.remove();
-    });
   }
 }

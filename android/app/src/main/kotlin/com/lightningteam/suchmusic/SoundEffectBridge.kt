@@ -7,8 +7,20 @@ import android.os.Build
 import android.util.Log
 
 /**
- * 音效桥：用系统 `android.media.audiofx.DynamicsProcessing`（API 28+，无需高级权限）
- * 绑定音频会话 0（全局输出处理），按预设写入 11 段前级 EQ + 多频段压缩（MBC）+ Limiter。
+ * 音效桥：用系统 `android.media.audiofx.DynamicsProcessing`（API 28+，无需高级权限）。
+ *
+ * **绑定的是 App 自己播放音频的会话**（由 just_audio / ExoPlayer 通过
+ * `AudioPlayer.androidAudioSessionId` 暴露，一路透传到本类）。
+ * 按预设写入 11 段前级 EQ + 多频段压缩（MBC）+ Limiter。
+ *
+ * 历史 Bug（已修复）：早期实现把效果器挂在 **会话 0（全局输出混音）** 上。
+ * AOSP 对会话 0 已有明确警告（`attaching a DynamicsProcessing to global output mix is
+ * deprecated`），且小米 HyperOS 等现代 ROM 会直接拒绝第三方 App 挂全局混音——
+ * `AudioEffect.native_setup` 返回 `ERROR_BAD_VALUE`，构造函数抛
+ * `IllegalArgumentException("Effect type: ... not supported.")`；即便侥幸不抛，
+ * 全局混音下 `getChannelCount()` 返回 0，随后 `Config(channelCount=0, ...)` 又会抛
+ * `IllegalArgumentException("channel resizing less than 1 not allowed")`。
+ * 两条路径都会走到 `catch` 并被静默吞掉，Dart 侧误报「当前设备暂不支持该音效」。
  *
  * 预设增益数组取自 HubeRSoundX 公开的 HxCore 曲线（README「关于算法 - HxCore」），
  * 仅做数值复用，不引入任何第三方依赖。
@@ -70,6 +82,17 @@ class SoundEffectBridge(private val context: Context) {
         val gains: FloatArray,
     )
 
+    /**
+     * 单个降级策略：决定 Config / Channel 使用哪种 variant，以及是否启用 MBC / Limiter。
+     * 前级 EQ 始终启用（音效主体）；postEq 始终关闭（避免与 preEq 叠加削波）。
+     */
+    private data class Strategy(
+        val name: String,
+        val variant: Int,
+        val withMbc: Boolean,
+        val withLimiter: Boolean,
+    )
+
     private val presets: List<Preset> = listOf(
         Preset("default", "默认", "不做任何增益，保持原声", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
         Preset("origin_voice", "原声人声", "突出人声与齿音，适合流行 / 人声", floatArrayOf(4f, 1.5f, -0.44f, 0.7f, 2f, -4.5f, 0.2f, 1.7f, 3f, 0.8f, 0f)),
@@ -82,12 +105,52 @@ class SoundEffectBridge(private val context: Context) {
     /** 当前生效的 DynamicsProcessing 实例（未启用时为 null） */
     private var effect: DynamicsProcessing? = null
 
-    /** 当前 preset code（关闭时为 `PRESET_OFF`），内存优先、prefs 兜底 */
+    /** 当前已生效的 preset code（关闭时为 `PRESET_OFF`），内存优先、prefs 兜底 */
     private var currentCode: String = readStoredCode()
 
-    /** DynamicsProcessing 是否可用（API 28+ 且系统实现存在） */
+    /** 用户**期望**的 preset code（即使本次 apply 失败也会记住，待会话就绪后重试） */
+    private var desiredCode: String = readStoredCode()
+
+    /** 当前绑定的真实音频会话 ID；0 表示尚未取得 / 回退全局混音 */
+    private var currentSessionId: Int = 0
+
+    /** 是否已成功应用过某预设（诊断用） */
+    private var success: Boolean = false
+
+    /** 最近一次失败原因（诊断用，null 表示无错误） */
+    private var lastError: String? = null
+
+    /** 最近一次成功 / 失败的策略名（诊断用） */
+    private var lastStrategy: String? = null
+
+    /** 可用性探测结果缓存（null 表示尚未确定） */
+    private var availableCache: Boolean? = null
+
+    /**
+     * DynamicsProcessing 是否可用。
+     *
+     * 真实探测（而非仅判断 SDK 版本）：尝试用当前音频会话创建一次最简效果器后立即 release，
+     * 结果缓存。**尚无播放会话时乐观返回 true**，避免播放前就把预设误判为「不支持」而隐藏；
+     * 真实会话就绪后 [setSessionId] 会重新探测并写入缓存。
+     *
+     * **仅用于 UI 能力展示，不作为 [apply] 的门禁**：[apply] 唯一合法的硬门禁是系统版本
+     * （SDK >= [MIN_SDK]）；本方法的结果不允许短路降级策略链。
+     */
     fun available(): Boolean {
-        return Build.VERSION.SDK_INT >= MIN_SDK
+        if (Build.VERSION.SDK_INT < MIN_SDK) {
+            availableCache = false
+            return false
+        }
+        availableCache?.let { return it }
+
+        val session = if (currentSessionId > 0) currentSessionId else 0
+        if (session <= 0) {
+            // 无可探测的真实会话：乐观放行，交由后续真实 apply 决定
+            return true
+        }
+        val ok = probe(session)
+        availableCache = ok
+        return ok
     }
 
     /**
@@ -106,41 +169,122 @@ class SoundEffectBridge(private val context: Context) {
 
     /**
      * 应用预设：先释放旧实例，再按增益数组构建 EQ + MBC + Limiter 并置为 enabled。
-     * 未知 code 或系统不支持时返回 false。
+     *
+     * **前置门禁**：仅系统版本（SDK >= [MIN_SDK]）。**不以 [available] 缓存作硬门禁**——
+     * 否则一旦探测曾失败过一次，[availableCache] 被永久置为 false，之后任何预设都会
+     * 在此短路返回 false，整条降级策略链（含 6 级兜底）都不会执行。会话变更与缓存失效
+     * 会被提到最前（SDK 判定之后、任何探测之前），确保换会话后直接调用本方法也不会被
+     * 上一个会话的陈旧探测结果短路。
+     *
+     * @param presetCode 预设 code（未知 code 返回 false）。
+     * @param sessionId  播放音频会话 ID（来自 just_audio）。**优先使用真实会话**；
+     *                   仅当 [sessionId] <= 0 且尚无已记录会话时才回退到 0（保留兜底）。
+     *
+     * 降级策略链：逐级尝试、每级独立 try/catch，全部失败才返回 false：
+     * 1. preEq + MBC + Limiter（11 段）
+     * 2. 仅 preEq + Limiter（去掉 MBC）
+     * 3. 仅 preEq
+     * 4. 以上三级再用 `VARIANT_FAVOR_TIME_RESOLUTION` 重试一遍。
      */
-    fun apply(presetCode: String): Boolean {
-        if (!available()) return false
-        val preset = presets.firstOrNull { it.code == presetCode } ?: return false
-        return try {
-            releaseEffect()
-            val built = DynamicsProcessing(
-                0,
-                0,
-                DynamicsProcessing.Config.Builder(
-                    DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-                    1, // 单声道配置：由 setAllChannelsTo 复制到全部实际声道
-                    true, // preEq 启用（音效主体）
-                    FREQUENCIES.size,
-                    true, // mbc 启用（与 Limiter 协同防爆音）
-                    FREQUENCIES.size,
-                    false, // postEq 不启用，避免与 preEq 叠加导致削波
-                    0,
-                    true, // limiter 启用
-                ).setPreferredFrameDuration(FRAME_DURATION_MS)
-                    .setAllChannelsTo(buildChannel(preset.gains))
-                    .build()
-            )
-            built.enabled = true
-            effect = built
-            currentCode = preset.code
-            saveCode(preset.code)
-            true
-        } catch (e: Exception) {
-            // 某些 ROM 不支持会话 0 的全局处理：静默降级，不抛给 Flutter
-            Log.w(TAG, "apply failed: " + e.message)
-            releaseEffectQuietly()
-            false
+    fun apply(presetCode: String, sessionId: Int): Boolean {
+        // 唯一合法的前置门禁：系统版本。不得以 availableCache 短路，否则降级链失效。
+        if (Build.VERSION.SDK_INT < MIN_SDK) return false
+
+        // 会话更新与缓存失效提到最前（SDK 判定之后、任何探测之前）：
+        // 即便换会话后直接以新会话调用 apply（未经 setSessionId），
+        // 也不会被上一个会话的陈旧探测结果短路。
+        if (sessionId > 0 && sessionId != currentSessionId) {
+            currentSessionId = sessionId
+            availableCache = null
         }
+
+        val preset = presets.firstOrNull { it.code == presetCode } ?: return false
+
+        // 先记住用户期望的预设：即使本次全部策略失败，也会在会话就绪 / 下次启动时重试
+        desiredCode = preset.code
+        saveCode(preset.code)
+
+        // 优先真实播放会话；仅当完全没有会话时回退到 0（保留兜底，避免直接不可用）
+        val effectiveSession = when {
+            sessionId > 0 -> sessionId
+            currentSessionId > 0 -> currentSessionId
+            else -> 0
+        }
+
+        // 释放旧实例，避免实例泄漏与状态残留
+        releaseEffect()
+
+        for (strategy in buildStrategies()) {
+            val built = try {
+                DynamicsProcessing(
+                    0,
+                    effectiveSession,
+                    DynamicsProcessing.Config.Builder(
+                        strategy.variant,
+                        1, // 单声道配置：由 setAllChannelsTo 复制到全部实际声道
+                        true, // preEq 始终启用（音效主体）
+                        FREQUENCIES.size,
+                        strategy.withMbc,
+                        if (strategy.withMbc) FREQUENCIES.size else 0,
+                        false, // postEq 不启用，避免与 preEq 叠加导致削波
+                        0,
+                        strategy.withLimiter,
+                    ).setPreferredFrameDuration(FRAME_DURATION_MS)
+                        .setAllChannelsTo(buildChannel(preset.gains, strategy))
+                        .build()
+                )
+            } catch (e: Exception) {
+                lastError = e.message
+                lastStrategy = strategy.name + " (build)"
+                Log.w(TAG, "apply strategy [${strategy.name}] build failed: " + e.message)
+                continue
+            }
+
+            // 构建成功后再置为 enabled（此步单独 try/catch，失败则释放并试下一级）
+            try {
+                built.enabled = true
+                effect = built
+                currentCode = preset.code
+                success = true
+                lastStrategy = strategy.name
+                lastError = null
+                return true
+            } catch (e: Exception) {
+                lastError = e.message
+                lastStrategy = strategy.name + " (enable)"
+                Log.w(TAG, "apply strategy [${strategy.name}] enable failed: " + e.message)
+                try {
+                    built.release()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        success = false
+        if (lastError == null) lastError = "all strategies failed"
+        if (lastStrategy == null) lastStrategy = "none"
+        Log.w(TAG, "apply failed after all strategies; session=$effectiveSession lastError=$lastError")
+        return false
+    }
+
+    /**
+     * 会话变化时更新音频会话 ID：若存在期望的预设，则用新会话重新 apply；
+     * 否则仅记录会话。会话变化会重置可用性探测缓存，让 [available] 用真实会话重新探测。
+     *
+     * @return true 表示处理成功（含「仅记录会话、无待应用预设」的情形）。
+     */
+    fun setSessionId(id: Int): Boolean {
+        if (id <= 0) return false
+        val changed = id != currentSessionId
+        currentSessionId = id
+        if (changed) availableCache = null
+
+        val desired = desiredCode
+        if (desired.isEmpty() || desired == PRESET_OFF) {
+            // 未选择任何音效：仅记录会话，无需操作
+            return true
+        }
+        return apply(desired, id)
     }
 
     /** 关闭音效：释放实例并把状态标记为 off */
@@ -148,6 +292,8 @@ class SoundEffectBridge(private val context: Context) {
         return try {
             releaseEffect()
             currentCode = PRESET_OFF
+            desiredCode = PRESET_OFF
+            success = false
             saveCode(PRESET_OFF)
             true
         } catch (e: Exception) {
@@ -161,24 +307,88 @@ class SoundEffectBridge(private val context: Context) {
         return currentCode
     }
 
-    /** 构建一个声道的完整配置：输入增益 + 前级 EQ + MBC + Limiter */
-    private fun buildChannel(gains: FloatArray): DynamicsProcessing.Channel {
+    /**
+     * 诊断信息：供真机定位音效问题。
+     * 返回 `sdkInt` / `deviceModel` / `success` / `lastError` / `lastStrategy` /
+     * `currentCode` / `desiredCode` / `sessionId` / `enabled`。
+     */
+    fun diagnose(): Map<String, Any?> {
+        val enabledState = try {
+            effect?.enabled == true
+        } catch (_: Exception) {
+            false
+        }
+        return mapOf(
+            "sdkInt" to Build.VERSION.SDK_INT,
+            "deviceModel" to (Build.MANUFACTURER + " " + Build.MODEL),
+            "success" to success,
+            "lastError" to lastError,
+            "lastStrategy" to lastStrategy,
+            "currentCode" to currentCode,
+            "desiredCode" to desiredCode,
+            "sessionId" to currentSessionId,
+            "enabled" to enabledState,
+        )
+    }
+
+    /** 降级策略链：3 种配置 × 2 种 variant = 6 级尝试 */
+    private fun buildStrategies(): List<Strategy> = listOf(
+        Strategy("freq:preEq+mbc+limiter", DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION, true, true),
+        Strategy("freq:preEq+limiter", DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION, false, true),
+        Strategy("freq:preEq", DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION, false, false),
+        Strategy("time:preEq+mbc+limiter", DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION, true, true),
+        Strategy("time:preEq+limiter", DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION, false, true),
+        Strategy("time:preEq", DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION, false, false),
+    )
+
+    /** 真实可用性探测：用给定会话创建一次最简效果器后立即 release。 */
+    private fun probe(sessionId: Int): Boolean {
+        return try {
+            val dp = DynamicsProcessing(
+                0,
+                sessionId,
+                DynamicsProcessing.Config.Builder(
+                    DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                    1,
+                    true,
+                    FREQUENCIES.size,
+                    false,
+                    0,
+                    false,
+                    0,
+                    false,
+                ).build()
+            )
+            try {
+                dp.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "probe release failed: " + e.message)
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "probe failed: " + e.message)
+            false
+        }
+    }
+
+    /** 构建一个声道的完整配置：输入增益 + 前级 EQ（+ 可选 MBC / Limiter），按策略开关。 */
+    private fun buildChannel(gains: FloatArray, strategy: Strategy): DynamicsProcessing.Channel {
         // 构造签名：inputGain / preEqInUse+bandCount / mbcInUse+bandCount /
         // postEqInUse+bandCount / limiterInUse
         val channel = DynamicsProcessing.Channel(
             0f,
             true,
             FREQUENCIES.size,
-            true,
-            FREQUENCIES.size,
+            strategy.withMbc,
+            if (strategy.withMbc) FREQUENCIES.size else 0,
             false,
             0,
-            true,
+            strategy.withLimiter,
         )
         channel.setInputGain(0f)
         channel.setPreEq(buildPreEq(gains))
-        channel.setMbc(buildMbc())
-        channel.setLimiter(buildLimiter())
+        if (strategy.withMbc) channel.setMbc(buildMbc())
+        if (strategy.withLimiter) channel.setLimiter(buildLimiter())
         return channel
     }
 
