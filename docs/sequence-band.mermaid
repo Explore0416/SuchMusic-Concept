@@ -81,9 +81,15 @@ sequenceDiagram
     Note over P,B: 备选：手机搜索页「发送到手环」 → evt search.preset {keyword}
     P->>B: evt search.preset {keyword}
 
-    Note over B,W: 阶段5 · Windows 经手机中转
-    W->>P: ws connect (token) + req sys.hello {role:"windows", proto:[1], caps:[...]}
+    Note over B,W: 阶段5 · Windows 经手机中转（局域网 WebSocket，需令牌配对）
+    W->>P: ws connect ws://host:8787/suchmusic?token=xxx
+    Note over P: 校验路径 /suchmusic · 私网来源 · 令牌；失败 404/403/401 直接断开，不升级
+    W->>P: ws req sys.hello {role:"windows", proto:[1], caps:[...]}
     P-->>W: ws evt sys.hello_ack {caps}
+    P-->>W: ws res sys.hello {ok:true, v, caps}
+    W->>P: ws req state.get {}
+    P->>R: route(origin=w)
+    P-->>W: ws res state.get {StateSnapshot}
     W->>P: ws req playback.play (id=w-0b12-0001)
     P->>R: route(origin=w)
     R->>A: resume()
@@ -91,7 +97,7 @@ sequenceDiagram
     R-->>P: evt player.state
     P->>B: evt player.state (origin b)
     P-->>W: ws evt player.state (origin w)
-    Note over W: 反向：手环命令同样经 R 广播给 Windows
+    Note over B,W: 反向：手环命令同样经 R（同一 BandRouter）广播给 Windows；req.id 去重跨连接幂等
 
     Note over B,P: 阶段6 · 断线重连与重同步
     P--x B: 链路断开
