@@ -9,6 +9,7 @@ import '../services/music_api_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/app_init.dart';
 import '../services/play_history_service.dart';
+import '../services/play_context_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
 import 'playlist_detail_page.dart';
@@ -992,6 +993,8 @@ class _HomePageState extends State<HomePage> {
 
   void _playSong(SongModel song) async {
     final audioPlayer = AudioPlayerService();
+    // 记录播放来源上下文（首页推荐/热歌→无歌单标签），供本地曲风推断使用
+    PlayContextService().setSource(kind: PlaySourceKind.home);
     await audioPlayer.playAndAdd(song);
   }
 }

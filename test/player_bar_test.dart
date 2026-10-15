@@ -151,7 +151,7 @@ void main() {
 
         expect(tester.takeException(), isNull, reason: '不应有溢出/异常');
         // PC 风格侧边栏：Logo 文案 + 导航项
-        expect(find.text('Such Music'), findsOneWidget);
+        expect(find.text('SuchMusic概念版'), findsOneWidget);
         expect(find.text('首页'), findsOneWidget);
         // 底部常驻播放条（横屏可看到/控制）
         expect(find.byType(PlayerBar), findsOneWidget);

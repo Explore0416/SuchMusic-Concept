@@ -16,7 +16,8 @@ import 'play_history_service.dart';
 ///   `notify_lyric_enabled`、`miui_island_enabled`、`music_source`、
 ///   `kugou_fallback_enabled`）。
 /// - `playlist`：当前播放队列（SongModel 列表 JSON）。
-/// - `playHistory`：[PlayHistoryService] 快照（本机播放偏好统计）。
+/// - `playHistory`：[PlayHistoryService] 快照（本机播放偏好统计，v2；
+///   含 `tagIndex`/`artistIndex` 曲风推断档案，随备份一并导出）。
 /// - `localLyrics`：[LocalLyricService] 快照（用户手动指定的歌词）。
 ///
 /// ── **绝不导出登录凭证** ────────────────────────────────────

@@ -44,6 +44,14 @@ class AppConstants {
   /// 酷狗设备 dfid（设备注册所得，取直链必需）
   static const String kugouDfid = 'kugou_dfid';
 
+  /// 「猜你想听」曲风档案独立键（当前实现已将 tagIndex/artistIndex 并入
+  /// `play_history_v1` 的 v2 JSON，本键作为「独立档案」的备选预留，不写入）。
+  static const String recommendationProfile = 'recommendation_profile_v1';
+
+  /// 「猜你想听」参数覆盖键（预留：可从 prefs 覆盖 RecommendationConfig）。
+  static const String recommendationConfigOverride =
+      'recommendation_config_override';
+
   // ── 默认值 ────────────────────────────────────────────────
 
   /// 通知歌词开关默认开

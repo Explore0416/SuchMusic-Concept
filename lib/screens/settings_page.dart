@@ -12,6 +12,7 @@ import '../services/crash_log_service.dart';
 import '../services/kugou_credential_service.dart';
 import '../services/notification_lyric_service.dart';
 import '../services/settings_backup_service.dart';
+import '../services/play_history_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
@@ -654,6 +655,39 @@ class _SettingsPageState extends State<SettingsPage> {
                   SizedBox(height: 10 * s),
                   _buildCard(
                     s: s,
+                    onTap: _showClearRecommendationDialog,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '清除本地推荐数据',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 16 * s,
+                                ),
+                              ),
+                              SizedBox(height: 2 * s),
+                              Text(
+                                '删除播放历史与曲风推断（仅本机，不上传）',
+                                style: TextStyle(
+                                  color: const Color(0xFF838383),
+                                  fontSize: 11 * s,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right,
+                            size: 20, color: Color(0xFFCCCCCC)),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 10 * s),
+                  _buildCard(
+                    s: s,
                     onTap: () {
                       Navigator.push(
                         context,
@@ -662,7 +696,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       );
                     },
                     child: Text(
-                      '关于 Such Music',
+                      '关于 SuchMusic概念版',
                       style: TextStyle(
                         color: Colors.black,
                         fontSize: 16 * s,
@@ -819,6 +853,21 @@ class _SettingsPageState extends State<SettingsPage> {
           context,
           bytes > 0 ? '已清理 $count 项缓存，释放 $sizeText' : '暂无缓存需要清理',
         );
+      },
+    );
+  }
+
+  /// 清除本地推荐数据：播放历史 + 曲风档案 + 来源上下文（**仅本机、不上传**）。
+  void _showClearRecommendationDialog() {
+    DesignDialog.showConfirm(
+      context,
+      titleText: '确认清除',
+      contentText: '确定要清除本地推荐数据吗？\n（含播放历史、时段分布、完成度/跳过、曲风推断结果，'
+          '仅保存在本机，清除后不可恢复）',
+      onConfirm: () async {
+        await PlayHistoryService().clear();
+        if (!mounted) return;
+        DesignToast.show(context, '已清除本地推荐数据');
       },
     );
   }

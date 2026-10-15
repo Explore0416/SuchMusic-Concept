@@ -1,0 +1,83 @@
+classDiagram
+    class LocalRecommendationProfile {
+        +int version
+        +int savedAt
+        +List~PlayStatV2~ entries
+        +Map~String,Map~String,double~~ tagIndex
+        +Map~String,Map~String,double~~ artistIndex
+        +toJson() Map
+        +fromJson(json)$ LocalRecommendationProfile
+        +migrateFromV1(v1)$ LocalRecommendationProfile
+    }
+    class PlayStatV2 {
+        +SongModel song
+        +int count
+        +int lastPlayedAt
+        +List~int~ hourCounts
+        +double completionSum
+        +int completionCount
+        +int skipCount
+        +List~String~ srcTags
+        +String artistKey
+        +double get avgCompletion
+        +double get skipRate
+        +toJson() Map
+    }
+    class SongTag {
+        +String songKey
+        +String tag
+        +double confidence
+        +TagSource source
+        +int updatedAt
+    }
+    class RecommendationConfig {
+        +double wSong
+        +double wArtist
+        +double wGenre
+        +double wTime
+        +double wCross
+        +double halfLifeSongDays
+        +double halfLifeArtistDays
+        +double halfLifeGenreDays
+        +int hourWindow
+        +double tagConfMin
+        +double maxArtistShare
+        +double exploreRatio
+        +int coldMinPlays
+    }
+    class RecommendationEngine {
+        +recommend(inputs, config, limit) List~SongModel~
+        +scoreSong(song, inputs, config, nowMs)$ double
+        +applyDiversityAndExplore(ranked, limit, config) List~SongModel~
+    }
+    class GenreMetadataService {
+        +Map tagIndex
+        +observePlaylistTags(song, tags)
+        +observeSearchKeyword(song, keyword)
+        +refreshCategoryDictionary(categories)
+        +tagsFor(song) Map~String,double~
+        +snapshot() Map
+        +restore(json) int
+    }
+    class PlayContextService {
+        +String lastSourceKind
+        +List~String~ lastSourceTags
+        +List~String~ lastSearchKeyword
+        +setSource(kind, tags, keyword)
+        +consume() PlayContextSnapshot
+    }
+    class PlayHistoryService {
+        +record(song, completionRatio, skipped)
+        +suggest(limit)
+        +snapshot() Map
+        +restore(json) int
+    }
+
+    PlayHistoryService --> PlayStatV2 : holds
+    PlayHistoryService --> LocalRecommendationProfile : serializes
+    LocalRecommendationProfile --> PlayStatV2 : contains
+    RecommendationEngine --> PlayHistoryService : reads stats
+    RecommendationEngine --> GenreMetadataService : reads tags
+    GenreMetadataService --> SongTag : produces
+    GenreMetadataService --> PlayContextService : consumes context
+    RecommendationEngine --> RecommendationConfig : configured by

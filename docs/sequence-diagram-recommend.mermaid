@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    participant UI as HomePage
+    participant PH as PlayHistoryService
+    participant EN as RecommendationEngine
+    participant GM as GenreMetadataService
+    participant CTX as PlayContextService
+    participant PREFS as SharedPreferences
+
+    Note over UI,PREFS: 冷启动 / 首次进入首页
+    PH->>PREFS: init() read play_history_v1
+    PH->>PH: version==1? migrateFromV1 (keep history, add defaults)
+    UI->>PH: suggest(limit:12)
+    PH->>PH: compute cache signature(totalPlays, n, nowHour, entriesVersion)
+    alt signature unchanged and cache valid
+        PH-->>UI: return cached list
+    else need recompute
+        PH->>EN: recommend(inputs, config, limit)
+        loop each candidate song s
+            EN->>GM: tagsFor(s) (filtered conf>=tagConfMin)
+            EN->>EN: scoreSong(S,A,G,T,X) with missing-dimension normalization
+        end
+        EN->>EN: applyDiversityAndExplore(artist cap + MMR + explore slots)
+        EN-->>PH: ranked result
+        PH->>PH: write cache
+        PH-->>UI: return recommendations
+    end
+    alt list empty
+        UI->>UI: hide section (no error)
+    end
+
+    Note over UI,PREFS: play a song (record + context + completion)
+    UI->>CTX: setSource(kind, tags, keyword)
+    UI->>PH: record(song, completionRatio, skipped)
+    PH->>CTX: consume() source tags/keyword
+    PH->>PH: accumulate count/hourCounts/completionSum/skipCount/srcTags
+    PH->>GM: observePlaylistTags / observeSearchKeyword
+    GM->>GM: update tagIndex/artistIndex (confidence blend + decay)
+    PH->>PREFS: save() v2 JSON with index
+    PH->>PH: mark dirty (debounced)
+
+    Note over GM,PREFS: optional periodic dictionary refresh
+    GM->>GM: refreshCategoryDictionary(categories)
+    GM->>GM: match history (artist,name) -> tagIndex (S2, conf 0.8)
+    GM->>PREFS: save()

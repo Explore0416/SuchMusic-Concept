@@ -159,7 +159,7 @@ class _Sidebar extends StatelessWidget {
                 const SizedBox(width: 10),
                 const Expanded(
                   child: Text(
-                    'Such Music',
+                    'SuchMusic概念版',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

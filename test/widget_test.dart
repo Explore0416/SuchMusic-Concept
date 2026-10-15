@@ -57,7 +57,7 @@ void main() {
 
       if (Responsive.showRail(Responsive.of(size))) {
         // 横屏大屏（B4/B5）：PC 风格侧边栏（Logo 文案）+ 底部常驻播放条
-        expect(find.text('Such Music'), findsOneWidget,
+        expect(find.text('SuchMusic概念版'), findsOneWidget,
             reason: '横屏大屏应使用 PC 风格侧边栏（含 Logo）');
         expect(find.byType(NavigationRail), findsNothing,
             reason: '横屏大屏已改为自定义侧边栏');

@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/design_dialog.dart';
 
 /// 使用协议页面
-/// 展示《Such Music 用户协议》全文
+/// 展示《SuchMusic概念版 用户协议》全文
 /// 返回按钮与配色风格与关于页保持一致
 class AgreementPage extends StatelessWidget {
   const AgreementPage({super.key});
@@ -47,7 +47,7 @@ class AgreementPage extends StatelessWidget {
                         children: [
                           const Center(
                             child: Text(
-                              'Such Music 用户协议',
+                              'SuchMusic概念版 用户协议',
                               style: TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w600,
@@ -58,7 +58,7 @@ class AgreementPage extends StatelessWidget {
                           const SizedBox(height: 6),
                           const Center(
                             child: Text(
-                              '版本号：v1.0｜更新日期：2026-10-05｜生效日期：2026-10-05',
+                              '版本号：v1.2｜更新日期：2026-10-16｜生效日期：2026-10-16',
                               style: TextStyle(
                                   fontSize: 11.5, color: Color(0xFF999999)),
                             ),
@@ -168,12 +168,12 @@ class _Section {
 
 const List<_Section> _sections = [
   _Section('一、协议的接受', [
-    _Para('1.1 本协议是您与 Such Music 开发团队（以下简称“我们”）之间关于使用本软件预编译版本及相关服务的约定。'),
+    _Para('1.1 本协议是您与 SuchMusic概念版 开发团队（以下简称“我们”）之间关于使用本软件预编译版本及相关服务的约定。'),
     _Para('1.2 若您不同意本协议任何内容，请立即停止使用并卸载本软件。'),
     _Para('1.3 本协议适用于官方渠道发布的预编译版本。本软件的源代码依照对应开源许可证发布，源代码的使用、修改与再分发遵循该开源许可证，不受本协议约束。'),
   ]),
   _Section('二、软件性质', [
-    _Para('2.1 Such Music 是一款第三方开源音乐播放器，与网易云音乐及网易公司不存在任何隶属、合作或授权关系。'),
+    _Para('2.1 SuchMusic概念版 是一款第三方开源音乐播放器，与网易云音乐及网易公司不存在任何隶属、合作或授权关系。'),
     _Para(
       '2.2 本软件由个人出于学习、研究目的开发，仅供个人学习、研究与交流使用，不用于任何商业目的。本软件通过调用开源社区第三方接口项目（以下简称“接口项目”）获取音乐信息，该接口项目及其所调用的平台接口均未获得相关平台或版权方授权，其可用性、稳定性与合规性不受我们控制，由此产生的风险由您自行判断并承担。',
       bold: true,
@@ -198,6 +198,9 @@ const List<_Section> _sections = [
     _Para('4.1 本软件不架设后台服务器，不主动收集、不上传您的个人数据。'),
     _Para('4.2 为实现应用功能，本软件会在设备本地保存登录凭据、播放记录、图片与歌曲缓存等数据，这些数据不会离开您的设备。'),
     _Para('4.3 您可以随时在“设置”页清除缓存或退出登录以删除本地数据，卸载本软件即彻底删除全部本地数据。'),
+    _Para('4.4 本地个性化推荐（「猜你想听」）说明：为实现首页个性化推荐，本软件会在您的设备本地记录并计算以下数据：① 歌曲播放历史（含播放次数、最近播放时间）；② 各时段（0–23 时）的收听分布；③ 每次播放的完成度与是否提前跳过；④ 由本机行为推断出的曲风/风格标签。上述数据全部仅保存在您的设备本地，仅用于在本机离线计算推荐结果，不会上传、不会与任何账号或第三方共享、不参与任何网络请求。'),
+    _Para('4.5 曲风标签说明：因第三方音乐平台接口不提供歌曲的曲风/流派字段，本软件的曲风标签系由本机行为（如播放来源歌单、搜索记录、收听共现）在本机推断得出，可能存在偏差，仅供个性化展示参考，不构成对歌曲正式分类的声明。'),
+    _Para('4.6 您可以在“设置”中随时清除本地推荐数据；卸载本软件即彻底删除全部上述本地数据。'),
   ]),
   _Section('五、知识产权', [
     _Para('5.1 本软件源代码依照对应开源许可证发布，您可在该许可证允许的范围内使用与修改。开源许可证仅授予源代码层面的权利，不授予本软件名称、标识的任何使用权。'),
@@ -247,7 +250,7 @@ const List<_Section> _sections = [
 ];
 
 /// 协议版本号：协议内容发生重大变更时更新此版本号，将触发用户重新确认
-const String kAgreementVersion = 'v1.1';
+const String kAgreementVersion = 'v1.2';
 
 /// 协议同意状态的本地存取
 class UserAgreement {
@@ -348,7 +351,7 @@ class _AgreementConsentDialogState extends State<_AgreementConsentDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       DesignDialog.body(
-                          context, '欢迎使用 Such Music！在开始使用前，请您重点了解：'),
+                          context, '欢迎使用 SuchMusic概念版！在开始使用前，请您重点了解：'),
                       SizedBox(height: 8 * k),
                       DesignDialog.body(
                           context,
@@ -364,13 +367,17 @@ class _AgreementConsentDialogState extends State<_AgreementConsentDialog> {
                       SizedBox(height: 6 * k),
                       DesignDialog.body(
                           context,
+                          '· 「猜你想听」推荐完全在本机离线计算，播放历史与偏好数据不上传、不同步；'),
+                      SizedBox(height: 6 * k),
+                      DesignDialog.body(
+                          context,
                           '· 本软件不提供任何会员权限破解功能，可播放范围与您账号在官方客户端的权限完全一致。'),
                       SizedBox(height: 10 * k),
                       GestureDetector(
                         onTap: _openFullAgreement,
                         behavior: HitTestBehavior.opaque,
                         child: Text(
-                          '点击查看《Such Music 用户协议》全文 >',
+                          '点击查看《SuchMusic概念版 用户协议》全文 >',
                           style: TextStyle(
                             fontSize: 12.5 * k,
                             color: _themeBlue,
@@ -418,7 +425,7 @@ class _AgreementConsentDialogState extends State<_AgreementConsentDialog> {
                             fontSize: 12.5 * k, color: const Color(0xFF333333)),
                         children: [
                           TextSpan(
-                            text: '《Such Music 用户协议》',
+                            text: '《SuchMusic概念版 用户协议》',
                             style: TextStyle(
                               fontSize: 12.5 * k,
                               color: _themeBlue,

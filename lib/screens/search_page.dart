@@ -6,6 +6,7 @@ import '../models/song_model.dart';
 import '../services/music_api_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/search_history_service.dart';
+import '../services/play_context_service.dart';
 import '../services/sources/source_manager.dart';
 import '../services/app_init.dart';
 import '../utils/responsive.dart';
@@ -170,6 +171,12 @@ class _SearchPageState extends State<SearchPage> {
       AudioPlayerService.preFetchCover(song.coverUrl!);
     }
     // play() 内部会在封面缺失时自动补取歌曲详情，无需在此重复请求
+    // 记录搜索来源（S3 弱标签）：搜索词 → 播放关联，供本地曲风推断
+    final keyword = _searchController.text.trim();
+    PlayContextService().setSource(
+      kind: PlaySourceKind.search,
+      keyword: keyword.isEmpty ? null : keyword,
+    );
     final success = await _audioPlayer.playAndAdd(song);
     if (!mounted || success) return;
 

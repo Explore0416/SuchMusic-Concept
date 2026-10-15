@@ -172,6 +172,7 @@ class AudioPlayerService {
     _player.currentIndexStream.listen((index) {
       if (index != null && index >= 0 && index < _playlist.length) {
         _currentIndex = index;
+        _captureCompletion();
         _currentSong = _playlist[index];
         _currentSongController.add(_currentSong);
         if (_currentSong!.coverUrl != null &&
@@ -291,6 +292,13 @@ class AudioPlayerService {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
+  /// 上一首曲目在「切歌瞬间」的完成度比例 ∈[0,1]（dur<=0 时为 0）。
+  /// 供 `main.dart` 结算「完成度 / 跳过」信号使用。**仅本机内存、不上传**。
+  double _lastCompletionRatio = -1;
+
+  /// 上一首曲目是否被提前切走（完成度 < skipThreshold）。
+  bool _lastPlayWasSkipped = false;
+
   List<LyricLine> _lyrics = [];
   String _currentLyric = '';
 
@@ -307,6 +315,12 @@ class AudioPlayerService {
   bool get isPlaying => _state == PlayerState.playing;
   Duration get position => _position;
   Duration get duration => _duration;
+
+  /// 上一首曲目切歌瞬间的完成度比例（-1 表示无样本）。
+  double get lastCompletionRatio => _lastCompletionRatio;
+
+  /// 上一首曲目是否被提前切走。
+  bool get lastPlayWasSkipped => _lastPlayWasSkipped;
   String get currentLyric => _currentLyric;
   List<LyricLine> get lyrics => List.unmodifiable(_lyrics);
   int get currentLyricIndex {
@@ -428,6 +442,7 @@ class AudioPlayerService {
         await exitFmMode();
       }
       _updateState(PlayerState.loading);
+      _captureCompletion();
       _currentSong = song;
       _currentSongController.add(_currentSong);
 
@@ -507,6 +522,7 @@ class AudioPlayerService {
 
   Future<void> stop() async {
     await _player.stop();
+    _captureCompletion();
     _currentSong = null;
     _currentSongController.add(null);
     _lyrics = [];
@@ -514,6 +530,33 @@ class AudioPlayerService {
     _lyricController.add('');
     _lyricsController.add([]);
     _updateState(PlayerState.idle);
+  }
+
+  /// 记录**上一首**在切歌瞬间的完成度（读取 position / duration）。
+  ///
+  /// 仅内存暂存，供 `main.dart` 在下一首开始时结算「完成度 / 跳过」；
+  /// 失败 / 无样本时置 -1，绝不抛异常、不影响主流程。**仅本机、不上传**。
+  void _captureCompletion() {
+    try {
+      if (_currentSong == null) {
+        _lastCompletionRatio = -1;
+        _lastPlayWasSkipped = false;
+        return;
+      }
+      final dur = _duration.inMilliseconds;
+      if (dur <= 0) {
+        _lastCompletionRatio = 0;
+        _lastPlayWasSkipped = false;
+        return;
+      }
+      final ratio = (_position.inMilliseconds / dur).clamp(0.0, 1.0);
+      _lastCompletionRatio = ratio;
+      // 0.30 = RecommendationConfig.skipThreshold 默认值
+      _lastPlayWasSkipped = ratio < 0.30;
+    } catch (_) {
+      _lastCompletionRatio = -1;
+      _lastPlayWasSkipped = false;
+    }
   }
 
   Future<bool> playAndAdd(SongModel song) async {
@@ -560,6 +603,7 @@ class AudioPlayerService {
     _playlistController.add(_playlist);
 
     _updateState(PlayerState.loading);
+    _captureCompletion();
     _currentSong = songs[0];
     _currentSongController.add(_currentSong);
 
