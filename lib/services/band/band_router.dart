@@ -308,6 +308,28 @@ class BandRouter {
     _port = null;
   }
 
+  /// 是否已绑定播控端口。
+  bool get hasPort => _port != null;
+
+  /// 传输无关的**统一入口**：把来自任一传输（手环 interconnect / 局域网 WS）的原始帧
+  /// （UTF-8 JSON 字符串）解码后路由，返回需回送的响应帧 JSON；无需回执时返回 null。
+  ///
+  /// 两条传输路径共用本方法 → **行为一致**；`req.id` 去重发生在 [handleRequest] 上，
+  /// 故同样跨连接幂等。
+  Future<String?> handleRaw(String raw) async {
+    BandEnvelope env;
+    try {
+      env = BandEnvelope.decode(raw);
+    } on BandEnvelopeException {
+      return null; // E_BADREQ：丢弃，不重试
+    } on FormatException {
+      return null; // 非法 JSON：丢弃
+    }
+    if (env.type != 'req') return null; // res/err/evt 无需回执
+    final res = await handleRequest(env);
+    return res.encode();
+  }
+
   /// 处理一条手环 `req`：幂等去重后分发，并缓存响应。
   Future<BandEnvelope> handleRequest(BandEnvelope req) async {
     final id = req.id;
@@ -652,7 +674,7 @@ class BandRouter {
       payload: <String, dynamic>{
         'proto': kSupportedProtocols,
         'caps': effectiveCaps,
-        'server': <String, dynamic>{'app': 'suchmusic', 'ver': '0.13.0'},
+        'server': <String, dynamic>{'app': 'suchmusic', 'ver': '0.14.0'},
         'clock': _clock(),
       },
     ));

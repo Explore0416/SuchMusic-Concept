@@ -10,7 +10,6 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'band_channel.dart';
@@ -178,16 +177,11 @@ class BandService {
   }
 
   Future<void> _handleIncoming(String json) async {
-    BandEnvelope env;
-    try {
-      env = BandEnvelope.decode(json);
-    } catch (e) {
-      debugPrint('⚠️ 手环信封解析失败，已丢弃: $e');
-      return;
-    }
-    if (env.type == 'req') {
-      final res = await _router.handleRequest(env);
-      await _channel.send(res.encode());
+    // 与局域网 WS 路径共用 BandRouter.handleRaw：
+    // 解码 → 路由 → 回送响应，两条传输路径**行为完全一致**。
+    final response = await _router.handleRaw(json);
+    if (response != null) {
+      await _channel.send(response);
     }
     // res / err / evt 来自手环：本端无需回执（evt 不回执，res/err 仅日志）
   }
