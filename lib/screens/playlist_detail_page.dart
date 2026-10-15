@@ -7,6 +7,7 @@ import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/music_api_service.dart';
 import '../services/sources/source_manager.dart';
+import '../services/play_context_service.dart';
 import '../widgets/fade_slide_in.dart';
 
 class PlaylistDetailPage extends StatefulWidget {
@@ -100,12 +101,29 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
 
   Future<void> _playAll() async {
     if (_songs.isEmpty) return;
+    _setPlayContext();
     await _audioPlayer.playSongs(_songs);
   }
 
   Future<void> _playSong(int index) async {
     if (index >= _songs.length) return;
+    _setPlayContext();
     await _audioPlayer.playAndAdd(_songs[index]);
+  }
+
+  /// 记录播放来源上下文（S1 歌单标签）：歌单名可用于曲风关键词匹配。
+  void _setPlayContext() {
+    final kind = widget.isDaily
+        ? PlaySourceKind.daily
+        : (widget.playlist.source.isKugou
+            ? PlaySourceKind.rank
+            : PlaySourceKind.playlist);
+    PlayContextService().setSource(
+      kind: kind,
+      tags: widget.playlist.name.isNotEmpty
+          ? <String>[widget.playlist.name]
+          : null,
+    );
   }
 
   @override

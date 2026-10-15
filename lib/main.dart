@@ -34,7 +34,7 @@ void main() async {
     builder: () => AudioPlayerHandler(),
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.suchmusic.audio.v2',
-      androidNotificationChannelName: 'Such Music',
+      androidNotificationChannelName: 'SuchMusic概念版',
       androidNotificationChannelDescription: '音乐播放控制',
       androidStopForegroundOnPause: false,
       androidNotificationIcon: 'drawable/ic_notification',
@@ -58,9 +58,25 @@ void main() async {
   // 本地播放历史 + 手动歌词映射（**只存本机，不上传任何数据**）
   await PlayHistoryService().init();
   await LocalLyricService().init();
-  // 播放历史用于首页本地个性化推荐；明确不上传云端
+  // 播放历史用于首页本地个性化推荐；明确不上传云端。
+  // 同时结算「上一首」的完成度 / 跳过（切歌时读取 position/duration），
+  // 更细腻的偏好信号仅本机留存，不涉及任何网络请求。
+  SongModel? lastRecordedSong;
   AudioPlayerService().onCurrentSongChanged.listen((song) {
-    if (song != null) unawaited(PlayHistoryService().record(song));
+    if (song == null) return;
+    final prev = lastRecordedSong;
+    if (prev != null && prev.id != song.id) {
+      final ratio = AudioPlayerService().lastCompletionRatio;
+      if (ratio >= 0) {
+        unawaited(PlayHistoryService().recordCompletion(
+          prev,
+          completionRatio: ratio,
+          skipped: AudioPlayerService().lastPlayWasSkipped,
+        ));
+      }
+    }
+    lastRecordedSong = song;
+    unawaited(PlayHistoryService().record(song));
   });
   // 恢复上次选择的音效「预设选择」。
   // 注意：启动阶段尚无播放会话，此处**不做实际 apply**；真正的音效应用由
@@ -87,7 +103,7 @@ class MyApp extends StatelessWidget {
         systemNavigationBarContrastEnforced: false,
       ),
       child: MaterialApp(
-        title: 'Such Music',
+        title: 'SuchMusic概念版',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
           useMaterial3: true,
