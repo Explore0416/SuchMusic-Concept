@@ -8,6 +8,76 @@
 
 ---
 
+## [0.11.2] - 2026-10-15
+
+> **本次为累积发布**：v0.11.1 仅内部构建、未对外发布，因此本版（v0.11.2）
+> **同时包含 v0.11.1 的音效修复与 v0.11.2 的灰屏修复**。从 v0.11.0 直接升级即可
+> 获得下列两项修复，无需中间版本。
+
+### 修复
+- **关闭音效选择面板后整屏灰屏约 1 秒（重要修复）**：
+  用户实测录屏显示：点预设 → 关闭「音效」面板后约 0.2 秒，整屏变为均匀灰色
+  （实测 RGB 192,192,192，约占屏 98.9%），约 1.2 秒后自动恢复。该灰色层即
+  Flutter **release 模式下的 `RenderErrorBox`**（`0xF0C0C0C0`：alpha 94% + RGB 192，
+  故底层以极低对比度透出），意味着有 widget 在 build / layout / paint 阶段抛出了
+  **未捕获异常**。
+  - **根因**：`DesignToast`（设计稿风格轻提示）用裸 `OverlayEntry` + `Future.delayed`，
+    并把**调用方的 `BuildContext`** 闭包进 `builder`，在其中调用
+    `MediaQuery.of(context)`。当调用方（如音效底部弹窗）被销毁、而这条
+    **全屏 `Positioned.fill`** 条目仍在 root Overlay 中存活时，随后**任意一次
+    root Overlay 重建**都会用已卸载的 context 再次执行 builder →
+    `Null check operator used on a null value`（**release 可见的运行时异常，非
+    assert**）→ 整屏灰框；2 秒定时器移除条目后即自动恢复。时间特征与录屏完全吻合。
+  - **修复**：`DesignToast` 改为**受控实现**——单个可复用条目 + 受管 `Timer`；
+    条目内容**只使用自身 context**，绝不引用调用方 context；移除操作**幂等**；
+    整体 try/catch 兜底，任何情况下都不得成为异常源。视觉与 2 秒时长保持不变。
+  - **全局兜底**：`main()` 中、`runApp` 之前安装全局异常处理——
+    `ErrorWidget.builder`（release 下用极简安全占位替换整屏灰框，debug 下保留红屏）、
+    `FlutterError.onError`、`PlatformDispatcher.onError`（返回 true 防止进程被杀）。
+  - **异常落盘**：新增 `CrashLogService`，把最近异常写入应用支持目录
+    `last_error.log`（滚动保留最近 10 条）；设置页「其他」新增**只读**「错误日志」
+    查看 / 复制入口。**仅存本机、绝不上传**。
+  - **加固**：移除设置页 `_openSoundEffect` 中弹窗关闭后的多余 `setState(() {})`
+    （一次无意义的全页重建，其触发时刻恰与灰屏重合）。
+
+### 同期包含（原 v0.11.1，此前未对外发布）
+- **音效功能在小米 13 等主流机型上完全不可用**：此前点任意预设都弹「当前设备暂不支持
+  该音效」。根因是原生效果器把音频会话写死为 `0`（即全局输出混音，Android 9 起已废弃、
+  现代 ROM 会直接拒绝），已改为**绑定 App 自己的播放会话**，并新增 6 级降级策略链与
+  会话时序闭环。详见下方 `[0.11.1]` 章节。
+
+---
+
+## [0.11.1] - 2026-10-15
+
+### 修复
+- **音效功能在小米 13 等主流机型上完全不可用（重要修复）**：
+  此前「音效」面板里点击任意预设都会弹出「当前设备暂不支持该音效」，
+  实际并非设备不支持，而是效果器挂错了音频会话。
+  - **根因**：原生 `SoundEffectBridge` 创建 `DynamicsProcessing` 时把音频会话
+    写死为 `0`，即**全局输出混音**。该系统行为在 Android 9 起已被标记为废弃，
+    现代 ROM（含小米 HyperOS）会直接拒绝第三方 App 挂载，`native_setup` 返回
+    `ERROR_BAD_VALUE`，`AudioEffect` 构造函数随即抛出
+    `IllegalArgumentException("Effect type: ... not supported.")`；
+    该异常被兜底 `catch` 吞掉后返回 `false`，UI 便误报为「设备不支持」。
+  - **修复**：改为绑定 **App 自己的播放音频会话**（官方推荐做法）。会话 ID 取自
+    `just_audio` 的 `androidAudioSessionId`（底层为 ExoPlayer 的
+    `onAudioSessionIdChanged`），经 MethodChannel 传入原生，效果器以
+    `DynamicsProcessing(0, sessionId, cfg)` 创建。
+  - **兜底**：新增 6 级降级策略链（3 种配置 × 2 种 variant：完整 EQ+MBC+Limiter →
+    仅 EQ+Limiter → 仅 EQ，并各用 `VARIANT_FAVOR_FREQUENCY_RESOLUTION` /
+    `VARIANT_FAVOR_TIME_RESOLUTION` 重试一遍），逐级降级直至成功，最大限度
+    兼容不同厂商的实现差异。
+  - **时序**：启动时不再尝试应用音效（此时尚无播放会话，必然失败）；
+    改为监听会话就绪 / 切歌重建会话，自动用新会话重新应用已选预设。
+  - **可用性判定**：由「仅判断系统版本」改为**真实探测**（用真实会话创建一次
+    最简效果器后立即释放），探测结果仅用于界面展示，不再作为应用音效的硬门禁，
+    避免一次瞬时探测失败就把整条降级链短路。
+  - **提示文案**：区分「尚无播放会话 → 开始播放后自动生效」与「真实失败 → 显示
+    具体原因」，不再把可修复的失败统一误报为「设备不支持」。
+
+---
+
 ## [0.11.0] - 2026-10-15
 
 ### 修复

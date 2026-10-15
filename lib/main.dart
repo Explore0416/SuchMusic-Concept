@@ -15,6 +15,7 @@ import 'services/local_lyric_service.dart';
 import 'services/play_history_service.dart';
 import 'services/sound_effect_service.dart';
 import 'services/app_init.dart';
+import 'services/crash_log_service.dart';
 import 'services/sources/kugou_device_service.dart';
 import 'models/song_model.dart';
 import 'utils/player_route.dart';
@@ -25,6 +26,10 @@ import 'widgets/update_checker.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 全局异常兜底（必须在 runApp 之前安装）：
+  // - release 下 build 异常不再整屏灰框（RenderErrorBox），改为极简安全占位；
+  // - 捕获并落盘最近异常，便于用户复现时定位。
+  CrashLogService.instance.install();
   await AudioService.init(
     builder: () => AudioPlayerHandler(),
     config: const AudioServiceConfig(
@@ -57,7 +62,10 @@ void main() async {
   AudioPlayerService().onCurrentSongChanged.listen((song) {
     if (song != null) unawaited(PlayHistoryService().record(song));
   });
-  // 恢复上次选择的音效预设
+  // 恢复上次选择的音效「预设选择」。
+  // 注意：启动阶段尚无播放会话，此处**不做实际 apply**；真正的音效应用由
+  // AudioPlayerService 监听到 just_audio 会话就绪后调用 setSessionId 触发
+  // （效果器必须绑定 App 自己的播放会话，而非全局混音会话 0）。
   unawaited(SoundEffectService.instance.restore());
   // 酷狗设备注册（取播放直链前置，未注册会被风控拒绝）；
   // 后台进行、失败静默，取链时会自动再补一次。

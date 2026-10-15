@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/audio_player_service.dart';
 import '../services/sound_effect_service.dart';
 import 'design_dialog.dart';
 
@@ -91,10 +92,25 @@ class _SoundEffectBodyState extends State<_SoundEffectBody> {
   }
 
   Future<void> _apply(SoundEffectPreset preset) async {
-    final ok = await _service.apply(preset.code);
+    // 关键：把 just_audio 的真实播放会话 ID 一起传入，让原生效果器绑定
+    // App 自己的播放会话（而非被现代 ROM 拒绝的全局混音会话 0）。
+    final sessionId = AudioPlayerService().androidAudioSessionId;
+    final ok = await _service.apply(preset.code, sessionId: sessionId);
     if (!mounted) return;
     if (!ok) {
-      DesignToast.show(context, '当前设备暂不支持该音效');
+      // 尚无播放会话：预设已被原生记住，开始播放后会自动生效 —— 不是"设备不支持"。
+      if (sessionId == null || sessionId <= 0) {
+        DesignToast.show(context, '音效将在开始播放后自动生效');
+        return;
+      }
+      // 有会话却失败：按真实原因提示，便于真机定位。
+      final diag = await _service.diagnose();
+      if (!mounted) return;
+      final reason = diag?['lastError']?.toString().trim();
+      DesignToast.show(
+        context,
+        (reason == null || reason.isEmpty) ? '音效应用失败，请稍后重试' : '音效应用失败：$reason',
+      );
       return;
     }
     setState(() => _current = preset.code);
@@ -168,7 +184,7 @@ class _SoundEffectBodyState extends State<_SoundEffectBody> {
       return const Padding(
         padding: EdgeInsets.fromLTRB(16, 24, 16, 28),
         child: Text(
-          '当前系统不支持音效增强（需 Android 9 及以上）',
+          '音效增强暂不可用（当前设备/系统未提供所需能力）',
           style: TextStyle(color: SoundEffectSheet._sub, fontSize: 13),
         ),
       );
@@ -248,7 +264,8 @@ class _SoundEffectBodyState extends State<_SoundEffectBody> {
           ),
           const SizedBox(height: 8),
           const Text(
-            '基于系统 DynamicsProcessing 全局处理，部分机型可能不生效',
+            '基于系统 DynamicsProcessing 绑定当前播放会话处理，开始播放后自动生效',
+            textAlign: TextAlign.center,
             style: TextStyle(color: SoundEffectSheet._sub, fontSize: 11),
           ),
         ],

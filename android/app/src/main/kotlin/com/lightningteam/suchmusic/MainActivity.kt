@@ -24,6 +24,13 @@ class MainActivity : AudioServiceActivity() {
     private var pendingAudioName: String? = null
     private var audioSink: EventChannel.EventSink? = null
 
+    /**
+     * 音效桥：**提升为实例字段**（而非 configureFlutterEngine 内的局部变量）。
+     * 音效需要跨多次 MethodChannel 调用保持状态——`desiredCode`（用户期望的预设）
+     * 与当前音频会话 ID——因此不能每次调用都重建。
+     */
+    private val soundFx: SoundEffectBridge by lazy { SoundEffectBridge(applicationContext) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 原生兜底：窗口系统栏全透明。release 下 Flutter SystemChrome 的
@@ -152,16 +159,22 @@ class MainActivity : AudioServiceActivity() {
                 }
             }
 
-        // 音效（DynamicsProcessing 均衡器 / 预设）
-        val soundFx = SoundEffectBridge(applicationContext)
+        // 音效（DynamicsProcessing 均衡器 / 预设）——绑定 App 自己的播放会话
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SoundEffectBridge.CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "available" -> result.success(soundFx.available())
                     "presets" -> result.success(soundFx.listPresets())
-                    "apply" -> result.success(
-                        soundFx.apply(call.argument<String>("code") ?: "off")
-                    )
+                    "apply" -> {
+                        val code = call.argument<String>("code") ?: "off"
+                        val sessionId = call.argument<Int>("sessionId") ?: 0
+                        result.success(soundFx.apply(code, sessionId))
+                    }
+                    "setSessionId" -> {
+                        val id = call.argument<Int>("id") ?: 0
+                        result.success(soundFx.setSessionId(id))
+                    }
+                    "diagnose" -> result.success(soundFx.diagnose())
                     "disable" -> result.success(soundFx.disable())
                     "current" -> result.success(soundFx.current())
                     else -> result.notImplemented()
