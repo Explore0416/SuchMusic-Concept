@@ -83,6 +83,18 @@ kotlin {
     }
 }
 
+// ── 手环桥接：官方 SDK（可选依赖）──────────────────────────────
+// 小米官方 `xms-wearable-lib` AAR 因**专有许可不能随仓库分发**，因此：
+// **仅当 android/app/libs/xms-wearable-lib*.aar 存在时**才把它加入依赖；
+// 没有该 AAR 时构建必须正常通过（桥接层用薄适配层 + 反射访问，无编译期硬依赖）。
+// 用户把 `xms-wearable-lib_1.4_release.aar` 放入 android/app/libs/ 后重新构建即可启用真机通信。
+dependencies {
+    val bandAar = fileTree("libs") { include("xms-wearable-lib*.aar") }
+    if (!bandAar.isEmpty) {
+        implementation(bandAar)
+    }
+}
+
 flutter {
     source = "../.."
 }
