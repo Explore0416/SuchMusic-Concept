@@ -114,9 +114,12 @@ class BandService {
   Future<Map<String, dynamic>?> diagnose() => _channel.diagnose();
 
   /// 手机端搜索页「发送到手环」：把关键词推给手环搜索页（§3.10 方案 B）。
+  ///
+  /// 定向投递给**手环会话**，不广播给局域网其它客户端。
   void pushSearchPreset(String keyword) {
     if (!_enabled) return;
-    _router.pushEvent('search.preset', <String, dynamic>{'keyword': keyword});
+    _router.pushEvent('search.preset', <String, dynamic>{'keyword': keyword},
+        target: kBandSession);
   }
 
   /// 释放资源（主要供测试）。
@@ -134,6 +137,10 @@ class BandService {
   void _listenNative() {
     _nativeSub ??= _channel.events().listen(_onNativeEvent, onError: (_) {});
     _outgoingSub ??= _router.onOutgoing.listen((env) {
+      // 定向帧（target 非空）只回发对应会话：手环会话 id 为 kBandSession；
+      // 非手环的定向帧（如某次 WS 请求触发的分片）不得下发给手环。
+      // 全局事件（target == null）无差别下发手环。
+      if (env.target != null && env.target != kBandSession) return;
       _channel.send(env.encode());
     });
   }
@@ -141,6 +148,8 @@ class BandService {
   Future<void> _start() async {
     // 命令落地 + 状态订阅：挂在 AudioPlayerService() 单例（与 AudioPlayerHandler 同源）
     _router.attach(AudioPlayerServicePort());
+    // 新建链路 → 手环会话回到「未就绪」，强制先 sys.hello（会话就绪闸门）。
+    _router.resetSession(kBandSession);
     if (!_sdkReady) {
       _sdkReady = await _channel.available();
     }
@@ -157,6 +166,7 @@ class BandService {
   Future<void> _stop() async {
     await _channel.stop();
     _router.detach();
+    _router.resetSession(kBandSession);
     _setState(_sdkReady
         ? BandConnectionState.disconnected
         : BandConnectionState.unavailable);
@@ -169,7 +179,12 @@ class BandService {
         if (json != null) _handleIncoming(json);
         break;
       case BandEventType.state:
-        _setState(_parseState(event.state));
+        final next = _parseState(event.state);
+        // 掉线 / 重连 / 不可用 → 清除手环会话就绪状态，重连后必须重新握手。
+        if (next != BandConnectionState.ready) {
+          _router.resetSession(kBandSession);
+        }
+        _setState(next);
         break;
       case BandEventType.unknown:
         break;
@@ -179,7 +194,8 @@ class BandService {
   Future<void> _handleIncoming(String json) async {
     // 与局域网 WS 路径共用 BandRouter.handleRaw：
     // 解码 → 路由 → 回送响应，两条传输路径**行为完全一致**。
-    final response = await _router.handleRaw(json);
+    // 以 kBandSession 作为会话标识 → 同样受「会话就绪闸门」与「定向投递」约束。
+    final response = await _router.handleRaw(json, session: kBandSession);
     if (response != null) {
       await _channel.send(response);
     }

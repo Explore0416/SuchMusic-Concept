@@ -60,7 +60,19 @@ Future<(String?, List<String>)> _runDirect(
   return (res, calls);
 }
 
-/// 经 **局域网 WS（core.onFrame）** 路径执行一次请求。
+/// 会话握手帧（会话就绪闸门：命令前必须先完成 `sys.hello`）。
+/// [nick] 用于让不同会话使用不同 `id`，贴近真实客户端「`w-`/`b-` + bootId」命名。
+String _helloJson({String nick = '0b12'}) => BandEnvelope.request(
+      'h-$nick-0000',
+      'sys.hello',
+      payload: <String, dynamic>{
+        'role': 'windows',
+        'proto': <int>[1],
+        'caps': kAllCaps,
+      },
+    ).encode();
+
+/// 经 **局域网 WS（core.onFrame）** 路径执行一次请求（内部先完成握手）。
 Future<(String?, List<String>)> _runWs(
   String id,
   String method, [
@@ -70,6 +82,7 @@ Future<(String?, List<String>)> _runWs(
   final router = BandRouter(clock: _fixedClock)..attach(port);
   final core = _core(router: router);
   _accept(core);
+  await core.onFrame('c1', _helloJson()); // 先握手（否则命令会被会话就绪闸门拒绝）
   final json = BandEnvelope.request(id, method, payload: payload).encode();
   final out = await core.onFrame('c1', json);
   final calls = List<String>.from(port.calls);
@@ -151,10 +164,11 @@ void main() {
       expect(RelaySecurity.isPrivate('172.31.255.254'), isTrue);
       expect(RelaySecurity.isPrivate('172.32.0.1'), isFalse);
       expect(RelaySecurity.isPrivate('169.254.10.10'), isTrue);
-      expect(RelaySecurity.isPrivate('127.0.0.1'), isTrue);
+      expect(RelaySecurity.isPrivate('127.0.0.1'), isFalse); // 回环一律拒绝
+      expect(RelaySecurity.isPrivate('127.9.9.9'), isFalse); // 127/8 整段拒绝
       expect(RelaySecurity.isPrivate('8.8.8.8'), isFalse);
       expect(RelaySecurity.isPrivate('1.1.1.1'), isFalse);
-      expect(RelaySecurity.isPrivate('::1'), isTrue);
+      expect(RelaySecurity.isPrivate('::1'), isFalse); // IPv6 回环拒绝
       expect(RelaySecurity.isPrivate('fe80::1'), isTrue);
       expect(RelaySecurity.isPrivate('fd12:3456::1'), isTrue);
       expect(RelaySecurity.isPrivate('2001:4860::1'), isFalse);
@@ -230,6 +244,9 @@ void main() {
 
       _accept(core, id: 'cA', remote: '192.168.1.2');
       _accept(core, id: 'cB', remote: '192.168.1.3');
+      // 两条连接各自完成握手（会话就绪闸门：命令前必须握手）
+      await core.onFrame('cA', _helloJson(nick: '0a0a'));
+      await core.onFrame('cB', _helloJson(nick: '0b0b'));
 
       final json =
           BandEnvelope.request('w-0b12-0001', 'playback.next').encode();
@@ -249,6 +266,7 @@ void main() {
         await port.closeAll();
       });
       _accept(core);
+      await core.onFrame('c1', _helloJson()); // WS 会话先握手
 
       final json =
           BandEnvelope.request('b-7fa1-0007', 'playback.next').encode();
