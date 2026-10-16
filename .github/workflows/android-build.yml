@@ -78,6 +78,24 @@ jobs:
       - name: Unit / widget tests
         run: flutter test
 
+      # 手环 SDK（小米 xms-wearable-lib）：**专有许可，禁止随仓库分发**，故不入库。
+      # 采用「构建时自动加上」——从**私有 Release 资源**临时拉取到 android/app/libs/，
+      # 编译进 APK 后即随运行器销毁，AAR 从不出现在任何公开产物中（合规）。
+      # 未配置 secret（如公开 fork）时自动跳过 → 优雅降级为 Noop，构建照常通过。
+      # 详见 android/app/build.gradle.kts：仅当 libs/ 下存在该 AAR 时才加入依赖。
+      - name: Fetch Xiaomi wearable AAR (private, not redistributed)
+        if: ${{ secrets.WEARABLE_AAR_PAT != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.WEARABLE_AAR_PAT }}
+        run: |
+          mkdir -p android/app/libs
+          gh release download xms-wearable-lib \
+            -R Explore0416/SuchMusic-Band \
+            -p 'xms-wearable-lib*.aar' \
+            -D android/app/libs --clobber
+          ls -lh android/app/libs
+          test -n "$(ls -A android/app/libs)" || { echo "::error::AAR 拉取失败，未能启用真机通信" >&2; exit 1; }
+
       # 只出 release 包：debug + release 连编会耗尽 GitHub 运行器磁盘。
       # 正式签名 suchmusic-release.jks 与 key.properties 随私有仓库入库，
       # 构建产物自动带正式签名；若在公开 fork 缺失该文件则回退 debug 签名。

@@ -44,6 +44,11 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# 本地专有依赖目录：小米手环官方 SDK（xms-wearable-lib*.aar）为专有许可，
+# **禁止随仓库分发**，仅由本地放置或 CI 构建时从私有存储临时拉取（用完即弃）。
+# 忽略整个目录，杜绝任何情况下把 AAR 误提交进公开仓库。
+/android/app/libs/
+
 # APK 与本地参考文件
 such-music.apk
 cankao/
