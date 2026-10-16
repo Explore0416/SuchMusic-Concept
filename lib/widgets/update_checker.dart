@@ -136,7 +136,7 @@ class UpdateChecker {
     final cancelToken = CancelToken();
     double progress = 0;
     String progressText = '准备下载...';
-    String routeText = '线路：Gitee 主线路';
+    String routeText = '线路：正在选择最快线路…';
     bool dialogClosed = false;
     StateSetter? dialogSetState;
 
