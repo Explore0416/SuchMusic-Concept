@@ -84,10 +84,14 @@ jobs:
       # 未配置 secret（如公开 fork）时自动跳过 → 优雅降级为 Noop，构建照常通过。
       # 详见 android/app/build.gradle.kts：仅当 libs/ 下存在该 AAR 时才加入依赖。
       - name: Fetch Xiaomi wearable AAR (private, not redistributed)
-        if: ${{ secrets.WEARABLE_AAR_PAT != '' }}
         env:
           GH_TOKEN: ${{ secrets.WEARABLE_AAR_PAT }}
         run: |
+          # 注意：GitHub Actions 的 `if:` 条件不支持 secrets 上下文，故在 run 内判断。
+          if [ -z "$GH_TOKEN" ]; then
+            echo "未配置 WEARABLE_AAR_PAT → 跳取手环 SDK，优雅降级为 Noop（构建照常通过）"
+            exit 0
+          fi
           mkdir -p android/app/libs
           gh release download xms-wearable-lib \
             -R Explore0416/SuchMusic-Band \
