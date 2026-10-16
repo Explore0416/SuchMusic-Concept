@@ -111,7 +111,9 @@ class UpdateService {
     CancelToken? cancelToken,
   }) async {
     Object? lastError;
-    for (final url in urls.where((u) => u.isNotEmpty)) {
+    // 下载前并发探测各线路速率，优先走最快线路；探测异常时回退为原始顺序
+    final ordered = await rankBySpeed(urls.where((u) => u.isNotEmpty).toList());
+    for (final url in ordered) {
       try {
         onRouteChanged?.call(_routeNameOf(url));
         return await _downloadOne(
@@ -135,6 +137,51 @@ class UpdateService {
     }
     if (url.contains('gitee.com')) return 'Gitee 线路';
     return 'GitHub 备用线路';
+  }
+
+  /// 下载前对候选线路并发测速，按实测速率降序返回。
+  /// 任一步骤失败均不抛异常：探测失败视为 0，全部为 0 时回退为原顺序，
+  /// 保证「测速」环节本身永不阻断更新流程。
+  static Future<List<String>> rankBySpeed(List<String> urls) async {
+    if (urls.length <= 1) return urls;
+    try {
+      final speeds = await Future.wait(urls.map(_probeSpeed));
+      if (speeds.every((v) => v == 0)) return urls; // 全部探测失败 → 原顺序
+      final order = List<int>.generate(urls.length, (i) => i)
+        ..sort((a, b) => speeds[b].compareTo(speeds[a]));
+      return order.map((i) => urls[i]).toList();
+    } catch (_) {
+      return urls;
+    }
+  }
+
+  /// 探测单条线路速率：Range 取前 256KB（≤4s），返回字节/秒；失败返回 0。
+  static Future<int> _probeSpeed(String url) async {
+    final sw = Stopwatch()..start();
+    int bytes = 0;
+    try {
+      final resp = await _dio.get<ResponseBody>(
+        url,
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {'Range': 'bytes=0-262143'},
+          sendTimeout: const Duration(seconds: 5),
+          receiveTimeout: const Duration(seconds: 5),
+        ),
+      );
+      final stream = resp.data?.stream;
+      if (stream != null) {
+        await for (final chunk in stream) {
+          bytes += chunk.length;
+          if (bytes >= 262144 || sw.elapsedMilliseconds >= 4000) break;
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ 线路测速失败（按最慢处理）: $url | $e');
+    }
+    sw.stop();
+    final ms = sw.elapsedMilliseconds <= 0 ? 1 : sw.elapsedMilliseconds;
+    return (bytes * 1000 / ms).round();
   }
 
   /// 从单个直链下载 APK 到缓存目录
