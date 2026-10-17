@@ -28,6 +28,21 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final _apiService = MusicApiService();
+
+  /// 安全读取 PageController 当前页。
+  /// `PageController.page` 内部调用 `position`（要求恰好 1 个 position），
+  /// 而在长列表滚动/重建期间可能瞬时挂载 0 或 2 个 position，直接取会抛
+  /// `Bad state: Too many elements`（每帧异常，页面卡顿）。
+  static double? _safePageOf(PageController c) {
+    try {
+      if (!c.hasClients) return null;
+      if (c.positions.length != 1) return null;
+      return c.page;
+    } catch (_) {
+      return null;
+    }
+  }
+
   List<PlaylistModel> _rankings = [];
   bool _loadingRankings = true;
   List<SongModel> _hotSongs = [];
@@ -561,7 +576,7 @@ class _HomePageState extends State<HomePage> {
                     child: NotificationListener<ScrollNotification>(
               onNotification: (notification) {
                 if (notification is ScrollEndNotification) {
-                  final onLast = (ctrl.page?.round() ?? 0) == pages.length - 1;
+                  final onLast = (_safePageOf(ctrl)?.round() ?? 0) == pages.length - 1;
                   if (!onLast) {
                     // 离开最后一页，重置提示状态
                     final removed = _hintShownCtrls.remove(ctrl);
@@ -575,7 +590,7 @@ class _HomePageState extends State<HomePage> {
                 }
                 if (notification is OverscrollNotification &&
                     notification.overscroll > 0 &&
-                    (ctrl.page?.round() ?? 0) == pages.length - 1) {
+                    (_safePageOf(ctrl)?.round() ?? 0) == pages.length - 1) {
                   if (_hintShownCtrls.contains(ctrl)) {
                     if (_hintArmedCtrls.contains(ctrl) && onSlideEnter != null) {
                       setState(() {
