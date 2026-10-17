@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -184,7 +185,9 @@ class UpdateService {
     return (bytes * 1000 / ms).round();
   }
 
-  /// 从单个直链下载 APK 到缓存目录
+  /// 从单个直链下载 APK 到缓存目录。
+  /// 优先用 **4 路分块并行下载**（Range 请求，显著提升单连接被限速时的吞吐）；
+  /// 服务器不支持 Range / 任一分块失败时，回退为单连接下载。
   static Future<String> _downloadOne(
     String url, {
     void Function(int received, int total)? onProgress,
@@ -194,6 +197,23 @@ class UpdateService {
     final savePath = '${dir.path}/such_music_update.apk';
     final old = File(savePath);
     if (await old.exists()) await old.delete();
+
+    try {
+      final ok = await _downloadParallel(
+        url,
+        savePath,
+        onProgress: onProgress,
+        cancelToken: cancelToken,
+      );
+      if (ok) return savePath;
+    } catch (e) {
+      if (e is DioException && e.type == DioExceptionType.cancel) rethrow;
+      debugPrint('⚠️ 多连接下载失败，回退单连接: $e');
+      try {
+        if (await old.exists()) await old.delete();
+      } catch (_) {}
+    }
+
     // 大文件下载：放宽接收超时
     await _dio.download(
       url,
@@ -203,6 +223,154 @@ class UpdateService {
       onReceiveProgress: onProgress,
     );
     return savePath;
+  }
+
+  /// 4 路分块并行下载；成功返回 true，条件不满足（小文件 / 不支持 Range）返回 false。
+  ///
+  /// 实现要点：
+  /// - 每路写独立 `.partN` 文件（避免多 future 交错 `setPosition` 造成写串），
+  ///   全部完成后顺序拼接为主文件；
+  /// - 任一路响应非 206（服务器忽略 Range）即判定不支持，清理分片后回退；
+  /// - 进度为各路已收字节之和，取消令牌透传给每一路。
+  static Future<bool> _downloadParallel(
+    String url,
+    String savePath, {
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+    int connections = 4,
+  }) async {
+    const minSize = 8 * 1024 * 1024; // < 8MB 不值得并行
+    int total = -1;
+    bool rangeOk = false;
+
+    try {
+      final head = await _dio.head(
+        url,
+        options: Options(
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 15),
+        ),
+      );
+      total = int.tryParse(head.headers.value(HttpHeaders.contentLengthHeader) ?? '') ?? -1;
+      final accept = (head.headers.value('accept-ranges') ?? '').toLowerCase();
+      rangeOk = accept.contains('bytes');
+    } catch (e) {
+      debugPrint('HEAD 失败（继续尝试 Range 探测）: $e');
+    }
+
+    // HEAD 不可用：用一次 Range 探测确认 206 与总长（Content-Range: bytes 0-0/12345）
+    if (total <= 0 || !rangeOk) {
+      try {
+        final probe = await _dio.get<ResponseBody>(
+          url,
+          options: Options(
+            responseType: ResponseType.stream,
+            headers: {'Range': 'bytes=0-0'},
+            sendTimeout: const Duration(seconds: 10),
+            receiveTimeout: const Duration(seconds: 15),
+          ),
+        );
+        rangeOk = probe.statusCode == 206;
+        final cr = probe.headers.value('content-range') ?? '';
+        final slash = cr.lastIndexOf('/');
+        if (slash > 0) total = int.tryParse(cr.substring(slash + 1)) ?? total;
+        // 立即丢弃探测流
+        await probe.data?.stream.drain<void>();
+      } catch (e) {
+        debugPrint('Range 探测失败: $e');
+      }
+    }
+
+    if (!rangeOk || total < minSize) return false;
+
+    final parts = <File>[];
+    final received = List<int>.filled(connections, 0);
+    int reported = 0;
+    void report() {
+      final sum = received.fold<int>(0, (a, b) => a + b);
+      if (sum - reported >= 64 * 1024 || sum == total) {
+        reported = sum;
+        onProgress?.call(sum, total);
+      }
+    }
+
+    final chunk = (total / connections).ceil();
+    try {
+      final futures = <Future<void>>[];
+      for (var i = 0; i < connections; i++) {
+        final start = i * chunk;
+        if (start >= total) break;
+        final end = math.min(total - 1, start + chunk - 1);
+        final partPath = '$savePath.part$i';
+        parts.add(File(partPath));
+        futures.add(() async {
+          final resp = await _dio.get<ResponseBody>(
+            url,
+            cancelToken: cancelToken,
+            options: Options(
+              responseType: ResponseType.stream,
+              headers: {'Range': 'bytes=$start-$end'},
+              sendTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(minutes: 30),
+            ),
+          );
+          if (resp.statusCode != 206) {
+            throw StateError('服务器未按 Range 返回（${resp.statusCode}）');
+          }
+          final sink = File(partPath).openWrite();
+          try {
+            await for (final data in resp.data!.stream) {
+              if (cancelToken?.isCancelled ?? false) {
+                throw DioException.requestCancelled(
+                  requestOptions: RequestOptions(path: url),
+                  reason: '用户取消下载',
+                );
+              }
+              sink.add(data);
+              received[i] += data.length;
+              report();
+            }
+          } finally {
+            await sink.flush();
+            await sink.close();
+          }
+        }());
+      }
+      await Future.wait(futures);
+
+      // 顺序拼接
+      final out = File(savePath).openWrite();
+      try {
+        for (final p in parts) {
+          await out.addStream(p.openRead());
+        }
+      } finally {
+        await out.flush();
+        await out.close();
+      }
+      final size = await File(savePath).length();
+      if (size != total) {
+        throw StateError('合并后大小不符：$size != $total');
+      }
+      for (final p in parts) {
+        try {
+          await p.delete();
+        } catch (_) {}
+      }
+      return true;
+    } catch (e) {
+      // 清理分片与半成品，交给单连接重试
+      for (final p in parts) {
+        try {
+          if (await p.exists()) await p.delete();
+        } catch (_) {}
+      }
+      try {
+        final f = File(savePath);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+      rethrow;
+    }
   }
 
   /// 调起系统安装器安装 APK，成功返回 null，失败返回错误信息
