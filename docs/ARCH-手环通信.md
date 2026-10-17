@@ -777,24 +777,30 @@ Windows 侧命令产生的状态变化同样回推给手环（§阶段 5）。
 
 ## 6. 交付与验证路径
 
-### 6.1 `.rpk` 本地构建与侧载（沙箱内不可执行，供用户本地执行）
+### 6.1 `.rpk` 构建、侧载与互联绑定
 
-> 事实：`.rpk` 需 **小米 AIoT-IDE**（专有工具链），本沙箱无该工具 → **无法自动构建**。
+> 事实更新（实测）：
+> - `.rpk` 由**公开 npm 工具链 `aiot-toolkit`** 命令行构建（`aiot release --enable-jsc`），
+>   无需 GUI IDE；产物为 **`.jsc` 字节码**（手环运行时不认 `hap-toolkit` 产出的纯 `.js`，
+>   装上会永远卡启动页——官方模拟器实测确认）。
+> - **互联绑定不存在「运动健康授权」步骤**。官方 interconnect 文档：通信前提只有
+>   「快应用与手机端 App **包名一致、签名一致**」+ 手机 App 已安装并在运行。
+>   手环端 `connect.diagnosis()` 可返回 `1001=对端应用未安装 / 204=连接超时 / 0=OK`。
 
 ```text
-前置：Node.js 18.x；小米 AIoT-IDE；已与手环配对的小米运动健康 App
+前置：Node.js 18.x；aiot-toolkit（npm i -g aiot-toolkit @aiot-toolkit/jsc）；
+      已与手环配对的小米运动健康 App
 
-1) 准备签名（见 §6.2），得到 sign/sign.pem（含私钥+证书）
-2) 校验 manifest：package = com.lightningteam.suchmusic；designWidth=106；
-   deviceTypeList=["watch"]；features 含 system.interconnect / system.file /
-   system.storage / system.router
-3) 工程：cd suchmusic-band && npm install
-4) AIoT-IDE 打开工程 → Signing 配置指向 sign/sign.pem（口令用 key.properties 的）
-5) Build → Release(.rpk) → 产物如 dist/com.lightningteam.suchmusic.debug.1.0.0.rpk
-6) 侧载（二选一）：
-   a) 「Notify for Xiaomi」→ 设备 → Third-party app → 上传 .rpk
-   b) 小米运动健康 开发者模式 / adb（若开放）安装
-7) 验证：手环应用列表出现「SuchMusic」→ 打开 → 首页显示当前播放（手机先放歌）
+1) 准备签名：sign/certificate.pem + sign/private.pem（由手机端 jks 导出，见 §6.2）
+2) 校验 manifest：package = com.lightningteam.suchmusic（=手机端包名）；
+   designWidth=106（CSS 数值按 1 单位=2 物理 px 设计）；deviceTypeList=["watch"]
+3) 构建：sh scripts/build.sh（自动 aiot release --enable-jsc + 同源签名）
+4) 侧载：「Notify for Xiaomi」→ 设备 → Third-party app → 上传 .rpk
+   （安装前先卸载旧版，Vela 会缓存旧包）
+5) 绑定：手机端 SuchMusic 保持运行（前台/后台）→ 打开手环端 SuchMusic → 自动互联
+   （首次如弹系统授权提示请允许；无任何运动健康内的授权入口，属正常）
+6) 验证：手机播放一首歌 → 手环首页显示歌名与进度；
+   手环端显示「手机未装App」= 手机端未安装或未运行
 ```
 
 ### 6.2 证书导出（本次已用 keytool 核实，可直接照做）

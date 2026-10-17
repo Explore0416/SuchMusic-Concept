@@ -526,10 +526,12 @@ class _BandPageState extends State<BandPage> {
     const steps = <String>[
       '在手机「设置 → 手环」开启「启用手环控制」。',
       '将小米手环与手机在「小米运动健康」中完成蓝牙配对，并保持连接。',
-      '安装手环端快应用 SuchMusic（需与手机 App 使用同一包名与签名），'
-          '首次打开会请求设备互联权限，请允许。',
-      '在「小米运动健康 → 设备 → 第三方应用 / 授权」中，为 SuchMusic 授权设备互联。',
-      '进入手环端 SuchMusic 首页，手机播放一首歌即可看到歌名与进度。',
+      '安装手环端快应用 SuchMusic（与手机 App 同包名、同签名）。',
+      '保持本 App 在前台或后台运行，然后打开手环端 SuchMusic，'
+          '两端会自动建立互联（无需在运动健康中做任何授权）。',
+      '首次连接如弹出系统授权提示，请允许；'
+          '手环端显示「手机未装App」时，请确认本 App 已安装并处于运行状态。',
+      '手机播放一首歌，手环首页即可看到歌名与进度。',
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
