@@ -40,6 +40,9 @@ class MainActivity : AudioServiceActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android 13+ 需运行时授予通知权限：手环 SDK 的「设备互联授权」以系统通知呈现，
+        // 未授权时用户看不到任何提示 → 权限永远无法授予 → 互联一直「连接中」。
+        ensureNotificationPermission()
         // 原生兜底：窗口系统栏全透明。release 下 Flutter SystemChrome 的
         // 导航栏透明设置不可靠（debug 正常、release 白底），故在此强制设置
         window.apply {
@@ -64,6 +67,17 @@ class MainActivity : AudioServiceActivity() {
      * 解析入站音频意图：`ACTION_VIEW`（打开方式）取 `data`，
      * `ACTION_SEND`（分享）取 `EXTRA_STREAM`；命中则缓存 Uri + 显示名并尝试投递。
      */
+    /** Android 13+：请求通知权限（手环授权提示与播放通知都依赖它）。 */
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            val granted = checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
+    }
+
     private fun captureInboundAudio(intent: Intent?) {
         val i = intent ?: return
         val action = i.action ?: return
