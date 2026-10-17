@@ -29,15 +29,29 @@ class _BandPageState extends State<BandPage> {
   /// 令牌默认打码显示，用户点「显示」后才明文（降低肩窥风险）。
   bool _showToken = false;
 
+  /// 原生适配器诊断（nodeId / 权限 / 安装状态 / 最近错误），用于定位连接失败。
+  Map<String, dynamic>? _diag;
+
+  Future<void> _loadDiag() async {
+    try {
+      final d = await _band.diagnose();
+      if (mounted && d != null) setState(() => _diag = d);
+    } catch (_) {
+      // 诊断读取失败不影响主流程
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     // 进入页面刷新一次真实状态（SDK / 连接 / 快应用安装）
     _band.refresh().then((_) {
       if (mounted) setState(() {});
+      _loadDiag();
     });
     _stateSub = _band.onStateChanged.listen((_) {
       if (mounted) setState(() {});
+      _loadDiag();
     });
     // 中继：状态 / 连接数变化时刷新
     _relaySub = _relay.onStatusChanged.listen((_) {
@@ -56,6 +70,7 @@ class _BandPageState extends State<BandPage> {
     setState(() => _busy = true);
     await _band.refresh();
     if (mounted) setState(() => _busy = false);
+    await _loadDiag();
   }
 
   Future<void> _toggleEnabled(bool value) async {
@@ -210,6 +225,33 @@ class _BandPageState extends State<BandPage> {
                       text: '检测到本机未加载小米手环官方 SDK（xms-wearable-lib）。'
                           '这不会影响 App 其它功能；按下方指引放置 AAR 后重新构建即可启用真机通信。'
                           '当前显示为「不可用 / 未知」属正常现象。',
+                    ),
+                  ],
+                  // 连接失败定位：直接展示原生适配器诊断（无需连电脑看 logcat）
+                  if (_band.sdkReady) ...[
+                    SizedBox(height: 10 * s),
+                    _sectionHeader('诊断', s),
+                    SizedBox(height: 10 * s),
+                    _card(
+                      s: s,
+                      child: Column(
+                        children: [
+                          _statusRow('适配器', '${_diag?['adapter'] ?? '—'}', s),
+                          _divider(s),
+                          _statusRow('节点', '${_diag?['nodeId'] ?? '未发现'}', s),
+                          _divider(s),
+                          _statusRow(
+                            '设备管理权限',
+                            (_diag?['permissionGranted'] == true) ? '已授予' : '未授予',
+                            s,
+                            valueColor: (_diag?['permissionGranted'] == true)
+                                ? const Color(0xFF2F84FE)
+                                : const Color(0xFFFF9800),
+                          ),
+                          _divider(s),
+                          _statusRow('最近错误', '${_diag?['lastError'] ?? '无'}', s),
+                        ],
+                      ),
                     ),
                   ],
                   SizedBox(height: 10 * s),
