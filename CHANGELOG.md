@@ -8,6 +8,30 @@
 
 ---
 
+## [0.14.4] - 2026-10-17
+
+> 本版修复**手环互联无法建立**（手机端一直显示「连接中」、手环端显示「未连」）。
+
+### 修复
+- **消息监听注册签名错误**：官方 SDK 为 `MessageApi.addListener(nodeId, listener)`，
+  旧实现按 `registerMessageReceivedListener(listener)` 查找 → 方法不存在、注册失败，
+  手机端永远收不到手环的任何一帧。现按官方签名注册，并把 nodeId 发现提前到注册之前。
+- **权限类路径错误**：`Permission` 实际位于 `com.xiaomi.xms.wearable.auth.Permission`，
+  旧代码写成 `...wearable.Permission` → 权限检查从未成功。已修正。
+- **节点 id 取值**：`Node.id` 是公有字段（非 `getId()`），旧实现按方法查找取不到。已改为字段优先。
+- **异步结果处理**：`checkPermission` / `requestPermission` / `isWearAppInstalled` / `sendMessage`
+  返回 `Task`，旧实现同步取 `getResult()` 恒失败。现统一挂 `addOnSuccessListener` /
+  `addOnFailureListener`，失败原因（签名不一致 / 未授权 / 未安装）写入诊断。
+- **Android 13+ 通知权限**：手环授权提示以系统通知呈现，未授予通知权限时用户看不到任何提示。
+  启动时主动请求 `POST_NOTIFICATIONS`。
+- 「手环端快应用」状态不再恒为「未知」：安装查询改为异步缓存刷新。
+
+### 配套
+- 手环端快应用 **v1.0.8**：改为**固定尺寸布局**（不再依赖 `flex:1`，修复文字竖排/按钮挤压），
+  并在未连接时对播放类操作给出 Toast 提示。
+
+---
+
 ## [0.14.3] - 2026-10-17
 
 > 本版为**小米手环适配正式接入版**：手机端内置小米手环官方 SDK（xms-wearable-lib），

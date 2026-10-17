@@ -27,12 +27,14 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         private const val TAG = "XmsBandAdapter"
 
         private const val CLS_WEARABLE = "com.xiaomi.xms.wearable.Wearable"
-        private const val CLS_PERMISSION = "com.xiaomi.xms.wearable.Permission"
+        // 注意：Permission 在 auth 子包下（com.xiaomi.xms.wearable.auth.Permission），
+        // 写成 com.xiaomi.xms.wearable.Permission 会 ClassNotFound → 权限检查永远失败。
+        private const val CLS_PERMISSION = "com.xiaomi.xms.wearable.auth.Permission"
         private const val CLS_MSG_LISTENER =
             "com.xiaomi.xms.wearable.message.OnMessageReceivedListener"
 
-        /** 节点 id 取值候选方法名 */
-        private val NODE_ID_METHODS = arrayOf("getId", "getNodeId", "id")
+        /** 节点 id：Node 的 `id` 是**公有字段**（非 getId()），故先取字段再兜底方法。 */
+        private val NODE_ID_METHODS = arrayOf("getId", "getNodeId")
 
         /** 注册消息监听的候选方法名 */
         private val ADD_LISTENER_METHODS = arrayOf(
@@ -57,6 +59,7 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
     private var permissionGranted = false
     private var available = false
     private var lastError: String? = null
+    private var installState: String = BandAdapterDefaults.STATE_UNKNOWN
 
     init {
         // 仅探测类是否存在（不初始化），决定本适配器是否启用。
@@ -77,11 +80,14 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         if (!available) return false
         return try {
             ensureApis()
-            registerListener(listener)
+            // 顺序很关键：官方 API 是 addListener(nodeId, listener)，
+            // 必须先发现节点拿到 nodeId，才能注册消息监听。
             val node = discoverNode()
             if (node != null) {
                 currentNode = node
-                permissionGranted = checkPermission(node)
+                registerListener(node, listener)
+                requestPermissionAsync(node)
+                queryInstallState(node)
                 return true
             }
             lastError = "未发现已连接的手环节点"
@@ -108,7 +114,11 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         for (name in SEND_METHODS) {
             val result = invoke(api, name, arrayOf(String::class.java, ByteArray::class.java), node, bytes)
             if (result != INVOKE_FAILED) {
-                // 返回值可能为 Task / Boolean，均视为「已受理」
+                // Task<Void>：挂失败监听把真实原因（签名不一致/未授权/未安装）记入 lastError
+                attachTaskFailure(result) { e ->
+                    lastError = "sendMessage 失败: ${e.message}"
+                    Log.w(TAG, lastError ?: "")
+                }
                 return true
             }
         }
@@ -116,17 +126,22 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         return false
     }
 
-    override fun wearAppInstallState(): String {
-        val api = nodeApi ?: return BandAdapterDefaults.STATE_UNKNOWN
-        val node = currentNode ?: return BandAdapterDefaults.STATE_UNKNOWN
-        // 先试带参 isWearAppInstalled(nodeId)，再试无参变体
-        val withArg = invoke(api, "isWearAppInstalled", arrayOf(String::class.java), node)
-        val raw = if (withArg != INVOKE_FAILED) withArg
-        else invoke(api, "isWearAppInstalled", emptyArray(), *emptyArray())
-        return when (raw) {
-            is Boolean -> if (raw) BandAdapterDefaults.STATE_INSTALLED else BandAdapterDefaults.STATE_NOT_INSTALLED
-            else -> BandAdapterDefaults.STATE_UNKNOWN
+    /** 返回缓存值；真值由 [queryInstallState] 异步刷新（UI 点「刷新连接状态」可见）。 */
+    override fun wearAppInstallState(): String = installState
+
+    /** 异步查询手环端快应用安装状态：`Task<Boolean> isWearAppInstalled(nodeId)`。 */
+    private fun queryInstallState(nodeId: String) {
+        val api = nodeApi ?: return
+        val task = invoke(api, "isWearAppInstalled", arrayOf(String::class.java), nodeId)
+        if (task == INVOKE_FAILED) return
+        attachTaskSuccess(task) { v ->
+            installState = if (v == true) {
+                BandAdapterDefaults.STATE_INSTALLED
+            } else {
+                BandAdapterDefaults.STATE_NOT_INSTALLED
+            }
         }
+        attachTaskFailure(task) { installState = BandAdapterDefaults.STATE_UNKNOWN }
     }
 
     override fun diagnose(): Map<String, Any?> = mapOf(
@@ -134,6 +149,7 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         "available" to available,
         "nodeId" to currentNode,
         "permissionGranted" to permissionGranted,
+        "installState" to installState,
         "lastError" to lastError,
     )
 
@@ -146,12 +162,22 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         if (messageApi == null) messageApi = staticCall(CLS_WEARABLE, "getMessageApi", context)
     }
 
-    /** 通过动态代理实现 `OnMessageReceivedListener`，收到消息后回调 Rust 侧监听器。 */
-    private fun registerListener(listener: BandMessageListener) {
+    /**
+     * 注册消息监听。官方签名（v1.4 AAR 实测）：
+     * `Task<Void> addListener(String nodeId, OnMessageReceivedListener listener)`
+     * —— 必须带 nodeId，且方法名是 **addListener**（不存在 registerMessageReceivedListener）。
+     */
+    private fun registerListener(nodeId: String, listener: BandMessageListener) {
         val api = messageApi ?: return
         if (listenerProxy != null) return
+        val iface = try {
+            Class.forName(CLS_MSG_LISTENER)
+        } catch (e: Throwable) {
+            lastError = "找不到 OnMessageReceivedListener: ${e.message}"
+            Log.w(TAG, lastError ?: "")
+            return
+        }
         val proxy = try {
-            val iface = Class.forName(CLS_MSG_LISTENER)
             Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, args ->
                 try {
                     if (method.name == "onMessageReceived" && args != null && args.size >= 2) {
@@ -168,48 +194,39 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         } catch (e: Throwable) {
             lastError = "创建监听代理失败: ${e.message}"
             Log.w(TAG, lastError ?: "")
-            null
-        } ?: return
+            return
+        }
 
         listenerProxy = proxy
-        var registered = false
-        for (name in ADD_LISTENER_METHODS) {
-            val candidate = findMethod(api, name)
-            if (candidate != null) {
-                val paramTypes = candidate.parameterTypes
-                if (paramTypes.isNotEmpty() && paramTypes[0].isInstance(proxy)) {
-                    if (invoke(api, name, arrayOf(paramTypes[0]), proxy) != INVOKE_FAILED) {
-                        registered = true
-                        break
-                    }
-                }
-            }
+        // 官方形态：addListener(String, Listener)
+        val task = invoke(
+            api, "addListener",
+            arrayOf(String::class.java, iface), nodeId, proxy
+        )
+        if (task == INVOKE_FAILED) {
+            lastError = "addListener 调用失败（签名不匹配）"
+            listenerProxy = null
+            Log.w(TAG, lastError ?: "")
+            return
         }
-        if (!registered) {
-            // 也存在挂到 Wearable 上的写法，最后尝试一次
-            for (name in ADD_LISTENER_METHODS) {
-                if (invokeStatic(CLS_WEARABLE, name, arrayOf(proxy.javaClass.interfaces.first()), proxy) != INVOKE_FAILED) {
-                    registered = true
-                    break
-                }
-            }
+        // Task 失败（签名不一致 / 未授权 / 未安装）时记录真实原因，便于诊断
+        attachTaskFailure(task) { e ->
+            lastError = "addListener 失败: ${e.message}"
+            Log.w(TAG, lastError ?: "")
         }
-        if (!registered) lastError = "注册消息监听失败（无匹配方法）"
+        Log.i(TAG, "addListener ok, node=$nodeId")
     }
 
+    /** 反注册：官方 `Task<Void> removeListener(String nodeId)`（只收 nodeId，不接 listener）。 */
     private fun unregisterListener() {
         val api = messageApi
-        val proxy = listenerProxy ?: return
-        if (api != null) {
-            for (name in arrayOf("removeMessageReceivedListener", "unregisterMessageReceivedListener", "removeListener")) {
-                val m = findMethod(api, name) ?: continue
-                if (m.parameterTypes.isNotEmpty() && m.parameterTypes[0].isInstance(proxy)) {
-                    invoke(api, name, arrayOf(m.parameterTypes[0]), proxy)
-                    break
-                }
-            }
-        }
+        val node = currentNode
         listenerProxy = null
+        if (api == null || node == null) return
+        val result = invoke(api, "removeListener", arrayOf(String::class.java), node)
+        if (result == INVOKE_FAILED) {
+            Log.w(TAG, "removeListener 调用失败（不影响功能）")
+        }
     }
 
     /** 发现已连接节点：兼容「同步返回 List」与「返回 Task<List>（getResult 立即取值）」两种形态。 */
@@ -232,6 +249,14 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
 
     private fun nodeIdOf(node: Any): String? {
         if (node is String) return node
+        // Node.id 是公有字段（AAR 实测），优先按字段取
+        try {
+            val f = node.javaClass.getField("id")
+            val v = f.get(node)
+            if (v is String && v.isNotEmpty()) return v
+        } catch (e: Throwable) {
+            // 继续尝试方法形态
+        }
         for (name in NODE_ID_METHODS) {
             val v = invoke(node, name, emptyArray(), *emptyArray())
             if (v is String && v.isNotEmpty()) return v
@@ -254,76 +279,128 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         }
     }
 
-    /** 申请 / 校验 DEVICE_MANAGER 权限。返回值可能为 Boolean 或 Task<Boolean>。 */
-    private fun checkPermission(nodeId: String): Boolean {
-        val api = authApi ?: return false
-        return try {
+    /**
+     * 校验 DEVICE_MANAGER 权限；未授予则发起授权请求。
+     * 官方签名：`Task<Boolean> checkPermission(nodeId, Permission)`、
+     * `Task<Permission[]> requestPermission(nodeId, Permission...)` —— 全异步，结果回写 permissionGranted。
+     */
+    private fun requestPermissionAsync(nodeId: String) {
+        val api = authApi ?: return
+        try {
             val permClass = Class.forName(CLS_PERMISSION)
-            val deviceManager = permissionConstant(permClass) ?: return false
-            val check = invoke(
+            val dm = permissionConstant(permClass) ?: return
+            val checkTask = invoke(
                 api, "checkPermission",
-                arrayOf(String::class.java, permClass), nodeId, deviceManager
+                arrayOf(String::class.java, permClass), nodeId, dm
             )
-            if (toBoolean(check)) return true
-            // 未授予 → 请求授权（可能弹系统授权面板）。
-            // requestPermission 返回 Task<Boolean>（异步完成）——同步 getResult 拿不到，
-            // 必须挂监听器等用户在手机上确认后再更新 permissionGranted。
-            val requested = invoke(
-                api, "requestPermission",
-                arrayOf(String::class.java, permClass), nodeId, deviceManager
-            )
-            if (requested != null && requested != INVOKE_FAILED && requested !is Boolean) {
-                attachTaskListeners(requested)
-                lastError = "已发起设备互联授权请求，等待用户在手机上确认"
+            if (checkTask == INVOKE_FAILED) {
+                lastError = "checkPermission 调用失败（签名不匹配）"
+                return
             }
-            toBoolean(requested)
+            attachTaskSuccess(checkTask) { v ->
+                if (v == true) {
+                    permissionGranted = true
+                    Log.i(TAG, "DEVICE_MANAGER 已授权")
+                } else {
+                    requestPermission(nodeId, permClass, dm)
+                }
+            }
+            attachTaskFailure(checkTask) {
+                requestPermission(nodeId, permClass, dm)
+            }
         } catch (e: Throwable) {
             lastError = "权限处理失败: ${e.message}"
             Log.w(TAG, lastError ?: "")
-            false
         }
     }
 
-    /**
-     * 给 Task<Boolean> 挂成功/失败监听（反射，避免编译期依赖）：
-     * 用户在手机上确认授权后，把结果回写 permissionGranted 并记录日志。
-     */
-    private fun attachTaskListeners(task: Any) {
+    /** 发起授权请求（varargs 签名需构造 Permission[]）。 */
+    private fun requestPermission(nodeId: String, permClass: Class<*>, dm: Any) {
+        val api = authApi ?: return
         try {
-            val names = arrayOf("addOnSuccessListener", "addOnCompleteListener")
-            for (m in task.javaClass.methods) {
-                if (m.name !in names) continue
-                val pts = m.parameterTypes
-                if (pts.size == 1 && pts[0].isInterface) {
-                    try {
-                        m.invoke(task, java.lang.reflect.Proxy.newProxyInstance(
-                            javaClass.classLoader, arrayOf(pts[0])
-                        ) { _, _, _ ->
-                            // 回调触发：重新校验权限（用户可能已在手机上点同意）
-                            try {
-                                val api = authApi ?: return@newProxyInstance null
-                                val permClass = Class.forName(CLS_PERMISSION)
-                                val node = currentNode ?: return@newProxyInstance null
-                                val dm = permissionConstant(permClass) ?: return@newProxyInstance null
-                                val check = invoke(
-                                    api, "checkPermission",
-                                    arrayOf(String::class.java, permClass), node, dm
-                                )
-                                permissionGranted = toBoolean(check)
-                                Log.i(TAG, "授权回调: permissionGranted=$permissionGranted")
-                            } catch (e: Throwable) {
-                                Log.w(TAG, "授权回调处理失败: ${e.message}")
-                            }
-                            null
-                        })
-                        return
-                    } catch (e: Throwable) {
-                        // 尝试下一个重载
-                    }
+            val arrayCls = java.lang.reflect.Array.newInstance(permClass, 0).javaClass
+            val arr = java.lang.reflect.Array.newInstance(permClass, 1)
+            java.lang.reflect.Array.set(arr, 0, dm)
+            val task = invoke(
+                api, "requestPermission",
+                arrayOf(String::class.java, arrayCls), nodeId, arr
+            )
+            if (task == INVOKE_FAILED) {
+                lastError = "requestPermission 调用失败（签名不匹配）"
+                Log.w(TAG, lastError ?: "")
+                return
+            }
+            lastError = "已发起设备互联授权，请在手机通知栏/弹窗中允许"
+            Log.i(TAG, lastError ?: "")
+            attachTaskSuccess(task) {
+                val again = invoke(
+                    api, "checkPermission",
+                    arrayOf(String::class.java, permClass), nodeId, dm
+                )
+                attachTaskSuccess(again) { v ->
+                    permissionGranted = (v == true)
+                    Log.i(TAG, "授权后 permissionGranted=$permissionGranted")
                 }
             }
+            attachTaskFailure(task) { e ->
+                lastError = "授权失败: ${e.message}"
+                Log.w(TAG, lastError ?: "")
+            }
         } catch (e: Throwable) {
-            Log.w(TAG, "挂接授权监听失败: ${e.message}")
+            lastError = "requestPermission 异常: ${e.message}"
+        }
+    }
+
+    /** 给 Task 挂成功监听：回调参数即 Task.getResult()。 */
+    private fun attachTaskSuccess(task: Any?, onSuccess: (Any?) -> Unit) {
+        if (task == null || task == INVOKE_FAILED) return
+        try {
+            val m = task.javaClass.methods.firstOrNull {
+                it.name == "addOnSuccessListener" &&
+                    it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0].isInterface
+            } ?: return
+            val iface = m.parameterTypes[0]
+            val proxy = Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, args ->
+                if (method.name == "onSuccess") {
+                    try {
+                        onSuccess(args?.firstOrNull())
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "success 回调异常: ${e.message}")
+                    }
+                }
+                null
+            }
+            m.invoke(task, proxy)
+        } catch (e: Throwable) {
+            Log.w(TAG, "挂成功监听失败: ${e.message}")
+        }
+    }
+
+    /** 给 Task 挂失败监听（拿到真实异常：签名不一致 / 未授权 / 未安装）。 */
+    private fun attachTaskFailure(task: Any?, onFailure: (Exception) -> Unit) {
+        if (task == null || task == INVOKE_FAILED) return
+        try {
+            val m = task.javaClass.methods.firstOrNull {
+                it.name == "addOnFailureListener" &&
+                    it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0].isInterface
+            } ?: return
+            val iface = m.parameterTypes[0]
+            val proxy = Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, args ->
+                if (method.name == "onFailure") {
+                    val e = args?.firstOrNull() as? Exception ?: Exception("unknown")
+                    try {
+                        onFailure(e)
+                    } catch (inner: Throwable) {
+                        Log.w(TAG, "failure 回调异常: ${inner.message}")
+                    }
+                }
+                null
+            }
+            m.invoke(task, proxy)
+        } catch (e: Throwable) {
+            Log.w(TAG, "挂失败监听失败: ${e.message}")
         }
     }
 
