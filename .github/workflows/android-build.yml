@@ -171,6 +171,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           UPDATES_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
         run: |
           bash scripts/changelog_extract.sh "$VERSION_NAME" CHANGELOG.md > /tmp/changelog_section.md || true
           bash scripts/publish_updates.sh \
