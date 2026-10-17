@@ -265,16 +265,65 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
                 arrayOf(String::class.java, permClass), nodeId, deviceManager
             )
             if (toBoolean(check)) return true
-            // 未授予 → 请求授权（可能弹系统授权面板）
+            // 未授予 → 请求授权（可能弹系统授权面板）。
+            // requestPermission 返回 Task<Boolean>（异步完成）——同步 getResult 拿不到，
+            // 必须挂监听器等用户在手机上确认后再更新 permissionGranted。
             val requested = invoke(
                 api, "requestPermission",
                 arrayOf(String::class.java, permClass), nodeId, deviceManager
             )
+            if (requested != null && requested != INVOKE_FAILED && requested !is Boolean) {
+                attachTaskListeners(requested)
+                lastError = "已发起设备互联授权请求，等待用户在手机上确认"
+            }
             toBoolean(requested)
         } catch (e: Throwable) {
             lastError = "权限处理失败: ${e.message}"
             Log.w(TAG, lastError ?: "")
             false
+        }
+    }
+
+    /**
+     * 给 Task<Boolean> 挂成功/失败监听（反射，避免编译期依赖）：
+     * 用户在手机上确认授权后，把结果回写 permissionGranted 并记录日志。
+     */
+    private fun attachTaskListeners(task: Any) {
+        try {
+            val names = arrayOf("addOnSuccessListener", "addOnCompleteListener")
+            for (m in task.javaClass.methods) {
+                if (m.name !in names) continue
+                val pts = m.parameterTypes
+                if (pts.size == 1 && pts[0].isInterface) {
+                    try {
+                        m.invoke(task, java.lang.reflect.Proxy.newProxyInstance(
+                            javaClass.classLoader, arrayOf(pts[0])
+                        ) { _, _, _ ->
+                            // 回调触发：重新校验权限（用户可能已在手机上点同意）
+                            try {
+                                val api = authApi ?: return@newProxyInstance null
+                                val permClass = Class.forName(CLS_PERMISSION)
+                                val node = currentNode ?: return@newProxyInstance null
+                                val dm = permissionConstant(permClass) ?: return@newProxyInstance null
+                                val check = invoke(
+                                    api, "checkPermission",
+                                    arrayOf(String::class.java, permClass), node, dm
+                                )
+                                permissionGranted = toBoolean(check)
+                                Log.i(TAG, "授权回调: permissionGranted=$permissionGranted")
+                            } catch (e: Throwable) {
+                                Log.w(TAG, "授权回调处理失败: ${e.message}")
+                            }
+                            null
+                        })
+                        return
+                    } catch (e: Throwable) {
+                        // 尝试下一个重载
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "挂接授权监听失败: ${e.message}")
         }
     }
 
