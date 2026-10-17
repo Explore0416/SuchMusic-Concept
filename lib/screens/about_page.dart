@@ -156,18 +156,52 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                 ResponsiveContent(
                   child: Column(
                     children: [
-                      SizedBox(height: size.height * 0.18),
+                      SizedBox(height: size.height * 0.15),
+                      // 概念版标识：克制的字母间距标签（原版无此行），用主色弱化呈现
+                      Text(
+                        'SUCHMUSIC',
+                        style: TextStyle(
+                          fontSize: 10,
+                          letterSpacing: 6,
+                          fontWeight: FontWeight.w600,
+                          color: _themeBlue.withValues(alpha: 0.7),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
                       // Such Music 字标 SVG（设计稿 logo 区域 367/430 屏宽，缩小 10%）
                       SvgPicture.asset(
                         'assets/images/Such_music_sxt.svg',
                         width: logoWidth,
                         fit: BoxFit.contain,
                       ),
-                      const SizedBox(height: 14),
-                      Text(
-                        'v $_appVersion',
-                        style: const TextStyle(
-                            fontSize: 14, color: Color(0xFF7C7C7C)),
+                      const SizedBox(height: 12),
+                      // 版本 + 概念版徽章同一行：视觉重量与原版一致，但表明这是概念版
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'v $_appVersion',
+                            style: const TextStyle(
+                                fontSize: 14, color: Color(0xFF7C7C7C)),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _themeBlue.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '概念版',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: _themeBlue,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       Expanded(child: Container()),
                       Container(
@@ -197,6 +231,15 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                               ),
                             ),
                           ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      // 概念版定位说明：一行小字，与流光背景同灰阶，不抢卡片注意力
+                      Text(
+                        '功能试验田 · 可能与正式版存在差异',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: const Color(0xFF9A9AA0).withValues(alpha: 0.9),
                         ),
                       ),
                       SizedBox(height: size.height * 0.19),

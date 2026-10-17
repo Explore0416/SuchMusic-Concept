@@ -102,9 +102,14 @@ class UpdateService {
     return int.tryParse(info.buildNumber) ?? 1;
   }
 
-  /// 下载 APK：依次尝试多个直链，任一成功即返回保存路径
-  /// 用户主动取消时直接抛出，不再尝试下一个链接
-  /// [onRouteChanged] 在每次切换下载源时回调线路名称（Cloudflare 主线路 / GitHub 备用线路）
+  /// 下载 APK：先在**全部候选源**中并发测速，按实测吞吐排序后逐个尝试。
+  ///
+  /// 「优选」的两层含义：
+  /// 1. **多源**：Cloudflare / GitHub 直连 / GitHub 公共加速镜像同时纳入候选；
+  /// 2. **多连接**：选定线路后若支持 `Range`（206），切成 4 路并行下载；
+  ///    不支持（如 CF Worker 忽略 Range）则立即回退单连接，不浪费流量。
+  ///
+  /// 用户主动取消时直接抛出，不再尝试下一个链接。
   static Future<String> downloadApk(
     List<String> urls, {
     void Function(int received, int total)? onProgress,
@@ -112,8 +117,9 @@ class UpdateService {
     CancelToken? cancelToken,
   }) async {
     Object? lastError;
+    final candidates = _expandMirrors(urls.where((u) => u.isNotEmpty).toList());
     // 下载前并发探测各线路速率，优先走最快线路；探测异常时回退为原始顺序
-    final ordered = await rankBySpeed(urls.where((u) => u.isNotEmpty).toList());
+    final ordered = await rankBySpeed(candidates);
     for (final url in ordered) {
       try {
         onRouteChanged?.call(_routeNameOf(url));
@@ -131,12 +137,46 @@ class UpdateService {
     throw lastError ?? Exception('无可用的下载地址');
   }
 
+  /// GitHub 公共加速镜像前缀（国内多数网络下比 github.com 直连快，且普遍支持 Range）。
+  /// 失效镜像在测速阶段会被判为最慢并排到最后，不会拖慢正常下载。
+  static const List<String> _ghMirrors = [
+    'https://ghfast.top/',
+    'https://gh-proxy.com/',
+    'https://ghproxy.net/',
+  ];
+
+  /// 展开候选源：原始 URL + GitHub 直链对应的镜像变体（去重、保持原始顺序优先）。
+  static List<String> _expandMirrors(List<String> urls) {
+    final out = <String>[];
+    void add(String u) {
+      if (u.isNotEmpty && !out.contains(u)) out.add(u);
+    }
+
+    for (final u in urls) {
+      add(u);
+      final isGitHub = u.contains('github.com/') ||
+          u.contains('githubusercontent.com/') ||
+          u.contains('objects.githubusercontent.com/');
+      if (isGitHub) {
+        for (final m in _ghMirrors) {
+          add('$m$u');
+        }
+      }
+    }
+    return out;
+  }
+
   /// 下载线路显示名（供下载对话框提示用）。
   static String _routeNameOf(String url) {
     if (url.contains('de5.net') || url.contains('pages.dev')) {
       return 'Cloudflare 主线路';
     }
     if (url.contains('gitee.com')) return 'Gitee 线路';
+    if (url.contains('ghfast.top') ||
+        url.contains('gh-proxy.com') ||
+        url.contains('ghproxy.net')) {
+      return '加速镜像线路';
+    }
     return 'GitHub 备用线路';
   }
 
@@ -156,7 +196,7 @@ class UpdateService {
     }
   }
 
-  /// 探测单条线路速率：Range 取前 256KB（≤4s），返回字节/秒；失败返回 0。
+  /// 探测单条线路速率：Range 取前 128KB（≤3s），返回字节/秒；失败返回 0。
   static Future<int> _probeSpeed(String url) async {
     final sw = Stopwatch()..start();
     int bytes = 0;
@@ -165,7 +205,7 @@ class UpdateService {
         url,
         options: Options(
           responseType: ResponseType.stream,
-          headers: {'Range': 'bytes=0-262143'},
+          headers: {'Range': 'bytes=0-131071'},
           sendTimeout: const Duration(seconds: 5),
           receiveTimeout: const Duration(seconds: 5),
         ),
@@ -174,7 +214,7 @@ class UpdateService {
       if (stream != null) {
         await for (final chunk in stream) {
           bytes += chunk.length;
-          if (bytes >= 262144 || sw.elapsedMilliseconds >= 4000) break;
+          if (bytes >= 131072 || sw.elapsedMilliseconds >= 3000) break;
         }
       }
     } catch (e) {
