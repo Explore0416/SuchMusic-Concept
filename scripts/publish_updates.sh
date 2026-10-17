@@ -91,4 +91,18 @@ else
     commit -q -m "release: v${VERSION_NAME}（build ${VERSION_CODE}）"
   git push -q origin "$BRANCH"
 fi
+# 4/4 清除 Cloudflare 边缘缓存
+#     Worker 对 /latest.apk 有 1 小时缓存；不清缓存会「清单已是新版本、下载仍是旧包」。
+#     未配置 CF_API_TOKEN / CF_ZONE_ID 时跳过（不影响发布）。
+if [ -n "${CF_API_TOKEN:-}" ] && [ -n "${CF_ZONE_ID:-}" ]; then
+  echo "▶ 4/4 清除 CF 边缘缓存"
+  curl -s -m 20 -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+    -H "Authorization: Bearer ${CF_API_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data "{\"files\":[\"${DOMAIN}/latest.apk\",\"${DOMAIN}/update.json\"]}" \
+    | grep -q '"success":true' && echo "✔ 缓存已清除" || echo "⚠️ 缓存清除失败（不影响已发布内容）"
+else
+  echo "ℹ️ 未配置 CF_API_TOKEN/CF_ZONE_ID，跳过缓存清除"
+fi
+
 echo "✔ 完成：清单 ${DOMAIN}/update.json ｜ 安装包 ${DOMAIN}/latest.apk"
