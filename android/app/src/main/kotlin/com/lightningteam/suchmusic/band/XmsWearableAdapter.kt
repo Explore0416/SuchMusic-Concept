@@ -54,12 +54,43 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
     private var nodeApi: Any? = null
     private var authApi: Any? = null
     private var messageApi: Any? = null
+    private var serviceApi: Any? = null
+    private var serviceListenerProxy: Any? = null
     private var listenerProxy: Any? = null
+
+    @Volatile
     private var currentNode: String? = null
+
+    @Volatile
     private var permissionGranted = false
+
+    @Volatile
     private var available = false
+
+    @Volatile
     private var lastError: String? = null
+
+    @Volatile
     private var installState: String = BandAdapterDefaults.STATE_UNKNOWN
+
+    /** 当前监听者（异步发现到节点后需要用它注册监听）。 */
+    private var activeListener: BandMessageListener? = null
+
+    /** 节点发现是否处于运行态（stop 后停止重试）。 */
+    @Volatile
+    private var discovering = false
+
+    /** 一轮发现是否在途，避免并发重复调用。 */
+    @Volatile
+    private var discoverInflight = false
+
+    /** 已发现节点数（诊断用，区分「服务没连上」与「拿到了节点但注册失败」）。 */
+    @Volatile
+    private var lastNodeCount = -1
+
+    private val retryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private val discoveryRetry = Runnable { discoverNodeAsync() }
 
     init {
         // 仅探测类是否存在（不初始化），决定本适配器是否启用。
@@ -76,22 +107,31 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
 
     override fun currentNodeId(): String? = currentNode
 
+    /**
+     * 启动链路。
+     *
+     * **关键修正（v0.14.7）**：官方 `NodeApi.getConnectedNodes()` 返回
+     * `Task<List<Node>>`（**异步**）。旧实现同步取 `getResult()`，任务未完成时永远拿不到，
+     * 于是 [start] 判失败 → 手机端一直停在「连接中」。
+     *
+     * 现在：只要 SDK 可用就立即返回 true（表示链路已进入「连接中」），
+     * 节点发现交给异步回调 + 3 秒重试，直到拿到节点并注册监听。
+     */
     override fun start(listener: BandMessageListener): Boolean {
         if (!available) return false
         return try {
             ensureApis()
-            // 顺序很关键：官方 API 是 addListener(nodeId, listener)，
-            // 必须先发现节点拿到 nodeId，才能注册消息监听。
-            val node = discoverNode()
+            activeListener = listener
+            discovering = true
+            val node = currentNode
             if (node != null) {
-                currentNode = node
                 registerListener(node, listener)
                 requestPermissionAsync(node)
                 queryInstallState(node)
-                return true
+            } else {
+                discoverNodeAsync()
             }
-            lastError = "未发现已连接的手环节点"
-            false
+            true
         } catch (e: Throwable) {
             lastError = e.message
             Log.w(TAG, "start 失败: ${e.message}")
@@ -99,8 +139,84 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         }
     }
 
+    /**
+     * 异步发现已连接节点：`getConnectedNodes()` → 成功回调拿 `List<Node>` → 取 `node.id`。
+     * 失败或空列表时 3 秒后重试（手环可能后连上）。
+     */
+    private fun discoverNodeAsync() {
+        val api = nodeApi ?: return
+        if (!discovering || discoverInflight) return
+        discoverInflight = true
+        val task = invoke(api, "getConnectedNodes", emptyArray(), *emptyArray())
+        if (task == INVOKE_FAILED || task == null) {
+            discoverInflight = false
+            lastError = "getConnectedNodes 调用失败（SDK 服务可能未就绪）"
+            Log.w(TAG, lastError ?: "")
+            scheduleDiscoveryRetry()
+            return
+        }
+        // 少数实现可能直接返回列表而非 Task
+        if (task is Iterable<*> || task is Array<*>) {
+            onNodesDiscovered(task)
+            return
+        }
+        attachTaskSuccess(task) { v -> onNodesDiscovered(v) }
+        attachTaskFailure(task) { e ->
+            discoverInflight = false
+            lastError = "getConnectedNodes 失败: ${e.message}（检查小米运动健康是否在运行）"
+            Log.w(TAG, lastError ?: "")
+            scheduleDiscoveryRetry()
+        }
+    }
+
+    private fun onNodesDiscovered(raw: Any?) {
+        discoverInflight = false
+        if (!discovering) return
+        val list: List<Any> = when {
+            raw is Iterable<*> -> raw.filterNotNull()
+            raw is Array<*> -> raw.filterNotNull()
+            else -> emptyList()
+        }
+        lastNodeCount = list.size
+        val id = list.asSequence().mapNotNull { nodeIdOf(it) }.firstOrNull()
+        if (id.isNullOrEmpty()) {
+            lastError = "未发现已连接的手环节点（手机与手环需保持蓝牙互连，且小米运动健康在运行）"
+            scheduleDiscoveryRetry()
+            return
+        }
+        currentNode = id
+        lastError = null
+        Log.i(TAG, "发现手环节点: $id（共 ${list.size} 个）")
+        activeListener?.let { registerListener(id, it) }
+        requestPermissionAsync(id)
+        queryInstallState(id)
+    }
+
+    private fun scheduleDiscoveryRetry() {
+        if (!discovering) return
+        retryHandler.removeCallbacks(discoveryRetry)
+        retryHandler.postDelayed(discoveryRetry, 3000)
+    }
+
     override fun stop() {
+        discovering = false
+        discoverInflight = false
+        retryHandler.removeCallbacks(discoveryRetry)
+        activeListener = null
         unregisterListener()
+        // 注销服务连接监听（保持与注册对称）
+        try {
+            val api = serviceApi
+            val proxy = serviceListenerProxy
+            if (api != null && proxy != null) {
+                val iface = Class.forName("com.xiaomi.xms.wearable.service.OnServiceConnectionListener")
+                invoke(api, "unregisterServiceConnectionListener", arrayOf(iface), proxy)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "注销服务监听失败: ${e.message}")
+        }
+        serviceListenerProxy = null
+        serviceApi = null
         nodeApi = null
         authApi = null
         messageApi = null
@@ -148,6 +264,8 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         "adapter" to "xms",
         "available" to available,
         "nodeId" to currentNode,
+        "nodeCount" to lastNodeCount,
+        "discovering" to discovering,
         "permissionGranted" to permissionGranted,
         "installState" to installState,
         "lastError" to lastError,
@@ -155,11 +273,63 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
 
     // ── 内部实现 ──────────────────────────────────────────────
 
-    /** 初始化 NodeApi / AuthApi / MessageApi（三个静态工厂）。 */
+    /** 初始化 NodeApi / AuthApi / MessageApi（三个静态工厂）+ 注册服务连接监听。 */
     private fun ensureApis() {
         if (nodeApi == null) nodeApi = staticCall(CLS_WEARABLE, "getNodeApi", context)
         if (authApi == null) authApi = staticCall(CLS_WEARABLE, "getAuthApi", context)
         if (messageApi == null) messageApi = staticCall(CLS_WEARABLE, "getMessageApi", context)
+        if (serviceApi == null) serviceApi = staticCall(CLS_WEARABLE, "getServiceApi", context)
+        registerServiceListener()
+    }
+
+    /**
+     * 注册「与小米运动健康服务连接」的监听。
+     *
+     * 这是此前遗漏的一环：`NodeApi.getConnectedNodes()` 依赖 SDK 与手机端
+     * 小米运动健康（`com.xiaomi.wearable` / `com.mi.health`）的 Binder 服务连接；
+     * 服务未连上时该调用会失败或返回空列表，表现为「一直连接中」。
+     * 注册后可在服务就绪时立刻重新发现节点，并在断开时清理状态。
+     */
+    private fun registerServiceListener() {
+        val api = serviceApi ?: return
+        if (serviceListenerProxy != null) return
+        val iface = try {
+            Class.forName("com.xiaomi.xms.wearable.service.OnServiceConnectionListener")
+        } catch (e: Throwable) {
+            lastError = "找不到 OnServiceConnectionListener: ${e.message}"
+            return
+        }
+        val proxy = try {
+            Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, _ ->
+                when (method.name) {
+                    "onServiceConnected" -> {
+                        Log.i(TAG, "小米穿戴服务已连接，开始发现节点")
+                        lastError = "服务已连接，正在发现手环节点"
+                        discoverInflight = false
+                        if (discovering) discoverNodeAsync()
+                    }
+                    "onServiceDisconnected" -> {
+                        Log.w(TAG, "小米穿戴服务已断开")
+                        lastError = "小米穿戴服务断开（请确认小米运动健康在运行）"
+                        currentNode = null
+                        lastNodeCount = -1
+                        listenerProxy = null
+                        if (discovering) scheduleDiscoveryRetry()
+                    }
+                }
+                null
+            }
+        } catch (e: Throwable) {
+            lastError = "创建服务监听失败: ${e.message}"
+            return
+        }
+        serviceListenerProxy = proxy
+        val r = invoke(api, "registerServiceConnectionListener", arrayOf(iface), proxy)
+        if (r == INVOKE_FAILED) {
+            serviceListenerProxy = null
+            lastError = "registerServiceConnectionListener 调用失败"
+            Log.w(TAG, lastError ?: "")
+        }
     }
 
     /**
@@ -207,12 +377,15 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
             lastError = "addListener 调用失败（签名不匹配）"
             listenerProxy = null
             Log.w(TAG, lastError ?: "")
+            scheduleDiscoveryRetry()
             return
         }
         // Task 失败（签名不一致 / 未授权 / 未安装）时记录真实原因，便于诊断
         attachTaskFailure(task) { e ->
+            listenerProxy = null
             lastError = "addListener 失败: ${e.message}"
             Log.w(TAG, lastError ?: "")
+            scheduleDiscoveryRetry()
         }
         Log.i(TAG, "addListener ok, node=$nodeId")
     }

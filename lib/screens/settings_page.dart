@@ -678,19 +678,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   SizedBox(height: 10 * s),
                   _buildCard(
                     s: s,
-                    onTap: _showClearCacheDialog,
-                    child: Text(
-                      '清理缓存',
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 16 * s,
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _showClearRecommendationDialog,
+                    onTap: () => _showStorageCleanupSheet(s),
                     child: Row(
                       children: [
                         Expanded(
@@ -698,7 +686,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '清除本地推荐数据',
+                                '清理数据',
                                 style: TextStyle(
                                   color: Colors.black,
                                   fontSize: 16 * s,
@@ -706,7 +694,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               ),
                               SizedBox(height: 2 * s),
                               Text(
-                                '删除播放历史与曲风推断（仅本机，不上传）',
+                                '缓存 / 播放历史与推荐数据（均仅存本机）',
                                 style: TextStyle(
                                   color: const Color(0xFF838383),
                                   fontSize: 11 * s,
@@ -867,6 +855,80 @@ class _SettingsPageState extends State<SettingsPage> {
               shape: BoxShape.circle,
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  /// 统一清理入口：把原先并列的「清理缓存」「清除本地推荐数据」两张卡片合并为一项，
+  /// 避免同一分组里出现两个语义相近的清除操作。面板内再分两条，各自沿用原有确认流程。
+  void _showStorageCleanupSheet(double s) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36 * s,
+              height: 4 * s,
+              margin: EdgeInsets.only(top: 10 * s, bottom: 12 * s),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE5E5E5),
+                borderRadius: BorderRadius.circular(2 * s),
+              ),
+            ),
+            Text('清理数据',
+                style: TextStyle(
+                    fontSize: 17 * s, fontWeight: FontWeight.w600)),
+            SizedBox(height: 4 * s),
+            Text('以下数据均仅保存在本机，清理后不可恢复',
+                style: TextStyle(
+                    fontSize: 11 * s, color: const Color(0xFF838383))),
+            SizedBox(height: 8 * s),
+            _cleanupRow(s, '清理缓存', '封面等临时文件，不影响使用记录', () {
+              Navigator.pop(ctx);
+              _showClearCacheDialog();
+            }),
+            _cleanupRow(s, '清除本地推荐数据', '播放历史、时段分布、曲风推断结果', () {
+              Navigator.pop(ctx);
+              _showClearRecommendationDialog();
+            }),
+            SizedBox(height: 12 * s),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cleanupRow(
+      double s, String title, String subtitle, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 20 * s, vertical: 12 * s),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(fontSize: 15 * s, color: Colors.black)),
+                  SizedBox(height: 2 * s),
+                  Text(subtitle,
+                      style: TextStyle(
+                          fontSize: 11 * s, color: const Color(0xFF838383))),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right,
+                size: 18, color: Color(0xFFCCCCCC)),
+          ],
         ),
       ),
     );
