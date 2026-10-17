@@ -106,7 +106,9 @@ jobs:
       # --target-platform 限定为 arm/arm64：x86_64 仅模拟器需要，去掉可省约 20MB；
       # 注意 gradle 的 ndk.abiFilters 对 Flutter 预编译引擎库无效，必须用该参数。
       - name: Build release APK
-        run: flutter build apk --release --target-platform android-arm,android-arm64 --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
+        # 仅 arm64：去掉 x86_64（21MB，真机无用）与 armeabi-v7a（17MB，现代手机不需要），
+        # APK 由 ~71MB 降至 ~31MB，下载耗时减半（Cloudflare 线路不支持 Range，无法并行分块）
+        run: flutter build apk --release --target-platform android-arm64 --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
 
       # 校验 APK 签名证书（公开 fork 缺 key.properties 时会在此明确暴露 debug 回退）
       - name: Verify APK signature
