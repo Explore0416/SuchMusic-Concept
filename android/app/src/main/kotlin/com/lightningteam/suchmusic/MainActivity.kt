@@ -7,8 +7,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.view.WindowManager
 import com.lightningteam.suchmusic.band.BandChannelBridge
+import com.lightningteam.suchmusic.local.LocalMusicScanner
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -37,6 +39,12 @@ class MainActivity : AudioServiceActivity() {
      * 没有官方 `xms-wearable-lib` AAR 时内部回退 Noop 适配器，通道仍可正常应答。
      */
     private val bandBridge: BandChannelBridge by lazy { BandChannelBridge(applicationContext) }
+
+    /** 本地音乐扫描器（本地页面用；扫描在后台线程执行）。 */
+    private val localMusic: LocalMusicScanner by lazy { LocalMusicScanner(applicationContext) }
+
+    /** 等待音频权限结果后再完成的扫描请求。 */
+    private var pendingScanResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +76,56 @@ class MainActivity : AudioServiceActivity() {
      * `ACTION_SEND`（分享）取 `EXTRA_STREAM`；命中则缓存 Uri + 显示名并尝试投递。
      */
     /** Android 13+：请求通知权限（手环授权提示与播放通知都依赖它）。 */
+    /** 后台线程扫描，结果回主线程（MethodChannel.Result 必须在主线程调用）。 */
+    private fun runLocalScan(result: MethodChannel.Result) {
+        Thread {
+            val data = try {
+                localMusic.scan()
+            } catch (e: Throwable) {
+                mapOf(
+                    "tracks" to emptyList<Any>(),
+                    "audioPermission" to localMusic.hasAudioPermission(),
+                    "allFilesAccess" to localMusic.hasAllFilesAccess(),
+                )
+            }
+            runOnUiThread { result.success(data) }
+        }.start()
+    }
+
+    /** 跳「所有文件访问权限」设置页（Android 11+），返回是否成功打开。 */
+    private fun openAllFilesSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        return try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            true
+        } catch (e: Throwable) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                true
+            } catch (e2: Throwable) {
+                false
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1002) {
+            val r = pendingScanResult
+            pendingScanResult = null
+            if (r != null) runLocalScan(r)
+        }
+    }
+
     private fun ensureNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
             val granted = checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
@@ -204,6 +262,30 @@ class MainActivity : AudioServiceActivity() {
 
         // 手环桥接（小米手环）：MethodChannel + EventChannel，SDK 调用经薄适配层反射访问
         bandBridge.register(flutterEngine)
+
+        // 本地音乐：扫描系统音频库 + 目录中的 KGM/VPR 加密文件
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LocalMusicScanner.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "scan" -> {
+                            if (localMusic.hasAudioPermission()) {
+                                runLocalScan(result)
+                            } else {
+                                // 先请求音频权限，结果回调后继续扫描（不让 UI 卡在等待）
+                                pendingScanResult = result
+                                requestPermissions(LocalMusicScanner.AUDIO_PERMISSIONS, 1002)
+                            }
+                        }
+                        "hasAudioPermission" -> result.success(localMusic.hasAudioPermission())
+                        "hasAllFilesAccess" -> result.success(localMusic.hasAllFilesAccess())
+                        "openAllFilesSettings" -> result.success(openAllFilesSettings())
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Throwable) {
+                    result.success(null)
+                }
+            }
 
         // 多品牌灵动胶囊 / 小窗增强（小米 / vivo / OPPO / 荣耀 / 通用兜底）
         flutterEngine.plugins.add(BrandIslandBridge())
