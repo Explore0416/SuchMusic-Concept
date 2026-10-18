@@ -106,6 +106,7 @@ class LocalMusicScanner(private val context: Context) {
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.DATA,
         )
         context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
@@ -121,6 +122,7 @@ class LocalMusicScanner(private val context: Context) {
             val albumCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
             val durCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             val sizeCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+            val dataCol = c.getColumnIndex(MediaStore.Audio.Media.DATA)
 
             while (c.moveToNext()) {
                 val id = c.getLong(idCol)
@@ -130,18 +132,24 @@ class LocalMusicScanner(private val context: Context) {
                 val key = uri.toString()
                 if (!seen.add(key)) continue
                 val ext = display.substringAfterLast('.', "").lowercase()
+
+                // 加密格式即使被 MediaStore 收录（部分 ROM 会索引 .kgm），
+                // 也不能当普通音频直接播——必须标成 kgm 并拿到真实路径走解密。
+                val isKgm = ext in KGM_EXTS
+                val dataPath = if (dataCol >= 0) c.getString(dataCol) else null
                 out.add(
                     mapOf(
                         "uri" to key,
-                        "path" to null,
+                        "path" to if (isKgm && !dataPath.isNullOrBlank()) dataPath else null,
                         "name" to display.substringBeforeLast('.'),
                         "title" to (c.getString(titleCol) ?: display),
-                        "artist" to (c.getString(artistCol) ?: "未知艺人"),
-                        "album" to (c.getString(albumCol) ?: "未知专辑"),
-                        "durationMs" to c.getLong(durCol),
+                        // 占位值（<unknown> 等）交给 Dart 侧统一归一化为「未知歌手」
+                        "artist" to c.getString(artistCol),
+                        "album" to c.getString(albumCol),
+                        "durationMs" to if (isKgm) 0L else c.getLong(durCol),
                         "size" to c.getLong(sizeCol),
                         "ext" to ext,
-                        "kind" to "media",
+                        "kind" to if (isKgm) "kgm" else "media",
                     )
                 )
             }
@@ -206,7 +214,8 @@ class LocalMusicScanner(private val context: Context) {
                     "path" to path,
                     "name" to f.nameWithoutExtension,
                     "title" to f.nameWithoutExtension,
-                    "artist" to "本地文件",
+                    // 留空：由 Dart 侧从「歌手 - 歌名」文件名解析，或回落「未知歌手」
+                    "artist" to "",
                     "album" to dir.name,
                     "durationMs" to 0L,
                     "size" to f.length(),

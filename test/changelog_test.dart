@@ -64,8 +64,11 @@ void main() {
       final entries = parseChangelog(text);
       expect(entries.length, greaterThanOrEqualTo(10));
       expect(entries.first.version, isNotEmpty);
-      // 版本号降序（最新的在最前）
-      expect(entries.first.version, '1.0.0');
+      // 最新版本号必须等于 pubspec 的 version（防止发了版却忘了写日志）
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      final m = RegExp(r'^version:\s*([0-9.]+)', multiLine: true).firstMatch(pubspec);
+      expect(m, isNotNull);
+      expect(entries.first.version, m!.group(1));
       for (final e in entries) {
         expect(e.blocks, isNotEmpty, reason: '版本 ${e.version} 没有内容');
       }
