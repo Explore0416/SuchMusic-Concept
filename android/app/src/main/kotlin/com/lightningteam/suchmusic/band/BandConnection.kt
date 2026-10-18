@@ -32,6 +32,9 @@ class BandConnection(
 
         /** 重连退避（毫秒）。 */
         private val BACKOFF_MS = longArrayOf(1000, 2000, 4000, 8000)
+
+        /** 就绪后重挂监听的周期（毫秒），对齐官方开源实例的 60s 实践。 */
+        private const val KEEPALIVE_MS = 45_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -141,9 +144,33 @@ class BandConnection(
             attempt = 0
             if (!started) started = true
             if (state != STATE_READY) setState(STATE_READY)
+            scheduleKeepAlive()
             onMessage(text)
         } catch (e: Throwable) {
             Log.w(TAG, "handleIncoming 异常: ${e.message}")
+        }
+    }
+
+    /**
+     * 就绪后的保活心跳：每 45 秒重新走一次 `adapter.start()`，
+     * 目的只有一个——**重新注册消息监听**。小米运动健康重启或蓝牙重连后，
+     * 原监听会静默失效（官方开源实例同样按 60s 周期重挂），
+     * 表现为「手环显示已连接，但按键没反应」。
+     */
+    private fun scheduleKeepAlive() {
+        handler.removeCallbacks(keepAlive)
+        handler.postDelayed(keepAlive, KEEPALIVE_MS)
+    }
+
+    private val keepAlive = object : Runnable {
+        override fun run() {
+            if (!running) return
+            try {
+                adapter.start { text -> handleIncoming(text) }
+            } catch (e: Throwable) {
+                Log.w(TAG, "keepAlive 异常: ${e.message}")
+            }
+            if (running) handler.postDelayed(this, KEEPALIVE_MS)
         }
     }
 

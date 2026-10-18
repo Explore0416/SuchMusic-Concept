@@ -339,35 +339,40 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
      */
     private fun registerListener(nodeId: String, listener: BandMessageListener) {
         val api = messageApi ?: return
-        if (listenerProxy != null) return
-        val iface = try {
-            Class.forName(CLS_MSG_LISTENER)
-        } catch (e: Throwable) {
-            lastError = "找不到 OnMessageReceivedListener: ${e.message}"
-            Log.w(TAG, lastError ?: "")
-            return
-        }
-        val proxy = try {
-            Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, args ->
-                try {
-                    if (method.name == "onMessageReceived" && args != null && args.size >= 2) {
-                        val bytes = args[1] as? ByteArray
-                        if (bytes != null) {
-                            listener.onMessage(String(bytes, Charsets.UTF_8))
-                        }
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "onMessageReceived 处理异常: ${e.message}")
-                }
-                null
+        // 【对齐官方开源实践】addListener 需要周期性重挂：小米运动健康重启 / 蓝牙重连后，
+        // 旧监听会静默失效，此时手环能发上来、手机却收不到（表现为「已连但点不动」）。
+        // 因此这里**不再因 listenerProxy 已存在而提前返回**，允许重复注册（SDK 幂等）。
+        if (listenerProxy == null) {
+            val iface = try {
+                Class.forName(CLS_MSG_LISTENER)
+            } catch (e: Throwable) {
+                lastError = "找不到 OnMessageReceivedListener: ${e.message}"
+                Log.w(TAG, lastError ?: "")
+                return
             }
-        } catch (e: Throwable) {
-            lastError = "创建监听代理失败: ${e.message}"
-            Log.w(TAG, lastError ?: "")
-            return
+            listenerProxy = try {
+                Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, args ->
+                    try {
+                        if (method.name == "onMessageReceived" && args != null && args.size >= 2) {
+                            val bytes = args[1] as? ByteArray
+                            if (bytes != null) {
+                                listener.onMessage(String(bytes, Charsets.UTF_8))
+                            }
+                        }
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "onMessageReceived 处理异常: ${e.message}")
+                    }
+                    null
+                }
+            } catch (e: Throwable) {
+                lastError = "创建监听代理失败: ${e.message}"
+                Log.w(TAG, lastError ?: "")
+                return
+            }
         }
+        val proxy = listenerProxy ?: return
+        val iface = Class.forName(CLS_MSG_LISTENER)
 
-        listenerProxy = proxy
         // 官方形态：addListener(String, Listener)
         val task = invoke(
             api, "addListener",
@@ -462,6 +467,33 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         try {
             val permClass = Class.forName(CLS_PERMISSION)
             val dm = permissionConstant(permClass) ?: return
+            val notify = permissionConstantByName(permClass, "NOTIFY")
+
+            // ① 优先走官方示例同款批量接口：Task<Boolean[]> checkPermissions(nodeId, Permission[])
+            val perms = java.lang.reflect.Array.newInstance(permClass, if (notify == null) 1 else 2)
+            java.lang.reflect.Array.set(perms, 0, dm)
+            if (notify != null) java.lang.reflect.Array.set(perms, 1, notify)
+            val permArrayCls = perms.javaClass
+            val batch = invoke(api, "checkPermissions", arrayOf(String::class.java, permArrayCls), nodeId, perms)
+            if (batch != INVOKE_FAILED && batch != null) {
+                attachTaskSuccess(batch) { v ->
+                    val granted = when (v) {
+                        is BooleanArray -> v.all { it }
+                        is Array<*> -> v.all { it == true }
+                        else -> false
+                    }
+                    if (granted) {
+                        permissionGranted = true
+                        Log.i(TAG, "批量权限已授予（DEVICE_MANAGER/NOTIFY）")
+                    } else {
+                        requestPermission(nodeId, permClass, dm, notify)
+                    }
+                }
+                attachTaskFailure(batch) { requestPermission(nodeId, permClass, dm, notify) }
+                return
+            }
+
+            // ② 回退到单权限接口
             val checkTask = invoke(
                 api, "checkPermission",
                 arrayOf(String::class.java, permClass), nodeId, dm
@@ -475,11 +507,11 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
                     permissionGranted = true
                     Log.i(TAG, "DEVICE_MANAGER 已授权")
                 } else {
-                    requestPermission(nodeId, permClass, dm)
+                    requestPermission(nodeId, permClass, dm, null)
                 }
             }
             attachTaskFailure(checkTask) {
-                requestPermission(nodeId, permClass, dm)
+                requestPermission(nodeId, permClass, dm, null)
             }
         } catch (e: Throwable) {
             lastError = "权限处理失败: ${e.message}"
@@ -487,13 +519,24 @@ class XmsWearableAdapter(private val context: Context) : BandAdapter {
         }
     }
 
+    /** 取指定名称的 Permission 常量（不存在则返回 null，不报错）。 */
+    private fun permissionConstantByName(permClass: Class<*>, name: String): Any? {
+        return try {
+            permClass.getField(name).get(null)
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
     /** 发起授权请求（varargs 签名需构造 Permission[]）。 */
-    private fun requestPermission(nodeId: String, permClass: Class<*>, dm: Any) {
+    private fun requestPermission(nodeId: String, permClass: Class<*>, dm: Any, notify: Any?) {
         val api = authApi ?: return
         try {
-            val arrayCls = java.lang.reflect.Array.newInstance(permClass, 0).javaClass
-            val arr = java.lang.reflect.Array.newInstance(permClass, 1)
+            val size = if (notify == null) 1 else 2
+            val arr = java.lang.reflect.Array.newInstance(permClass, size)
             java.lang.reflect.Array.set(arr, 0, dm)
+            if (notify != null) java.lang.reflect.Array.set(arr, 1, notify)
+            val arrayCls = arr.javaClass
             val task = invoke(
                 api, "requestPermission",
                 arrayOf(String::class.java, arrayCls), nodeId, arr

@@ -41,6 +41,9 @@ class BandService {
   bool _enabled = false;
   bool _sdkReady = false;
   BandConnectionState _state = BandConnectionState.unavailable;
+
+  /// 就绪后向手环推送链路状态的心跳（见 [_syncLinkPush]）。
+  Timer? _linkPushTimer;
   String _wearApp = 'unknown';
 
   /// 状态变化流（连接状态）。
@@ -207,6 +210,27 @@ class BandService {
     _state = next;
     if (!_stateController.isClosed) {
       _stateController.add(next);
+    }
+    _syncLinkPush();
+  }
+
+  /// 就绪后主动向手环推送链路状态。
+  ///
+  /// 手环端的 `getReadyState()` 在部分固件上长期返回 2（官方论坛明确提到
+  /// 「进入页面直接获取状态往往拿到 DISCONNECTED」）。手机侧既然已经拿到节点、
+  /// 且能收发消息，就主动告知手环「已连通」，这比让手环反复轮询更可靠。
+  void _syncLinkPush() {
+    if (_state == BandConnectionState.ready && _enabled) {
+      _linkPushTimer ??= Timer.periodic(const Duration(seconds: 20), (_) {
+        if (!_enabled || _state != BandConnectionState.ready) return;
+        _router.pushEvent('link.state', <String, dynamic>{'ready': true},
+            target: kBandSession);
+      });
+      _router.pushEvent('link.state', <String, dynamic>{'ready': true},
+          target: kBandSession);
+    } else {
+      _linkPushTimer?.cancel();
+      _linkPushTimer = null;
     }
   }
 
