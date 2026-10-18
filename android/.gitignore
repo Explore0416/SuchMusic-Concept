@@ -13,7 +13,6 @@ key.properties
 **/*.keystore
 **/*.jks
 
-# 例外：本仓库为私有，正式签名（keystore + key.properties）有意入库，
-# 使本地与 CI 构建使用同一签名。若仓库转为公开，请先移出并改用 GitHub Secrets。
-!key.properties
-!keystore/suchmusic-release.jks
+# 仓库已公开：签名材料一律不入库，CI 由 GitHub Secrets 注入
+# （见 .github/workflows/android-build.yml「Restore release keystore」）
+!*.gitkeep
