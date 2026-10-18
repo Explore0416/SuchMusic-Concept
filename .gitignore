@@ -52,3 +52,11 @@ app.*.map.json
 # APK 与本地参考文件
 such-music.apk
 cankao/
+
+# ---- 签名材料（严禁入库！）----
+# 私钥与口令只存在于：本地工作区 + GitHub Actions Secrets
+android/key.properties
+android/keystore/
+*.jks
+*.keystore
+*.p12

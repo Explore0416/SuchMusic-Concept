@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../widgets/update_checker.dart';
 import '../utils/responsive.dart';
 import 'agreement_page.dart';
+import 'changelog_page.dart';
 
 /// 关于页面
 /// 布局参考 cankao/1.txt 设计稿（430x932）
@@ -222,7 +223,8 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                               (title) => _buildMenuRow(
                                 title,
                                 onTap: switch (title) {
-                                  '联系我们' => _openContact,
+                                  '更新日志' => _openChangelog,
+                                  '官方社群' => _openCommunity,
                                   '使用协议' => _openAgreement,
                                   '开发者们' => _startDeveloperDanmaku,
                                   '免责声明' => _showDisclaimer,
@@ -286,7 +288,7 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
 
   static const List<String> _menuItems = [
     '更新日志',
-    '联系我们',
+    '官方社群',
     '使用协议',
     '免责声明',
     '开发者们',
@@ -424,6 +426,158 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
     );
   }
 
+  /// 更新日志：展示历代所有版本（数据来自打包进 App 的 CHANGELOG.md）
+  void _openChangelog() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ChangelogPage()),
+    );
+  }
+
+  /// 官方社群：先让用户选「原版交流群」还是「二开团队群」
+  Future<void> _openCommunity() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: false,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE0E0E0),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                '官方社群',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF333333),
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                '请选择要加入的群',
+                style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+              ),
+              const SizedBox(height: 12),
+              _buildCommunityTile(
+                title: '原版 · Such 交流群',
+                subtitle: '群号 $kQQGroupNumber',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _openContact();
+                },
+              ),
+              const SizedBox(height: 8),
+              _buildCommunityTile(
+                title: '二开 · 闪电科技团队官方交流群',
+                subtitle: '点击链接加入群聊',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _openTeamGroup();
+                },
+              ),
+              const SizedBox(height: 8),
+              GestureDetector(
+                onTap: () => Navigator.of(ctx).pop(),
+                behavior: HitTestBehavior.opaque,
+                child: const SizedBox(
+                  height: 48,
+                  child: Center(
+                    child: Text(
+                      '取消',
+                      style: TextStyle(fontSize: 14, color: Color(0xFF999999)),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommunityTile({
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 15),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F6F8),
+          borderRadius: BorderRadius.circular(13),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF333333),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xFF999999),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: Color(0xFFCCCCCC),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 二开团队群：走 QQ 的 universal-share 链接（未装 QQ 时退化为浏览器打开）
+  Future<void> _openTeamGroup() async {
+    final uri = Uri.parse(kTeamQQGroupUrl);
+    bool ok = false;
+    try {
+      ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      ok = false;
+    }
+    if (!ok) {
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
+    }
+  }
+
   /// 联系我们：唤起QQ群名片；未安装QQ（或唤起失败）时弹窗展示群号供复制
   Future<void> _openContact() async {
     final uri = Uri.parse(
@@ -507,3 +661,7 @@ const List<_Dev> _developers = [
 
 // QQ群号：联系我们跳转用
 const String kQQGroupNumber = '677063599';
+
+/// 二开团队群（闪电科技团队官方交流群）分享链接
+const String kTeamQQGroupUrl =
+    'https://qun.qq.com/universal-share/share?ac=1&authKey=xmzJlkDUVWFwudrqNvMoXC%2BTgZvVtrUK3uNqPBoh6JdewyNehl%2BAnNP6iHoKUFgT&busi_data=eyJncm91cENvZGUiOiIxMDg3Mzc2ODk2IiwidG9rZW4iOiJPQnRyQWRaQmhxaElKOURVTXZJTTJjK1RoS0RjRVJCdDVhWGlpRTU2SWx1TDQveEUwS3EzKzV0L25OMFpQdS9iIiwidWluIjoiMTk4OTgzMzYyNSJ9&data=NmmD0-39RllYb9oj_2riS82fczqKUdNJOjx6qBu47bx6kEGzvm9CM35teoGRD6KyOVXI7KDLtg6D4Rm6zJGQ6Q&svctype=4&tempid=h5_group_info';
