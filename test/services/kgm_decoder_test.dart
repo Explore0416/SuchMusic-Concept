@@ -114,6 +114,46 @@ void main() {
       expect(hex(out.take(48)), expectedKgMHead);
     });
 
+    test('回归：只采样 64 字节头部 + 传文件大小时，1024 字节头也能解析', () {
+      // 真实 KGM 头长通常是 0x400；解码器只读前 64 字节用于解析。
+      // 旧实现用「头长 < 采样缓冲长度」校验，导致所有真实文件被判为头部异常。
+      final file = buildKgm(plain, headerLen: 0x400);
+      final head64 = Uint8List.fromList(file.sublist(0, 64));
+      final h = KgmDecoder.parseHeader(head64, fileLength: file.length);
+      expect(h.headerLen, 0x400);
+      expect(h.key.sublist(0, 16), equals(key.sublist(0, 16)));
+    });
+
+    test('头部长度必须落在文件范围内，越界仍报错', () {
+      final file = buildKgm(plain, headerLen: 0x400);
+      final head64 = Uint8List.fromList(file.sublist(0, 64));
+      expect(
+        () => KgmDecoder.parseHeader(head64, fileLength: 0x200),
+        throwsA(isA<KgmDecodeException>()),
+      );
+    });
+
+    test('解密结果嗅探：真实容器通过，乱码拒绝', () {
+      expect(
+        KgmDecoder.looksLikeAudio(
+          Uint8List.fromList([0x49, 0x44, 0x33, 0x04, 0, 0, 0, 0, 0, 0, 0, 0]),
+        ),
+        isTrue,
+      );
+      expect(
+        KgmDecoder.looksLikeAudio(
+          Uint8List.fromList([0x66, 0x4C, 0x61, 0x43, 0, 0, 0, 0, 0, 0, 0, 0]),
+        ),
+        isTrue,
+      );
+      expect(
+        KgmDecoder.looksLikeAudio(
+          Uint8List.fromList(List<int>.filled(16, 0x5A)),
+        ),
+        isFalse,
+      );
+    });
+
     test('损坏文件（头长越界）抛出可读异常而非崩溃', () {
       final buf = Uint8List(0x2C);
       buf.setRange(0, 16, kgmHeader);

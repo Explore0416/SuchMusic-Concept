@@ -62,19 +62,27 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       return null;
     }
     // 先看缓存是否已存在（解码器内部命中即秒回）
-    final decoded = await KgmDecoder.instance.decodeToCache(
-      path,
-      onProgress: (p) {
-        if (!mounted) return;
-        setState(() {
-          _decodeProgress = p;
-          if (batch) {
-            _batchText = '正在解码 ${track.name} · ${(p * 100).round()}%';
-          }
-        });
-      },
-    );
-    return decoded.uri.toString();
+    try {
+      final decoded = await KgmDecoder.instance.decodeToCache(
+        path,
+        onProgress: (p) {
+          if (!mounted) return;
+          setState(() {
+            _decodeProgress = p;
+            if (batch) {
+              _batchText = '正在解码 ${track.name} · ${(p * 100).round()}%';
+            }
+          });
+        },
+      );
+      return decoded.uri.toString();
+    } on KgmDecodeException catch (e) {
+      _toast('解码失败：${e.message}');
+      return null;
+    } catch (e) {
+      _toast('解码失败：$e');
+      return null;
+    }
   }
 
   Future<void> _playAt(int index) async {

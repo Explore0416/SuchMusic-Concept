@@ -27,6 +27,53 @@ class LocalScanResult {
   int get kgmCount => tracks.where((t) => t.isKgm).length;
 }
 
+/// 元数据占位值判定。
+///
+/// 原生 MediaStore 对无标签文件返回 `<unknown>`；部分设备返回 `unknown` / `null`。
+/// 这些都不应直接展示给用户。
+bool isUnknownMeta(String? v) {
+  if (v == null) return true;
+  final t = v.trim();
+  if (t.isEmpty) return true;
+  final low = t.toLowerCase();
+  return low == '<unknown>' ||
+      low == 'unknown' ||
+      low == 'null' ||
+      low == 'n/a' ||
+      t == '本地文件' ||
+      t == '未知艺人' ||
+      t == '未知歌手';
+}
+
+/// 去掉文件名末尾扩展名（`.kgm` / `.mp3` 等）。
+String stripAudioExtension(String name) {
+  final i = name.lastIndexOf('.');
+  if (i <= 0) return name;
+  final ext = name.substring(i + 1).toLowerCase();
+  const known = {
+    'mp3', 'flac', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'wma',
+    'kgm', 'kgma', 'vpr', 'ape', 'dsf',
+  };
+  return known.contains(ext) ? name.substring(0, i) : name;
+}
+
+/// 从「歌手 - 歌名」形式的文件名拆出歌手与歌名。
+///
+/// 只认两侧带空格的连接符（` - ` / ` – ` / ` — `），避免误拆 `Jay-Z`、`AC-DC` 之类的名字。
+({String artist, String title}) splitArtistTitle(String raw) {
+  final name = stripAudioExtension(raw).trim();
+  for (final sep in const [' - ', ' – ', ' — ', ' － ']) {
+    final i = name.indexOf(sep);
+    if (i > 0 && i + sep.length < name.length) {
+      return (
+        artist: name.substring(0, i).trim(),
+        title: name.substring(i + sep.length).trim(),
+      );
+    }
+  }
+  return (artist: '', title: name);
+}
+
 /// 一条本地曲目（普通音频或加密格式）。
 class LocalTrack {
   const LocalTrack({
@@ -80,7 +127,7 @@ class LocalTrack {
     return SongModel(
       id: 'local:${playUri ?? uri}',
       name: name.isEmpty ? '未命名' : name,
-      artist: artist.isEmpty ? '未知艺人' : artist,
+      artist: artist.isEmpty ? '未知歌手' : artist,
       album: album.isEmpty ? '本地文件' : album,
       duration: durationMs > 0 ? durationMs : null,
       source: SongSource.local,
@@ -89,12 +136,20 @@ class LocalTrack {
   }
 
   factory LocalTrack.fromMap(Map<dynamic, dynamic> m) {
+    final rawName = stripAudioExtension(m['name']?.toString() ?? '');
+    final rawArtist = isUnknownMeta(m['artist']?.toString())
+        ? ''
+        : m['artist']!.toString().trim();
+    final parsed = splitArtistTitle(rawName);
+    final displayName = parsed.title.isEmpty ? rawName : parsed.title;
     return LocalTrack(
       uri: m['uri']?.toString() ?? '',
       path: m['path']?.toString(),
-      name: m['name']?.toString() ?? '未命名',
-      artist: m['artist']?.toString() ?? '未知艺人',
-      album: m['album']?.toString() ?? '',
+      name: displayName.isEmpty ? '未命名' : displayName,
+      artist: rawArtist.isNotEmpty ? rawArtist : parsed.artist,
+      album: isUnknownMeta(m['album']?.toString())
+          ? ''
+          : m['album']!.toString().trim(),
       durationMs: (m['durationMs'] as num?)?.toInt() ?? 0,
       size: (m['size'] as num?)?.toInt() ?? 0,
       ext: (m['ext']?.toString() ?? '').toLowerCase(),

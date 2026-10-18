@@ -74,7 +74,12 @@ class KgmDecoder {
   ///
   /// 布局：`0x00-0x0F` 魔数，`0x10-0x13` 音频起始偏移（uint32 小端），
   /// `0x1C-0x2B` 16 字节密钥（第 17 字节补 0）。
-  static KgmHeader parseHeader(Uint8List bytes) {
+  ///
+  /// **[fileLength] 必传**（调用方只有文件大小）：`headerLen` 是相对于**整个文件**的偏移，
+  /// 常见值是 1024（0x400），远大于只用于解析头部的 64 字节采样缓冲。
+  /// 早期版本用 `headerLen >= bytes.length` 校验，导致所有真实 KGM 文件在第一步就抛
+  /// 「头部长度字段异常」——真实文件根本解不出来。
+  static KgmHeader parseHeader(Uint8List bytes, {int? fileLength}) {
     if (!looksLikeKgm(bytes)) {
       throw KgmDecodeException('不是有效的 KGM/VPR 文件（文件头不匹配）');
     }
@@ -83,8 +88,9 @@ class KgmDecoder {
     }
     final headerLen = ByteData.sublistView(bytes, 0x10, 0x14)
         .getUint32(0, Endian.little);
-    if (headerLen <= 0 || headerLen >= bytes.length) {
-      throw KgmDecodeException('头部长度字段异常：$headerLen');
+    final limit = fileLength ?? bytes.length;
+    if (headerLen < 0x2C || headerLen >= limit) {
+      throw KgmDecodeException('头部长度字段异常：$headerLen（文件 $limit 字节）');
     }
     final key = Uint8List(17);
     key.setRange(0, 16, bytes, 0x1C);
@@ -94,6 +100,29 @@ class KgmDecoder {
       key: key,
       isVpr: _isVpr(bytes),
     );
+  }
+
+  /// 解密后的数据是否像真实音频（防止密钥/偏移不对时把乱码写成可播放文件）。
+  ///
+  /// 判定只认确定性魔数：ID3 / MPEG 帧同步 / fLaC / OggS / RIFF(WAVE) / ftyp。
+  static bool looksLikeAudio(Uint8List head) {
+    if (head.length < 12) return false;
+    if (head[0] == 0x49 && head[1] == 0x44 && head[2] == 0x33) return true; // ID3
+    if (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) return true; // MPEG 帧
+    if (head[0] == 0x66 && head[1] == 0x4C && head[2] == 0x61 && head[3] == 0x43) {
+      return true; // fLaC
+    }
+    if (head[0] == 0x4F && head[1] == 0x67 && head[2] == 0x67 && head[3] == 0x53) {
+      return true; // OggS
+    }
+    if (head[0] == 0x52 && head[1] == 0x49 && head[2] == 0x46 && head[3] == 0x46 &&
+        head[8] == 0x57 && head[9] == 0x41 && head[10] == 0x56 && head[11] == 0x45) {
+      return true; // RIFF....WAVE
+    }
+    if (head[4] == 0x66 && head[5] == 0x74 && head[6] == 0x79 && head[7] == 0x70) {
+      return true; // ....ftyp
+    }
+    return false;
   }
 
   /// 就地解密一段音频字节（纯函数，便于单测与复用）。
@@ -159,24 +188,30 @@ class KgmDecoder {
     final raf = await src.open();
     try {
       final head = await raf.read(64);
-      final header = parseHeader(head);
+      final header = parseHeader(head, fileLength: stat.size);
       final headerLen = header.headerLen;
       final key = header.key;
       final isVpr = header.isVpr;
 
-      // 缓存文件先按临时名写，嗅探出真实格式后再改名
+      // 缓存文件先按临时名写，嗅探出真实格式后再改成正确的音频扩展名
+      // （扩展名必须是 mp3/flac/ogg/wav/m4a，播放器据此选择解复用器）
       final tmpPath = '${cacheDir.path}/$cacheKey.part';
+      final prefix = '$cacheKey.';
       final existing = Directory(cacheDir.path)
           .listSync()
           .whereType<File>()
-          .where((f) => f.path.contains(cacheKey.toString()) && f.path.endsWith('.audio'))
-          .toList();
+          .where((f) {
+        final base = f.path.split('/').last;
+        return base.startsWith(prefix) && !base.endsWith('.part');
+      }).toList();
       if (existing.isNotEmpty) {
         onProgress?.call(1);
         final f = existing.first;
+        final base = f.path.split('/').last;
+        final ext = base.substring(prefix.length).split('.').first;
         return DecodedAudio(
           path: f.path,
-          extension: f.path.split('.').reversed.elementAt(1),
+          extension: ext,
           fromCache: true,
         );
       }
@@ -214,8 +249,18 @@ class KgmDecoder {
         await sink.close();
       }
 
-      final extName = sniffExtension(Uint8List.fromList(sniff));
-      final finalPath = '${cacheDir.path}/$cacheKey.$extName.audio';
+      // 解密结果必须是可识别音频；否则说明该文件的密钥/头部布局不是标准 KGM，
+      // 直接报错，避免把乱码写成 .mp3 后播放器只显示 00:00。
+      final sniffBytes = Uint8List.fromList(sniff);
+      if (!looksLikeAudio(sniffBytes)) {
+        try {
+          await File(tmpPath).delete();
+        } catch (_) {}
+        throw KgmDecodeException('解密结果不是可识别的音频格式（该文件可能不是标准 KGM/KGMA）');
+      }
+
+      final extName = sniffExtension(sniffBytes);
+      final finalPath = '${cacheDir.path}/$cacheKey.$extName';
       await File(tmpPath).rename(finalPath);
       onProgress?.call(1);
       return DecodedAudio(
