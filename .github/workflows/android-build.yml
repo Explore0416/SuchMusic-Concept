@@ -94,15 +94,37 @@ jobs:
           fi
           mkdir -p android/app/libs
           gh release download xms-wearable-lib \
-            -R Explore0416/SuchMusic-Band \
+            -R Explore0416/SuchMusic-SDK \
             -p 'xms-wearable-lib*.aar' \
             -D android/app/libs --clobber
           ls -lh android/app/libs
           test -n "$(ls -A android/app/libs)" || { echo "::error::AAR 拉取失败，未能启用真机通信" >&2; exit 1; }
 
+      # 签名材料不入库：从 Secrets 还原 keystore 与 key.properties。
+      # 未配置（如公开仓库的 fork PR）时跳过 → release 回退 debug 签名，构建不失败。
+      - name: Restore release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次使用 debug 签名"
+            exit 0
+          fi
+          mkdir -p android/keystore
+          printf '%s' "$KEYSTORE_B64" | base64 -d > android/keystore/release.jks
+          {
+            echo "storeFile=../keystore/release.jks"
+            echo "storePassword=$STORE_PASS"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > android/key.properties
+          echo "keystore 已还原：$(ls -lh android/keystore/release.jks | awk '{print $5}')"
+
       # 只出 release 包：debug + release 连编会耗尽 GitHub 运行器磁盘。
-      # 正式签名 suchmusic-release.jks 与 key.properties 随私有仓库入库，
-      # 构建产物自动带正式签名；若在公开 fork 缺失该文件则回退 debug 签名。
+      # 签名材料来自上一步的 Secrets 还原；缺失时回退 debug 签名（仅用于非发布构建）。
       # --target-platform 限定为 arm/arm64：x86_64 仅模拟器需要，去掉可省约 20MB；
       # 注意 gradle 的 ndk.abiFilters 对 Flutter 预编译引擎库无效，必须用该参数。
       - name: Build release APK
@@ -115,7 +137,17 @@ jobs:
         run: |
           APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort | tail -1)
           echo "using $APKSIGNER"
-          $APKSIGNER verify --print-certs build/app/outputs/flutter-apk/app-release.apk
+          OUT=$($APKSIGNER verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$OUT"
+          # 发布标签必须用正式证书（DN 含 SuchMusic）；debug 证书会显示 CN=Android Debug
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            if ! echo "$OUT" | grep -q "CN=SuchMusic"; then
+              echo "::error::发布包不是正式签名（Secrets 未注入？），已中止发布"
+              exit 1
+            fi
+            CERT_SHA=$(echo "$OUT" | grep -i "SHA-256 digest" | head -1 | awk '{print $NF}')
+            echo "正式证书 SHA-256: $CERT_SHA"
+          fi
 
       - name: Collect artifact
         run: |

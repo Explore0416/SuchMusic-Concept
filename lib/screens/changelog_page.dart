@@ -126,7 +126,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(15, 8, 15, 28),
       itemCount: _entries.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final e = _entries[i];
         final open = _expanded.contains(e.version);
@@ -385,9 +385,10 @@ List<ChangelogEntry> parseChangelog(String source) {
   final blocks = <ChangelogBlock>[];
 
   void flush() {
-    if (version != null) {
+    final v = version;
+    if (v != null) {
       entries.add(ChangelogEntry(
-        version: version!,
+        version: v,
         date: date,
         blocks: List<ChangelogBlock>.unmodifiable(blocks),
       ));

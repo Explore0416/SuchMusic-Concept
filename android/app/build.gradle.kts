@@ -7,9 +7,11 @@ plugins {
 }
 
 // 读取签名配置（android/key.properties）。
-// 本仓库为私有，正式签名 suchmusic-release.jks 与 key.properties 直接入库，
-// 保证本地与 CI 每次构建都用同一签名（升级安装不冲突）；
-// **缺失时仍必须能正常构建**（例如公开 fork 场景），
+// **签名材料不入库**：keystore 与口令只存在于本地工作区与 CI Secrets；
+// 仓库里永远没有 .jks / key.properties（见 .gitignore）。
+// 本地构建：把 key.properties 放在 android/ 下即可；
+// CI 构建：由 workflow 的「Restore release keystore」步骤从 Secrets 还原。
+// **缺失时仍必须能正常构建**（例如公开仓库的 PR 构建），
 // 此时 release 回退用 debug 签名，产物同样可直接安装。
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
