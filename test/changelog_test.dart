@@ -76,10 +76,14 @@ void main() {
   });
 
   testWidgets('更新日志页可渲染并默认展开最新版', (tester) async {
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final v = RegExp(r'^version:\s*([0-9.]+)', multiLine: true)
+        .firstMatch(pubspec)!
+        .group(1)!;
     await tester.pumpWidget(const MaterialApp(home: ChangelogPage()));
     await tester.pumpAndSettle();
     expect(find.text('更新日志'), findsOneWidget);
-    expect(find.text('v1.0.0'), findsOneWidget);
+    expect(find.text('v$v'), findsOneWidget);
     expect(find.text('当前最新'), findsOneWidget);
   });
 
