@@ -324,6 +324,8 @@ class SongModel {
       'hash': hash,
       'albumId': albumId,
       'albumAudioId': albumAudioId,
+      // 本地曲目必须带上播放地址：丢了就再也放不出来（会回退到在线音源并报 Source error）
+      'localUri': localUri,
     };
   }
 
@@ -340,7 +342,27 @@ class SongModel {
       hash: json['hash'] as String?,
       albumId: json['albumId'] as String?,
       albumAudioId: json['albumAudioId'] as String?,
+      localUri: (json['localUri'] as String?)?.trim().isNotEmpty == true
+          ? (json['localUri'] as String).trim()
+          : localUriFromId(json['id'] as String?),
     );
+  }
+
+  /// 从历史 ID 里抢救本地路径。
+  ///
+  /// 旧版本 `toJson()` 没有写 `localUri`，但本地曲目的 ID 形如
+  /// `local:file:///...` / `local:content://...`。升级后首次启动时据此恢复，
+  /// 避免旧播放列表里的本地歌全部失效。
+  static String? localUriFromId(String? id) {
+    if (id == null) return null;
+    final prefix = 'local:';
+    if (!id.startsWith(prefix)) return null;
+    final rest = id.substring(prefix.length).trim();
+    if (rest.isEmpty) return null;
+    final uri = Uri.tryParse(rest);
+    if (uri == null) return null;
+    if (uri.scheme == 'file' || uri.scheme == 'content') return rest;
+    return null;
   }
 }
 

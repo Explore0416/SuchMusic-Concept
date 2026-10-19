@@ -472,6 +472,13 @@ class AudioPlayerService {
 
       // 本地音乐：直接用入站 Uri 播放，不请求任何在线接口
       Uri? sourceUri = localSourceUriOf(song);
+      if (sourceUri == null && song.source.isLocal) {
+        // 本地曲目没有地址时绝不回退在线音源：那只会拿到 404/断链，
+        // 表现为 just_audio 的 "Connection aborted" / "(0) Source error"。
+        _lastError = '本地文件路径已失效，请从「本地音乐」重新选择该歌曲';
+        _updateState(PlayerState.error);
+        return false;
+      }
       if (sourceUri == null) {
         final url = await SourceManager().withFallback<String>(
             song, (src, s, strict) => src.getSongUrl(s, strict: strict));
@@ -654,6 +661,8 @@ class AudioPlayerService {
         sources.add(AudioSource.uri(localUri));
         continue;
       }
+      // 本地曲目缺地址时不回退在线音源（见 play() 同名判断）
+      if (song.source.isLocal) continue;
       final url = await SourceManager().withFallback<String>(
           song, (src, s, strict) => src.getSongUrl(s, strict: strict));
       if (url != null) {
@@ -663,7 +672,7 @@ class AudioPlayerService {
 
     if (seq != _playSeq) return;
     if (sources.isEmpty) {
-      _lastError = '没有可播放的地址（本地文件不可读或在线音源未返回）';
+      _lastError = '没有可播放的地址：本地文件路径可能已失效，请重新扫描本地音乐';
       _updateState(PlayerState.error);
       return;
     }

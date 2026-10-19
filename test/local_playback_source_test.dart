@@ -34,6 +34,42 @@ void main() {
     expect(localSourceUriOf(local('')), isNull);
   });
 
+  group('播放列表持久化', () {
+    test('toJson/fromStorage 往返保留 localUri', () {
+      final src = local('file:///data/user/0/x/cache/a.flac');
+      final restored = SongModel.fromStorage(
+        Map<String, dynamic>.from(src.toJson()),
+      );
+      expect(restored.localUri, 'file:///data/user/0/x/cache/a.flac');
+      expect(restored.source.isLocal, isTrue);
+      expect(localSourceUriOf(restored), isNotNull);
+    });
+
+    test('旧数据没有 localUri 时，从 local: 前缀的 ID 自愈', () {
+      final old = <String, dynamic>{
+        'id': 'local:file:///storage/emulated/0/Music/%E4%B8%9C%E9%A3%8E%E7%A0%B4.kgm',
+        'name': '东风破',
+        'artist': '未知歌手',
+        'album': '',
+        'source': 'local',
+      };
+      final restored = SongModel.fromStorage(old);
+      expect(restored.source.isLocal, isTrue);
+      expect(restored.localUri, isNotNull);
+      expect(restored.localUri!.startsWith('file://'), isTrue);
+      expect(localSourceUriOf(restored), isNotNull);
+    });
+
+    test('非本地 ID 不会被误解析出路径', () {
+      final online = <String, dynamic>{
+        'id': '1234567',
+        'name': '晴天',
+        'source': 'netease',
+      };
+      expect(SongModel.fromStorage(online).localUri, isNull);
+    });
+  });
+
   test('在线曲目的 localUri 为空，不受影响', () {
     const song = SongModel(
       id: 'n1',

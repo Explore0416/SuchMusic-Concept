@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -55,8 +57,25 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
 
   /// 确保曲目可播放：KGM 先解密到缓存，普通音频直接用原 Uri。
   Future<String?> _prepare(LocalTrack track, {bool batch = false}) async {
-    if (!track.isKgm) return track.uri;
+    var isKgm = track.isKgm;
     final path = track.path;
+
+    // 按文件头兜底识别：扩展名被改过（如 .kgm 被改名成 .flac）时，
+    // 仅看后缀会直接交给播放器 → just_audio 报 "(0) Source error"。
+    if (!isKgm && path != null) {
+      try {
+        final raf = await File(path).open();
+        final head = await raf.read(16);
+        await raf.close();
+        if (KgmDecoder.looksLikeKgm(Uint8List.fromList(head))) {
+          isKgm = true;
+        }
+      } catch (_) {
+        // 读不到头部就按原扩展名处理
+      }
+    }
+
+    if (!isKgm) return track.uri;
     if (path == null) {
       _toast('无法读取该文件路径，请重新扫描');
       return null;
@@ -88,18 +107,17 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   Future<void> _playAt(int index) async {
     if (_decodingId != null) return; // 上一次解码未结束，避免并发写同一缓存
     final track = _result.tracks[index];
-    String? uri;
+    // 统一走 _prepare：它会按文件头兜底识别被改名的加密文件。
+    // 只有标记为 KGM 的条目才展示解码进度浮层。
     if (track.isKgm) {
       setState(() {
         _decodingId = track.id;
         _decodeProgress = 0;
       });
-      uri = await _prepare(track);
-      if (!mounted) return;
-      setState(() => _decodingId = null);
-    } else {
-      uri = track.uri;
     }
+    final uri = await _prepare(track);
+    if (!mounted) return;
+    if (track.isKgm) setState(() => _decodingId = null);
     if (uri == null) return;
     final svc = AudioPlayerService();
     await svc.playSongs([track.toSongModel(playUri: uri)]);
@@ -121,12 +139,8 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     try {
       for (var i = 0; i < tracks.length; i++) {
         final t = tracks[i];
-        if (!t.isKgm) {
-          songs['$i'] = t.uri;
-          continue;
-        }
         if (_batchText != null) {
-          setState(() => _batchText = '正在解码 ${t.name}（${songs.length + 1}/$kgmTotal）');
+          setState(() => _batchText = '正在准备 ${t.name}（${songs.length + 1}/${tracks.length}）');
         }
         final uri = await _prepare(t, batch: true);
         if (uri == null) continue;
