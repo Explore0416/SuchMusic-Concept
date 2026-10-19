@@ -677,12 +677,22 @@ class AudioPlayerService {
       return;
     }
 
-    await _player
-        .setAudioSource(ConcatenatingAudioSource(children: sources))
-        .timeout(const Duration(seconds: 15));
-    if (seq != _playSeq) return;
-
-    await _player.play();
+    try {
+      await _player
+          .setAudioSource(ConcatenatingAudioSource(children: sources))
+          .timeout(const Duration(seconds: 15));
+      if (seq != _playSeq) return;
+      await _player.play();
+    } on TimeoutException {
+      _lastError = '加载音频超时（文件不可读或格式不受支持）';
+      _updateState(PlayerState.error);
+      return;
+    } catch (e) {
+      _lastError = e.toString();
+      debugPrint('[player] 批量播放失败: $e');
+      _updateState(PlayerState.error);
+      return;
+    }
     _savePlaylist();
   }
 

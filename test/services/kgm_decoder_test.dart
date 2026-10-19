@@ -154,6 +154,35 @@ void main() {
       );
     });
 
+    test('未知魔数：允许试解时按头部布局解析，不允许时仍拒绝', () {
+      final file = buildKgm(plain, headerLen: 0x40);
+      // 把魔数改成未知值
+      file.setRange(0, 16, List<int>.filled(16, 0x05));
+      expect(
+        () => KgmDecoder.parseHeader(file),
+        throwsA(isA<KgmDecodeException>()),
+      );
+      final h = KgmDecoder.parseHeader(file, allowUnknownMagic: true);
+      expect(h.headerLen, 0x40);
+      expect(h.isVpr, isFalse);
+    });
+
+    test('canAttemptDecode：布局像加密文件才尝试', () {
+      final big = Uint8List.fromList(List<int>.filled(4096, 0x11));
+      final file = buildKgm(big, headerLen: 0x40);
+      expect(KgmDecoder.canAttemptDecode(file, file.length), isTrue);
+      // 头长越界
+      expect(KgmDecoder.canAttemptDecode(file, 0x20), isFalse);
+      // 音频部分太短（< 1KB）
+      expect(KgmDecoder.canAttemptDecode(file, 0x40 + 512), isFalse);
+      // 正常 FLAC 不会被判定为可解密（头长字段是垃圾值）
+      final flac = Uint8List.fromList([
+        0x66, 0x4C, 0x61, 0x43, 0x00, 0x00, 0x00, 0x22,
+        ...List<int>.filled(56, 0),
+      ]);
+      expect(KgmDecoder.canAttemptDecode(flac, 50000), isFalse);
+    });
+
     test('损坏文件（头长越界）抛出可读异常而非崩溃', () {
       final buf = Uint8List(0x2C);
       buf.setRange(0, 16, kgmHeader);

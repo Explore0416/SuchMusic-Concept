@@ -79,8 +79,12 @@ class KgmDecoder {
   /// 常见值是 1024（0x400），远大于只用于解析头部的 64 字节采样缓冲。
   /// 早期版本用 `headerLen >= bytes.length` 校验，导致所有真实 KGM 文件在第一步就抛
   /// 「头部长度字段异常」——真实文件根本解不出来。
-  static KgmHeader parseHeader(Uint8List bytes, {int? fileLength}) {
-    if (!looksLikeKgm(bytes)) {
+  static KgmHeader parseHeader(
+    Uint8List bytes, {
+    int? fileLength,
+    bool allowUnknownMagic = false,
+  }) {
+    if (!looksLikeKgm(bytes) && !allowUnknownMagic) {
       throw KgmDecodeException('不是有效的 KGM/VPR 文件（文件头不匹配）');
     }
     if (bytes.length < 0x2C) {
@@ -100,6 +104,20 @@ class KgmDecoder {
       key: key,
       isVpr: _isVpr(bytes),
     );
+  }
+
+  /// 是否值得尝试 KGM 解密。
+  ///
+  /// 有些文件是 **KGMA** 等变体，或扩展名被改过：魔数不认识，但头部布局一致
+  /// （0x10 处是音频起始偏移）。此时可以先试解，再用 [looksLikeAudio] 校验结果，
+  /// 解错也不会产出可用文件。
+  static bool canAttemptDecode(Uint8List head, int fileLength) {
+    if (head.length < 0x2C) return false;
+    final headerLen =
+        ByteData.sublistView(head, 0x10, 0x14).getUint32(0, Endian.little);
+    if (headerLen < 0x2C || headerLen >= fileLength) return false;
+    // 至少要有 1KB 音频数据，避免把随机文件误判成加密音频
+    return fileLength - headerLen > 1024;
   }
 
   /// 解密后的数据是否像真实音频（防止密钥/偏移不对时把乱码写成可播放文件）。
@@ -168,6 +186,7 @@ class KgmDecoder {
   Future<DecodedAudio> decodeToCache(
     String srcPath, {
     void Function(double progress)? onProgress,
+    bool forceAttempt = false,
   }) async {
     final src = File(srcPath);
     if (!await src.exists()) {
@@ -188,7 +207,11 @@ class KgmDecoder {
     final raf = await src.open();
     try {
       final head = await raf.read(64);
-      final header = parseHeader(head, fileLength: stat.size);
+      final header = parseHeader(
+        head,
+        fileLength: stat.size,
+        allowUnknownMagic: forceAttempt,
+      );
       final headerLen = header.headerLen;
       final key = header.key;
       final isVpr = header.isVpr;
