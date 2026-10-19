@@ -113,7 +113,9 @@ class LocalTrack {
 
   /// 展示用格式标签：加密格式固定标 KGM（以**源文件**为准，不随解密结果变化）。
   String get formatLabel {
-    if (isKgm) return 'KGM';
+    // 加密格式显示**源文件后缀**（KGM / KGMA / VPR / KGG），
+    // 不要显示解密产物的格式，否则用户会以为文件类型被改了。
+    if (isKgm) return ext.isEmpty ? '加密' : ext.toUpperCase();
     return ext.isEmpty ? '音频' : ext.toUpperCase();
   }
 

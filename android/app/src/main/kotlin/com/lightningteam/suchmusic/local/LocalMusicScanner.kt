@@ -32,7 +32,7 @@ class LocalMusicScanner(private val context: Context) {
         const val CHANNEL = "com.lightningteam.suchmusic/local_music"
 
         /** 音频扩展名 → MediaStore 之外需要文件遍历的加密格式。 */
-        private val KGM_EXTS = setOf("kgm", "kgma", "vpr")
+        private val KGM_EXTS = setOf("kgm", "kgma", "vpr", "kgg")
 
         /** 常规音频扩展名（用于文件遍历时过滤）。 */
         private val AUDIO_EXTS = setOf(
