@@ -58,20 +58,41 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   /// 确保曲目可播放：KGM 先解密到缓存，普通音频直接用原 Uri。
   Future<String?> _prepare(LocalTrack track, {bool batch = false}) async {
     var isKgm = track.isKgm;
+    var forceAttempt = false;
     final path = track.path;
 
-    // 按文件头兜底识别：扩展名被改过（如 .kgm 被改名成 .flac）时，
-    // 仅看后缀会直接交给播放器 → just_audio 报 "(0) Source error"。
+    // 按文件头兜底识别：扩展名被改过（如 .kgm 被改名成 .flac），
+    // 或属于 KGMA 等魔数不同的变体时，仅看后缀会把密文直接交给播放器
+    // → just_audio 报 "(0) Source error"。
     if (!isKgm && path != null) {
       try {
-        final raf = await File(path).open();
-        final head = await raf.read(16);
+        final f = File(path);
+        final len = await f.length();
+        final raf = await f.open();
+        final head = await raf.read(64);
         await raf.close();
-        if (KgmDecoder.looksLikeKgm(Uint8List.fromList(head))) {
+        final bytes = Uint8List.fromList(head);
+        if (KgmDecoder.looksLikeKgm(bytes)) {
           isKgm = true;
+        } else if (!KgmDecoder.looksLikeAudio(bytes) &&
+            KgmDecoder.canAttemptDecode(bytes, len)) {
+          // 魔数不认识但头部布局像加密文件 → 试解，解错会被音频魔数校验拦下
+          isKgm = true;
+          forceAttempt = true;
+        }
+      } on FileSystemException catch (e) {
+        // 权限不足 / 文件被删：直接告诉用户，而不是把坏路径丢给播放器
+        final code = e.osError?.errorCode;
+        if (code == 13) {
+          _toast('无法读取该文件：请在系统设置中授予「所有文件访问」权限');
+          return null;
+        }
+        if (code == 2) {
+          _toast('文件已不存在（可能已被移动或清理），请重新扫描');
+          return null;
         }
       } catch (_) {
-        // 读不到头部就按原扩展名处理
+        // 其它读取异常按原扩展名处理
       }
     }
 
@@ -84,6 +105,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     try {
       final decoded = await KgmDecoder.instance.decodeToCache(
         path,
+        forceAttempt: forceAttempt,
         onProgress: (p) {
           if (!mounted) return;
           setState(() {
@@ -120,7 +142,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
     if (track.isKgm) setState(() => _decodingId = null);
     if (uri == null) return;
     final svc = AudioPlayerService();
-    await svc.playSongs([track.toSongModel(playUri: uri)]);
+    try {
+      await svc.playSongs([track.toSongModel(playUri: uri)]);
+    } catch (e) {
+      _toast('播放失败：$e');
+      return;
+    }
     if (!mounted) return;
     if (svc.state == PlayerState.error) {
       _toast('播放失败：${svc.lastError ?? '未知原因'}');
