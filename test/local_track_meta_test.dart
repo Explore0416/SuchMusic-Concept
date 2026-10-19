@@ -30,6 +30,37 @@ void main() {
     });
   });
 
+  group('双重扩展名（酷狗 kgg.flac 命名）', () {
+    test('剥掉全部音频后缀，标题不带 .kgg', () {
+      expect(
+        stripAudioExtension('周杰伦 - 东风破_MQ.kgg.flac'),
+        '周杰伦 - 东风破_MQ',
+      );
+      expect(stripAudioExtension('a.kgm.flac'), 'a');
+      expect(stripAudioExtension('b.kgma.mp3'), 'b');
+    });
+
+    test('拆分歌手与歌名时同样去掉双重后缀', () {
+      final r = splitArtistTitle('周杰伦 - 东风破_MQ.kgg.flac');
+      expect(r.artist, '周杰伦');
+      expect(r.title, '东风破_MQ');
+    });
+
+    test('加密条目按源后缀展示 KGG，而不是 FLAC', () {
+      final t = LocalTrack.fromMap(<dynamic, dynamic>{
+        'uri': 'content://9',
+        'name': '周杰伦 - 东风破_MQ',
+        'artist': '<unknown>',
+        'ext': 'kgg',
+        'kind': 'kgm',
+      });
+      expect(t.isKgm, isTrue);
+      expect(t.formatLabel, 'KGG');
+      expect(t.artist, '周杰伦');
+      expect(t.name, '东风破_MQ');
+    });
+  });
+
   group('splitArtistTitle', () {
     test('按「 - 」拆歌手与歌名', () {
       final r = splitArtistTitle('周杰伦 - 东风破.kgm');

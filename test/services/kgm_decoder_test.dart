@@ -15,6 +15,11 @@ void main() {
     List<int>.generate(600, (i) => (i * 37 + 11) & 0xFF),
   );
 
+  /// 足够长（>1KB）的样本：候选头构建会过滤掉音频段过短的文件。
+  final longPlain = Uint8List.fromList(
+    List<int>.generate(4000, (i) => (i * 37 + 11) & 0xFF),
+  );
+
   // Python 参考实现输出（见提交说明中的生成脚本）
   const expectedKgMHead =
       '83a4ca7b528ee7d5384266786d51f2ee345e8115154ee41f53ec8656264183e0'
@@ -175,12 +180,81 @@ void main() {
       expect(KgmDecoder.canAttemptDecode(file, 0x20), isFalse);
       // 音频部分太短（< 1KB）
       expect(KgmDecoder.canAttemptDecode(file, 0x40 + 512), isFalse);
-      // 正常 FLAC 不会被判定为可解密（头长字段是垃圾值）
+      // 大文件即使头长字段不可信也允许「试一试」——结果由音频魔数校验兜底，
+      // 解不出来不会产出可用文件（见 decodeToCache 的探测逻辑）。
       final flac = Uint8List.fromList([
         0x66, 0x4C, 0x61, 0x43, 0x00, 0x00, 0x00, 0x22,
         ...List<int>.filled(56, 0),
       ]);
-      expect(KgmDecoder.canAttemptDecode(flac, 50000), isFalse);
+      expect(KgmDecoder.canAttemptDecode(flac, 50000), isTrue);
+      // 太小的文件不试，避免把随机小文件当加密音频
+      expect(KgmDecoder.canAttemptDecode(flac, 1024), isFalse);
+    });
+
+    test('候选列表：魔数未知且头长字段不可信时，仍覆盖真实头长 0x400', () {
+      // 模拟 `xxx.kgg.flac`：容器头与 KGM 不同（魔数未知），
+      // 0x10 处的头长字段是垃圾值，真实音频从 0x400 开始。
+      final flacHead = <int>[
+        0x66, 0x4C, 0x61, 0x43, // fLaC
+        0x00, 0x00, 0x00, 0x22, // STREAMINFO block
+        ...List<int>.filled(56, 0),
+      ];
+      final audio = Uint8List.fromList([...flacHead, ...List<int>.filled(2000, 0x11)]);
+      // 反解加密：data = key ^ T(plain ^ T(mask))，T 自反。
+      // 不能直接拿 transformChunk 当加密用——V2 掩码变换整体不是自反的。
+      int tt(int x) => (x ^ ((x & 0x0F) << 4)) & 0xFF;
+      final encAudio = Uint8List(audio.length);
+      for (var i = 0; i < audio.length; i++) {
+        final mask = tt(kgmMaskPreDef(i) ^ kgmBlockValue(i >> 4));
+        encAudio[i] = key[i % 17] ^ tt(audio[i] ^ mask);
+      }
+
+      const headerLen = 0x400;
+      final file = Uint8List(headerLen + encAudio.length);
+      file.setRange(0, 16, List<int>.filled(16, 0x05)); // 未知魔数
+      ByteData.sublistView(file).setUint32(0x10, 0xFFFFFFFF, Endian.little); // 垃圾头长
+      file.setRange(0x1C, 0x2C, key.sublist(0, 16));
+      file.setRange(headerLen, file.length, encAudio);
+
+      final candidates = KgmDecoder.buildCandidates(
+        Uint8List.fromList(file.sublist(0, 64)),
+        file.length,
+        forceAttempt: true,
+      );
+      // 必须包含真实头长，否则这类文件永远解不出
+      final hit = candidates.where((c) => c.headerLen == headerLen).toList();
+      expect(hit, isNotEmpty, reason: '候选应覆盖 0x400');
+
+      final decoded = KgmDecoder.transformChunk(
+        Uint8List.fromList(file.sublist(headerLen)),
+        hit.first.key,
+        0,
+        isVpr: hit.first.isVpr,
+      );
+      expect(KgmDecoder.looksLikeAudio(decoded), isTrue);
+      expect(decoded.sublist(0, 4), equals([0x66, 0x4C, 0x61, 0x43]));
+    });
+
+    test('候选列表：标准 KGM 优先使用头部声明的偏移', () {
+      final file = buildKgm(longPlain, headerLen: 0x80);
+      final candidates = KgmDecoder.buildCandidates(
+        Uint8List.fromList(file.sublist(0, 64)),
+        file.length,
+        forceAttempt: true,
+      );
+      expect(candidates.first.headerLen, 0x80);
+    });
+
+    test('候选列表：关闭试解时只认头部声明，未知魔数返回空', () {
+      final file = buildKgm(longPlain);
+      file.setRange(0, 16, List<int>.filled(16, 0x05));
+      final candidates = KgmDecoder.buildCandidates(
+        Uint8List.fromList(file.sublist(0, 64)),
+        file.length,
+        forceAttempt: false,
+      );
+      // 头长字段仍合法（0x2C），因此会给出一个候选
+      expect(candidates.length, 1);
     });
 
     test('损坏文件（头长越界）抛出可读异常而非崩溃', () {
