@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'kgm_key_table.dart';
 import 'kgm_tables.dart';
 
 /// KGM / KGMA / VPR 离线解码器（纯 Dart，无原生依赖）。
@@ -29,7 +30,10 @@ class KgmDecoder {
   static const int _chunkBytes = 1 << 20; // 1 MiB
 
   /// 试解探测窗口：读这么多字节判断候选头是否能解出真实音频。
-  static const int _probeBytes = 64 * 1024; // 64 KiB
+  static const int _probeBytes = 32 * 1024; // 32 KiB（够覆盖最大头长 + 探测窗口）
+
+  /// 解析候选头部所需的窗口：密钥偏移最远到 0x100，需覆盖 0x100 + 16。
+  static const int _keyWindow = 512;
 
   /// 是否为 KGM 家族文件（KGM / KGMA / VPR）。
   static bool looksLikeKgm(Uint8List head) {
@@ -128,10 +132,20 @@ class KgmDecoder {
 
   /// 试解时依次尝试的头长（字节）。
   ///
-  /// 标准 KGM 把偏移写在 `0x10`；KGG 等变体的该字段不一定可用，
+  /// 标准 KGM 把偏移写在 `0x10`；KGG / KGMA 等变体的该字段不一定可用，
   /// 因此再补几个社区实现里出现过的定长头。每个候选都要通过 [looksLikeAudio]
   /// 才会被采用，所以多试几个不会误伤。
-  static const List<int> candidateHeaderLens = <int>[0x400, 0x2C, 0x100, 0x1000];
+  static const List<int> candidateHeaderLens = <int>[
+    0x400, 0x2C, 0x100, 0x1000, 0x4000,
+  ];
+
+  /// 试解时依次尝试的密钥偏移。
+  ///
+  /// 标准 KGM 的 16 字节密钥在 `0x1C`；KGMA / KGG 的容器头更长，
+  /// 密钥可能后移。穷举代价只有几十次异或，远比「认定一个位置然后解不出」划算。
+  static const List<int> candidateKeyOffsets = <int>[
+    0x1C, 0x2C, 0x3C, 0x40, 0x50, 0x60, 0x80, 0xA0, 0x100,
+  ];
 
   /// 解密后的数据是否像真实音频（防止密钥/偏移不对时把乱码写成可播放文件）。
   ///
@@ -139,7 +153,13 @@ class KgmDecoder {
   static bool looksLikeAudio(Uint8List head) {
     if (head.length < 12) return false;
     if (head[0] == 0x49 && head[1] == 0x44 && head[2] == 0x33) return true; // ID3
-    if (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) return true; // MPEG 帧
+    if (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) {
+      // MPEG 帧同步只有 11 位，随机数据命中率约 1/2048；
+      // 再加 bitrate / samplerate 索引不能是保留值，把误判压到可忽略。
+      final bitrateIndex = (head[2] >> 4) & 0x0F;
+      final sampleRateIndex = (head[2] >> 2) & 0x03;
+      if (bitrateIndex != 0x0F && sampleRateIndex != 0x03) return true;
+    }
     if (head[0] == 0x66 && head[1] == 0x4C && head[2] == 0x61 && head[3] == 0x43) {
       return true; // fLaC
     }
@@ -206,12 +226,14 @@ class KgmDecoder {
     final out = <KgmHeader>[];
     final seen = <int>{};
 
-    void add(int len, bool vpr) {
+    void add(int len, int keyOff, bool vpr) {
       if (len < 0x2C || len >= fileLength) return;
       if (fileLength - len <= 1024) return; // 音频段太短，不可能是有效音频
-      if (!seen.add(len * 2 + (vpr ? 1 : 0))) return;
+      if (keyOff + 16 > head.length) return;
+      final id = len * 10000 + keyOff * 2 + (vpr ? 1 : 0);
+      if (!seen.add(id)) return;
       final key = Uint8List(17);
-      key.setRange(0, 16, head, 0x1C);
+      key.setRange(0, 16, head, keyOff);
       key[16] = 0;
       out.add(KgmHeader(headerLen: len, key: key, isVpr: vpr));
     }
@@ -219,12 +241,23 @@ class KgmDecoder {
     final declared =
         ByteData.sublistView(head, 0x10, 0x14).getUint32(0, Endian.little);
     final vpr = _isVpr(head);
-    if (declared >= 0x2C && declared < fileLength) add(declared, vpr);
+
+    // 标准布局优先：声明偏移 + 0x1C 处密钥
+    if (declared >= 0x2C && declared < fileLength) add(declared, 0x1C, vpr);
 
     if (forceAttempt) {
       for (final len in candidateHeaderLens) {
-        add(len, false);
-        add(len, true);
+        for (final keyOff in candidateKeyOffsets) {
+          add(len, keyOff, false);
+          add(len, keyOff, true);
+        }
+      }
+      // 声明偏移与候选头长的交叉组合（有些变体偏移正确、密钥位置不同）
+      if (declared >= 0x2C && declared < fileLength) {
+        for (final keyOff in candidateKeyOffsets) {
+          if (keyOff == 0x1C) continue;
+          add(declared, keyOff, vpr);
+        }
       }
     }
     return out;
@@ -273,7 +306,10 @@ class KgmDecoder {
 
     final raf = await src.open();
     try {
-      final head = await raf.read(64);
+      // 一次读入首块，后续所有候选都在内存里试，避免上百次 seek/read。
+      final buf = await raf.read(_probeBytes);
+      final headLen = buf.length < _keyWindow ? buf.length : _keyWindow;
+      final head = Uint8List.sublistView(buf, 0, headLen);
       final candidates = buildCandidates(
         head,
         stat.size,
@@ -285,40 +321,88 @@ class KgmDecoder {
         );
       }
 
-      // 先用前 64KB 探测：哪个候选能解出真实音频魔数，就用哪个跑全文。
-      // 这样即使头长/算法变体不同，也不会把整首歌按错误参数解成乱码。
+      // 用首块探测：哪个方案能解出真实音频魔数，就用哪个跑全文。
+      // 顺序：新版块算法 → 明文 → 旧版逐字节掩码。
+      Uint8List? pub;
+      try {
+        pub = await KgmKeyTable.load();
+      } catch (_) {
+        pub = null; // asset 缺失时退化到旧算法
+      }
+
       KgmHeader? chosen;
       Uint8List? probeOut;
-      for (final c in candidates) {
-        final audioLen = stat.size - c.headerLen;
-        if (audioLen <= 1024) continue;
-        await raf.setPosition(c.headerLen);
-        final probe = await raf.read(
-          audioLen < _probeBytes ? audioLen : _probeBytes,
-        );
-        if (probe.isEmpty) continue;
-        final out = transformChunk(
-          Uint8List.fromList(probe),
-          c.key,
-          0, // 探测从音频段起点开始，basePos 恒为 0
-          isVpr: c.isVpr,
-        );
+
+      void probe(KgmHeader c) {
+        if (chosen != null) return;
+        if (c.headerLen + 12 > buf.length) return;
+        final raw = Uint8List.sublistView(buf, c.headerLen);
+        final out = Uint8List.fromList(raw);
+        if (c.mode == KgmMaskMode.v3) {
+          if (pub == null) return;
+          transformChunkV3(out, c.key, 0, pub);
+        } else if (c.mode == KgmMaskMode.v2) {
+          transformChunk(out, c.key, 0, isVpr: c.isVpr);
+        }
         if (looksLikeAudio(out)) {
           chosen = c;
           probeOut = out;
-          break;
+        }
+      }
+
+      // 1) 新版块算法（酷狗 Lite 的 .kgg 走这条）
+      if (pub != null) {
+        for (final c in candidates) {
+          probe(KgmHeader(
+            headerLen: c.headerLen,
+            key: c.key,
+            isVpr: false,
+            mode: KgmMaskMode.v3,
+          ));
+          if (chosen != null) break;
+        }
+      }
+
+      // 2) 明文（壳没真正加密）
+      if (chosen == null) {
+        for (final c in candidates) {
+          if (c.headerLen + 12 > buf.length) continue;
+          final raw = Uint8List.sublistView(buf, c.headerLen);
+          if (looksLikeAudio(raw)) {
+            chosen = KgmHeader(
+              headerLen: c.headerLen,
+              key: c.key,
+              isVpr: false,
+              mode: KgmMaskMode.plain,
+            );
+            probeOut = Uint8List.fromList(raw);
+            break;
+          }
+        }
+      }
+
+      // 3) 旧版逐字节掩码
+      if (chosen == null) {
+        for (final c in candidates) {
+          probe(c);
+          if (chosen != null) break;
         }
       }
       if (chosen == null) {
+        final declared = ByteData.sublistView(head, 0x10, 0x14)
+            .getUint32(0, Endian.little);
         throw KgmDecodeException(
-          '解密失败：头部布局与已知 KGM/KGMA/KGG 均不匹配'
-          '（魔数 ${_hex(head, 16)}）',
+          '解密失败：已尝试 ${candidates.length} 种头部布局（头长 '
+          '${declared == 0 ? '未知' : '0x${declared.toRadixString(16)}'}，'
+          '魔数 ${_hex(head, 8)}），均未解出可识别音频',
         );
       }
 
-      final headerLen = chosen.headerLen;
-      final key = chosen.key;
-      final isVpr = chosen.isVpr;
+      // 闭包内赋值的局部变量不会被类型提升，取出来固定一次
+      final picked = chosen!;
+      final headerLen = picked.headerLen;
+      final key = picked.key;
+      final isVpr = picked.isVpr;
       await raf.setPosition(headerLen);
       final audioLength = stat.size - headerLen;
 
@@ -332,12 +416,21 @@ class KgmDecoder {
               : _chunkBytes;
           final chunk = await raf.read(want);
           if (chunk.isEmpty) break;
-          final data = transformChunk(
-            Uint8List.fromList(chunk),
-            key,
-            processed,
-            isVpr: isVpr,
-          );
+          final data = switch (picked.mode) {
+            KgmMaskMode.plain => Uint8List.fromList(chunk),
+            KgmMaskMode.v3 => transformChunkV3(
+                Uint8List.fromList(chunk),
+                key,
+                processed,
+                pub!,
+              ),
+            KgmMaskMode.v2 => transformChunk(
+                Uint8List.fromList(chunk),
+                key,
+                processed,
+                isVpr: isVpr,
+              ),
+          };
           sink.add(data);
           processed += data.length;
           onProgress?.call(audioLength == 0 ? 1 : processed / audioLength);
@@ -396,6 +489,7 @@ class KgmHeader {
     required this.headerLen,
     required this.key,
     required this.isVpr,
+    this.mode = KgmMaskMode.v2,
   });
 
   /// 音频数据起始偏移。
@@ -406,6 +500,21 @@ class KgmHeader {
 
   /// 是否为 VPR 变体（多一层掩码）。
   final bool isVpr;
+
+  /// 该候选使用的解密方式。
+  final KgmMaskMode mode;
+}
+
+/// KGM 的三种加密形态。
+enum KgmMaskMode {
+  /// 旧版：逐字节掩码（`MaskV2PreDef` + table1/table2）。
+  v2,
+
+  /// 新版：16 字节块异或 + 庞大的 `pub` 密钥表（酷狗 Lite / 新版客户端）。
+  v3,
+
+  /// 壳里其实没加密，音频段就是明文（部分缓存如此）。
+  plain,
 }
 
 /// 解码结果。

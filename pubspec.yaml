@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.6+72
+version: 1.0.7+73
 
 environment:
   sdk: ^3.12.2
@@ -98,6 +98,10 @@ flutter:
     # 更新日志（「关于 → 更新日志」页展示；与根目录 CHANGELOG.md 保持一致，
     # 由 test/changelog_asset_test.dart 校验）
     - assets/CHANGELOG.md
+    # 酷狗新版 KGM 密钥表（前 4 MiB，gzip 压缩 674 KB）。
+    # 来源：unlock-music 社区实现公开的 kugou_key.xz（原始 70 MB，
+    # 16 字节块 XOR 用；前 4 MiB 可覆盖 64 MB 以内的音频文件）。
+    - assets/kugou_key.bin.gz
 
   # 全局字体：MiSans（小米开源免费商用字体）
   fonts:
