@@ -56,10 +56,15 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
   // ── 播放 ──────────────────────────────────────────────────────
 
   /// 确保曲目可播放：KGM 先解密到缓存，普通音频直接用原 Uri。
-  Future<String?> _prepare(LocalTrack track, {bool batch = false}) async {
-    var isKgm = track.isKgm;
-    // KGG 的头布局与 KGM 不一定相同，一律先试解，失败后给明确提示
-    var forceAttempt = isKgm && track.ext == 'kgg';
+  Future<String?> _prepare(
+    LocalTrack track, {
+    bool batch = false,
+    bool forceDecode = false,
+  }) async {
+    var isKgm = track.isKgm || forceDecode;
+    // 加密格式一律走「多候选头长试解」：KGM / KGMA / VPR / KGG 的头部布局不完全一致，
+    // 单一头长对不上就整首解不出。试解结果必须通过音频魔数校验，多试不会误伤。
+    var forceAttempt = isKgm;
     final path = track.path;
 
     // 按文件头兜底识别：扩展名被改过（如 .kgm 被改名成 .flac），
@@ -75,6 +80,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
         final bytes = Uint8List.fromList(head);
         if (KgmDecoder.looksLikeKgm(bytes)) {
           isKgm = true;
+          forceAttempt = true;
         } else if (!KgmDecoder.looksLikeAudio(bytes) &&
             KgmDecoder.canAttemptDecode(bytes, len)) {
           // 魔数不认识但头部布局像加密文件 → 试解，解错会被音频魔数校验拦下
@@ -119,11 +125,7 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       );
       return decoded.uri.toString();
     } on KgmDecodeException catch (e) {
-      if (track.ext == 'kgg') {
-        _toast('KGG 是酷狗新版加密格式，当前算法无法解开；请先转换为 MP3/FLAC 再导入');
-      } else {
-        _toast('解码失败：${e.message}');
-      }
+      _toast('解码失败：${e.message}');
       return null;
     } catch (e) {
       _toast('解码失败：$e');
@@ -151,6 +153,28 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       await svc.playSongs([track.toSongModel(playUri: uri)]);
     } catch (e) {
       _toast('播放失败：$e');
+      return;
+    }
+    if (svc.state == PlayerState.error && !track.isKgm && track.path != null) {
+      // 兜底：文件被改成普通后缀（如 `xxx.kgg.flac`）时，扫描层可能漏判。
+      // 播放器已经证明解不开，那就按加密文件再试一次，成功则无缝续播。
+      if (mounted) {
+        setState(() {
+          _decodingId = track.id;
+          _decodeProgress = 0;
+        });
+      }
+      final retryUri = await _prepare(track, forceDecode: true);
+      if (!mounted) return;
+      setState(() => _decodingId = null);
+      if (retryUri != null) {
+        try {
+          await svc.playSongs([track.toSongModel(playUri: retryUri)]);
+        } catch (_) {}
+      }
+      if (svc.state == PlayerState.error) {
+        _toast('播放失败：${svc.lastError ?? '未知原因'}');
+      }
       return;
     }
     if (!mounted) return;

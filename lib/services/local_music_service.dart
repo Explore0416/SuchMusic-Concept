@@ -45,16 +45,23 @@ bool isUnknownMeta(String? v) {
       t == '未知歌手';
 }
 
-/// 去掉文件名末尾扩展名（`.kgm` / `.mp3` 等）。
+/// 去掉文件名末尾的**全部**音频/加密扩展名。
+///
+/// 酷狗会把加密壳套在真实格式后缀上：`周杰伦 - 东风破_MQ.kgg.flac`，
+/// 只去一层会留下 `.kgg`，标题里就会带着后缀。这里循环剥到干净为止。
 String stripAudioExtension(String name) {
-  final i = name.lastIndexOf('.');
-  if (i <= 0) return name;
-  final ext = name.substring(i + 1).toLowerCase();
   const known = {
     'mp3', 'flac', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'wma',
-    'kgm', 'kgma', 'vpr', 'ape', 'dsf',
+    'kgm', 'kgma', 'vpr', 'kgg', 'ape', 'dsf',
   };
-  return known.contains(ext) ? name.substring(0, i) : name;
+  var result = name;
+  while (true) {
+    final i = result.lastIndexOf('.');
+    if (i <= 0) return result;
+    final ext = result.substring(i + 1).toLowerCase();
+    if (!known.contains(ext)) return result;
+    result = result.substring(0, i);
+  }
 }
 
 /// 从「歌手 - 歌名」形式的文件名拆出歌手与歌名。

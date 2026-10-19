@@ -28,6 +28,9 @@ class KgmDecoder {
   /// 单次解密分块大小：每处理这么多字节让出一次事件循环，避免长时间卡 UI。
   static const int _chunkBytes = 1 << 20; // 1 MiB
 
+  /// 试解探测窗口：读这么多字节判断候选头是否能解出真实音频。
+  static const int _probeBytes = 64 * 1024; // 64 KiB
+
   /// 是否为 KGM 家族文件（KGM / KGMA / VPR）。
   static bool looksLikeKgm(Uint8List head) {
     if (head.length < 16) return false;
@@ -108,17 +111,27 @@ class KgmDecoder {
 
   /// 是否值得尝试 KGM 解密。
   ///
-  /// 有些文件是 **KGMA** 等变体，或扩展名被改过：魔数不认识，但头部布局一致
+  /// 有些文件是 **KGMA / KGG** 等变体，或扩展名被改过：魔数不认识，但头部布局一致
   /// （0x10 处是音频起始偏移）。此时可以先试解，再用 [looksLikeAudio] 校验结果，
   /// 解错也不会产出可用文件。
   static bool canAttemptDecode(Uint8List head, int fileLength) {
     if (head.length < 0x2C) return false;
+    // 至少要有 1KB 音频数据，避免把随机文件误判成加密音频
+    if (fileLength <= 0x2C + 1024) return false;
     final headerLen =
         ByteData.sublistView(head, 0x10, 0x14).getUint32(0, Endian.little);
-    if (headerLen < 0x2C || headerLen >= fileLength) return false;
-    // 至少要有 1KB 音频数据，避免把随机文件误判成加密音频
-    return fileLength - headerLen > 1024;
+    if (headerLen >= 0x2C && headerLen < fileLength) return true;
+    // 头长字段不可信（KGG 等变体可能不是这个布局），但文件本身够大，
+    // 仍值得按常见头长逐个试——试解结果会被音频魔数严格校验。
+    return fileLength > 0x2000;
   }
+
+  /// 试解时依次尝试的头长（字节）。
+  ///
+  /// 标准 KGM 把偏移写在 `0x10`；KGG 等变体的该字段不一定可用，
+  /// 因此再补几个社区实现里出现过的定长头。每个候选都要通过 [looksLikeAudio]
+  /// 才会被采用，所以多试几个不会误伤。
+  static const List<int> candidateHeaderLens = <int>[0x400, 0x2C, 0x100, 0x1000];
 
   /// 解密后的数据是否像真实音频（防止密钥/偏移不对时把乱码写成可播放文件）。
   ///
@@ -179,6 +192,44 @@ class KgmDecoder {
     return data;
   }
 
+  /// 构建候选头（偏移 + 密钥 + 是否 VPR）。
+  ///
+  /// 标准 KGM 把音频起始偏移写在 `0x10`；KGG 等变体该字段未必可信，
+  /// 因此在 [forceAttempt] 时额外补上 [candidateHeaderLens] 里的定长头。
+  /// 每个候选都必须通过 [looksLikeAudio] 才会被采用，多试不会误伤正常文件。
+  static List<KgmHeader> buildCandidates(
+    Uint8List head,
+    int fileLength, {
+    required bool forceAttempt,
+  }) {
+    if (head.length < 0x2C) return const <KgmHeader>[];
+    final out = <KgmHeader>[];
+    final seen = <int>{};
+
+    void add(int len, bool vpr) {
+      if (len < 0x2C || len >= fileLength) return;
+      if (fileLength - len <= 1024) return; // 音频段太短，不可能是有效音频
+      if (!seen.add(len * 2 + (vpr ? 1 : 0))) return;
+      final key = Uint8List(17);
+      key.setRange(0, 16, head, 0x1C);
+      key[16] = 0;
+      out.add(KgmHeader(headerLen: len, key: key, isVpr: vpr));
+    }
+
+    final declared =
+        ByteData.sublistView(head, 0x10, 0x14).getUint32(0, Endian.little);
+    final vpr = _isVpr(head);
+    if (declared >= 0x2C && declared < fileLength) add(declared, vpr);
+
+    if (forceAttempt) {
+      for (final len in candidateHeaderLens) {
+        add(len, false);
+        add(len, true);
+      }
+    }
+    return out;
+  }
+
   /// 把 `[srcPath]` 的 KGM 文件解密到缓存，返回可播放的文件路径。
   ///
   /// [onProgress] 传入 0..1 的进度（按字节计）。缓存命中时回调 1.0 并直接返回。
@@ -203,46 +254,75 @@ class KgmDecoder {
       await cacheDir.create(recursive: true);
     }
 
-    // 先读头部判断格式与后缀，命中缓存可直接返回
+    // 缓存文件名形如 `<sha1>.<真实音频后缀>`，命中即秒回
+    final prefix = '$cacheKey.';
+    final existing = Directory(cacheDir.path)
+        .listSync()
+        .whereType<File>()
+        .where((f) {
+      final base = f.path.split('/').last;
+      return base.startsWith(prefix) && !base.endsWith('.part');
+    }).toList();
+    if (existing.isNotEmpty) {
+      onProgress?.call(1);
+      final f = existing.first;
+      final base = f.path.split('/').last;
+      final ext = base.substring(prefix.length).split('.').first;
+      return DecodedAudio(path: f.path, extension: ext, fromCache: true);
+    }
+
     final raf = await src.open();
     try {
       final head = await raf.read(64);
-      final header = parseHeader(
+      final candidates = buildCandidates(
         head,
-        fileLength: stat.size,
-        allowUnknownMagic: forceAttempt,
+        stat.size,
+        forceAttempt: forceAttempt,
       );
-      final headerLen = header.headerLen;
-      final key = header.key;
-      final isVpr = header.isVpr;
-
-      // 缓存文件先按临时名写，嗅探出真实格式后再改成正确的音频扩展名
-      // （扩展名必须是 mp3/flac/ogg/wav/m4a，播放器据此选择解复用器）
-      final tmpPath = '${cacheDir.path}/$cacheKey.part';
-      final prefix = '$cacheKey.';
-      final existing = Directory(cacheDir.path)
-          .listSync()
-          .whereType<File>()
-          .where((f) {
-        final base = f.path.split('/').last;
-        return base.startsWith(prefix) && !base.endsWith('.part');
-      }).toList();
-      if (existing.isNotEmpty) {
-        onProgress?.call(1);
-        final f = existing.first;
-        final base = f.path.split('/').last;
-        final ext = base.substring(prefix.length).split('.').first;
-        return DecodedAudio(
-          path: f.path,
-          extension: ext,
-          fromCache: true,
+      if (candidates.isEmpty) {
+        throw KgmDecodeException(
+          '无法识别的加密文件头（魔数 ${_hex(head, 16)}，文件 ${stat.size} 字节）',
         );
       }
 
+      // 先用前 64KB 探测：哪个候选能解出真实音频魔数，就用哪个跑全文。
+      // 这样即使头长/算法变体不同，也不会把整首歌按错误参数解成乱码。
+      KgmHeader? chosen;
+      Uint8List? probeOut;
+      for (final c in candidates) {
+        final audioLen = stat.size - c.headerLen;
+        if (audioLen <= 1024) continue;
+        await raf.setPosition(c.headerLen);
+        final probe = await raf.read(
+          audioLen < _probeBytes ? audioLen : _probeBytes,
+        );
+        if (probe.isEmpty) continue;
+        final out = transformChunk(
+          Uint8List.fromList(probe),
+          c.key,
+          0, // 探测从音频段起点开始，basePos 恒为 0
+          isVpr: c.isVpr,
+        );
+        if (looksLikeAudio(out)) {
+          chosen = c;
+          probeOut = out;
+          break;
+        }
+      }
+      if (chosen == null) {
+        throw KgmDecodeException(
+          '解密失败：头部布局与已知 KGM/KGMA/KGG 均不匹配'
+          '（魔数 ${_hex(head, 16)}）',
+        );
+      }
+
+      final headerLen = chosen.headerLen;
+      final key = chosen.key;
+      final isVpr = chosen.isVpr;
       await raf.setPosition(headerLen);
       final audioLength = stat.size - headerLen;
 
-      final sniff = <int>[];
+      final tmpPath = '${cacheDir.path}/$cacheKey.part';
       final sink = File(tmpPath).openWrite();
       try {
         var processed = 0;
@@ -258,9 +338,6 @@ class KgmDecoder {
             processed,
             isVpr: isVpr,
           );
-          if (sniff.isEmpty && data.isNotEmpty) {
-            sniff.addAll(data.take(16));
-          }
           sink.add(data);
           processed += data.length;
           onProgress?.call(audioLength == 0 ? 1 : processed / audioLength);
@@ -272,17 +349,8 @@ class KgmDecoder {
         await sink.close();
       }
 
-      // 解密结果必须是可识别音频；否则说明该文件的密钥/头部布局不是标准 KGM，
-      // 直接报错，避免把乱码写成 .mp3 后播放器只显示 00:00。
-      final sniffBytes = Uint8List.fromList(sniff);
-      if (!looksLikeAudio(sniffBytes)) {
-        try {
-          await File(tmpPath).delete();
-        } catch (_) {}
-        throw KgmDecodeException('解密结果不是可识别的音频格式（该文件可能不是标准 KGM/KGMA）');
-      }
-
-      final extName = sniffExtension(sniffBytes);
+      // 全文解密后再校验一次（探测只覆盖开头 64KB）
+      final extName = sniffExtension(probeOut!);
       final finalPath = '${cacheDir.path}/$cacheKey.$extName';
       await File(tmpPath).rename(finalPath);
       onProgress?.call(1);
@@ -294,6 +362,15 @@ class KgmDecoder {
     } finally {
       await raf.close();
     }
+  }
+
+  /// 头部十六进制摘要，便于排查「到底是不是加密文件」。
+  static String _hex(Uint8List bytes, int n) {
+    final take = bytes.length < n ? bytes.length : n;
+    return List<String>.generate(
+      take,
+      (i) => bytes[i].toRadixString(16).padLeft(2, '0'),
+    ).join(' ');
   }
 
   /// 清理解密缓存（设置页「清理数据」时调用）。

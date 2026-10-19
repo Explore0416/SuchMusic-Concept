@@ -39,6 +39,41 @@ class LocalMusicScanner(private val context: Context) {
             "mp3", "flac", "m4a", "aac", "wav", "ogg", "opus", "wma", "ape"
         )
 
+        /**
+         * 从文件名里识别**加密容器**的扩展名，识别不到返回 null。
+         *
+         * 酷狗会把加密壳套在真实格式后缀上，例如：
+         * `周杰伦 - 东风破_MQ.kgg.flac`、`xx.kgm.flac`、`xx.kgma.mp3`。
+         * 只看最后一个点会得到 `flac`，于是被当成普通音频直接交给播放器，
+         * 结果就是 just_audio 抛 `(0) Source error`、时长 00:00。
+         *
+         * 这里取最后两段后缀：任意一段命中 [KGM_EXTS] 即视为加密，
+         * 并返回那个**加密后缀**（用于界面展示 KGG / KGM）。
+         */
+        fun encryptedExtOf(name: String): String? {
+            val parts = name.lowercase().split('.')
+            // 至少要「名字 + 后缀」两段；只看倒数第二/第三段，不把文件名主干当后缀
+            if (parts.size < 2) return null
+            for (i in parts.size - 2 downTo maxOf(1, parts.size - 3)) {
+                val p = parts[i]
+                if (p in KGM_EXTS) return p
+            }
+            return null
+        }
+
+        /** 去掉结尾的加密后缀与音频后缀：`东风破_MQ.kgg.flac` → `东风破_MQ`。 */
+        fun stripAudioSuffixes(name: String): String {
+            var result = name
+            while (true) {
+                val ext = result.substringAfterLast('.', "").lowercase()
+                if (ext.isEmpty()) return result
+                if (ext !in KGM_EXTS && ext !in AUDIO_EXTS) return result
+                // 至少保留文件名开头一个字符
+                if (result.length <= ext.length + 1) return result
+                result = result.substringBeforeLast('.')
+            }
+        }
+
         /** Android 13+ 的音频读取权限。 */
         val AUDIO_PERMISSIONS: Array<String> = if (Build.VERSION.SDK_INT >= 33) {
             arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
@@ -130,25 +165,31 @@ class LocalMusicScanner(private val context: Context) {
                 val uri: Uri =
                     ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
                 val key = uri.toString()
-                if (!seen.add(key)) continue
                 val ext = display.substringAfterLast('.', "").lowercase()
+                val dataPath = if (dataCol >= 0) c.getString(dataCol) else null
+                // 去重键优先用真实路径：保证与随后目录扫描不会产生重复条目
+                val dedupKey = if (!dataPath.isNullOrBlank()) dataPath else key
+                if (!seen.add(dedupKey)) continue
 
                 // 加密格式即使被 MediaStore 收录（部分 ROM 会索引 .kgm），
-                // 也不能当普通音频直接播——必须标成 kgm 并拿到真实路径走解密。
-                val isKgm = ext in KGM_EXTS
-                val dataPath = if (dataCol >= 0) c.getString(dataCol) else null
+                // 也不能当普通音频直接播——必须标成加密并拿到真实路径走解密。
+                // 注意 `xxx.kgg.flac` 这种「加密壳 + 真格式后缀」命名：
+                // 只看最后一段会得到 flac，于是当普通音频播放 → (0) Source error。
+                val encExt = encryptedExtOf(display)
+                val isKgm = encExt != null
                 out.add(
                     mapOf(
                         "uri" to key,
                         "path" to if (isKgm && !dataPath.isNullOrBlank()) dataPath else null,
-                        "name" to display.substringBeforeLast('.'),
+                        // 标题去掉全部音频/加密后缀：`东风破_MQ.kgg.flac` → `东风破_MQ`
+                        "name" to stripAudioSuffixes(display),
                         "title" to (c.getString(titleCol) ?: display),
                         // 占位值（<unknown> 等）交给 Dart 侧统一归一化为「未知歌手」
                         "artist" to c.getString(artistCol),
                         "album" to c.getString(albumCol),
                         "durationMs" to if (isKgm) 0L else c.getLong(durCol),
                         "size" to c.getLong(sizeCol),
-                        "ext" to ext,
+                        "ext" to (encExt ?: ext),
                         "kind" to if (isKgm) "kgm" else "media",
                     )
                 )
@@ -205,8 +246,11 @@ class LocalMusicScanner(private val context: Context) {
             }
             // 跳过本应用的解密缓存（含半成品 .part），避免把缓存文件当成本地歌曲
             if (f.name.endsWith(".part") || f.absolutePath.contains("local_audio_cache")) continue
+            // 加密后缀优先按「双重扩展名」识别（`xxx.kgg.flac`），而不是只看最后一段
+            val encExt = encryptedExtOf(f.name)
             val ext = f.extension.lowercase()
-            val isKgm = ext in KGM_EXTS
+            val isKgm = encExt != null
+            // 有音频权限时只补扫加密文件；无权限时连普通音频一起收
             if (!isKgm && !(includeAllAudio && ext in AUDIO_EXTS)) continue
             val path = f.absolutePath
             if (!seen.add(path)) continue
@@ -214,14 +258,14 @@ class LocalMusicScanner(private val context: Context) {
                 mapOf(
                     "uri" to Uri.fromFile(f).toString(),
                     "path" to path,
-                    "name" to f.nameWithoutExtension,
-                    "title" to f.nameWithoutExtension,
+                    "name" to stripAudioSuffixes(f.name),
+                    "title" to stripAudioSuffixes(f.name),
                     // 留空：由 Dart 侧从「歌手 - 歌名」文件名解析，或回落「未知歌手」
                     "artist" to "",
                     "album" to dir.name,
                     "durationMs" to 0L,
                     "size" to f.length(),
-                    "ext" to ext,
+                    "ext" to (encExt ?: ext),
                     "kind" to if (isKgm) "kgm" else "file",
                 )
             )
