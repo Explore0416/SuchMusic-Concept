@@ -203,6 +203,8 @@ class LocalMusicScanner(private val context: Context) {
                 if (!f.name.startsWith(".")) walk(f, depth + 1, out, seen, includeAllAudio, onVisit)
                 continue
             }
+            // 跳过本应用的解密缓存（含半成品 .part），避免把缓存文件当成本地歌曲
+            if (f.name.endsWith(".part") || f.absolutePath.contains("local_audio_cache")) continue
             val ext = f.extension.lowercase()
             val isKgm = ext in KGM_EXTS
             if (!isKgm && !(includeAllAudio && ext in AUDIO_EXTS)) continue

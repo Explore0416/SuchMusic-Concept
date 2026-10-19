@@ -111,8 +111,11 @@ class LocalTrack {
   /// 稳定标识（同一文件在列表里的唯一键）。
   String get id => uri;
 
-  /// 展示用格式标签：KGM 单独标注，其余显示大写扩展名。
-  String get formatLabel => ext.isEmpty ? '音频' : ext.toUpperCase();
+  /// 展示用格式标签：加密格式固定标 KGM（以**源文件**为准，不随解密结果变化）。
+  String get formatLabel {
+    if (isKgm) return 'KGM';
+    return ext.isEmpty ? '音频' : ext.toUpperCase();
+  }
 
   String get durationLabel {
     if (durationMs <= 0) return '--:--';

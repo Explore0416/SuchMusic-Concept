@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
@@ -21,6 +21,16 @@ import 'sources/source_manager.dart';
 
 // LyricLine / parseLrc 已提取至 lyrics_parser.dart，此处 re-export 保持既有引用兼容
 export 'lyrics_parser.dart' show LyricLine, parseLrc;
+
+/// 本地曲目（含解密后的 .kgm）的直接播放地址。
+///
+/// 本地曲目没有在线音源，**必须**走 `localUri`；否则会向 SourceManager 取到 null，
+/// 导致播放队列为空、时长显示 00:00。抽成纯函数便于单测锁定该不变量。
+Uri? localSourceUriOf(SongModel song) {
+  final local = song.localUri;
+  if (local == null || local.isEmpty) return null;
+  return Uri.tryParse(local);
+}
 
 enum PlayerState { idle, loading, playing, paused, error }
 
@@ -310,7 +320,12 @@ class AudioPlayerService {
   int _shuffleQueuePos = 0;
   final List<int> _playHistory = [];
 
+  String? _lastError;
+
   PlayerState get state => _state;
+
+  /// 最近一次播放失败的原因（成功开始时清空），供 UI 提示用。
+  String? get lastError => _lastError;
   SongModel? get currentSong => _currentSong;
   bool get isPlaying => _state == PlayerState.playing;
   Duration get position => _position;
@@ -441,6 +456,7 @@ class AudioPlayerService {
       if (exitFm && _isFmMode) {
         await exitFmMode();
       }
+      _lastError = null;
       _updateState(PlayerState.loading);
       _captureCompletion();
       _currentSong = song;
@@ -455,20 +471,30 @@ class AudioPlayerService {
       _fetchLyrics(song);
 
       // 本地音乐：直接用入站 Uri 播放，不请求任何在线接口
-      final url = song.localUri ??
-          await SourceManager().withFallback<String>(
-              song, (src, s, strict) => src.getSongUrl(s, strict: strict));
-      if (seq != _playSeq) return false; // 已切到更新请求，丢弃过期结果
-      if (url == null) {
-        _updateState(PlayerState.error);
-        return false;
+      Uri? sourceUri = localSourceUriOf(song);
+      if (sourceUri == null) {
+        final url = await SourceManager().withFallback<String>(
+            song, (src, s, strict) => src.getSongUrl(s, strict: strict));
+        if (seq != _playSeq) return false; // 已切到更新请求，丢弃过期结果
+        if (url == null) {
+          _updateState(PlayerState.error);
+          return false;
+        }
+        sourceUri = Uri.parse(url);
       }
+      if (seq != _playSeq) return false;
 
-      await _player
-          .setAudioSource(
-            AudioSource.uri(Uri.parse(url)),
-          )
-          .timeout(const Duration(seconds: 15));
+      if (sourceUri.scheme == 'file') {
+        // 本地文件走 setFilePath：just_audio 的原生文件通道，
+        // 避免把 file:// 当网络流处理时出现 duration=00:00 / 直接失败。
+        await _player
+            .setFilePath(sourceUri.toFilePath(), preload: true)
+            .timeout(const Duration(seconds: 15));
+      } else {
+        await _player
+            .setAudioSource(AudioSource.uri(sourceUri))
+            .timeout(const Duration(seconds: 15));
+      }
       if (seq != _playSeq) return false;
 
       await _player.play();
@@ -490,9 +516,12 @@ class AudioPlayerService {
 
       return true;
     } on TimeoutException {
+      _lastError = '加载音频超时（文件不可读或格式不受支持）';
       _updateState(PlayerState.error);
       return false;
     } catch (e) {
+      _lastError = e.toString();
+      debugPrint('[player] 播放失败: $e');
       _updateState(PlayerState.error);
       return false;
     }
@@ -618,6 +647,13 @@ class AudioPlayerService {
     final sources = <AudioSource>[];
     for (final song in songs) {
       if (seq != _playSeq) return; // 队列已切换，放弃本次构建
+      // 本地音乐（含解密后的 .kgm）必须用 localUri：它没有在线音源，
+      // 走 SourceManager 只会拿到 null → 队列为空 → 直接 error、时长 00:00。
+      final localUri = localSourceUriOf(song);
+      if (localUri != null) {
+        sources.add(AudioSource.uri(localUri));
+        continue;
+      }
       final url = await SourceManager().withFallback<String>(
           song, (src, s, strict) => src.getSongUrl(s, strict: strict));
       if (url != null) {
@@ -627,6 +663,7 @@ class AudioPlayerService {
 
     if (seq != _playSeq) return;
     if (sources.isEmpty) {
+      _lastError = '没有可播放的地址（本地文件不可读或在线音源未返回）';
       _updateState(PlayerState.error);
       return;
     }

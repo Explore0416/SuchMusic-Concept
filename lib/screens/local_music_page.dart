@@ -101,7 +101,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       uri = track.uri;
     }
     if (uri == null) return;
-    await AudioPlayerService().playSongs([track.toSongModel(playUri: uri)]);
+    final svc = AudioPlayerService();
+    await svc.playSongs([track.toSongModel(playUri: uri)]);
+    if (!mounted) return;
+    if (svc.state == PlayerState.error) {
+      _toast('播放失败：${svc.lastError ?? '未知原因'}');
+    }
   }
 
   /// 播放全部：先解码所有 KGM（带进度浮层），再一次性入队。
@@ -141,7 +146,12 @@ class _LocalMusicPageState extends State<LocalMusicPage> {
       _toast('没有可播放的本地音乐');
       return;
     }
-    await AudioPlayerService().playSongs(models);
+    final svc = AudioPlayerService();
+    await svc.playSongs(models);
+    if (!mounted) return;
+    if (svc.state == PlayerState.error) {
+      _toast('播放失败：${svc.lastError ?? '未知原因'}');
+    }
   }
 
   void _toast(String text) {
