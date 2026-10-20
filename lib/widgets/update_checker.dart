@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../app_keys.dart';
 import '../services/update_service.dart';
 import 'design_dialog.dart';
 
@@ -130,14 +131,31 @@ class UpdateChecker {
     );
   }
 
-  /// 下载 APK（进度弹窗），完成后调起系统安装器
-  /// 强制更新时下载不可取消
+  /// 后台下载中标记：避免重复进入下载流程。
+  static bool _downloading = false;
+
+  /// 下载 APK（进度弹窗），完成后调起系统安装器。
+  ///
+  /// 非强制更新时提供「后台下载」：关闭弹窗但继续下载，用户可以继续用 App，
+  /// 下载完成后用全局导航键弹出安装确认（不依赖发起下载的页面是否还活着）。
   static void _downloadAndInstall(BuildContext context, AppUpdateInfo info) {
+    if (_downloading) {
+      _showTip(context, '正在下载', '更新包正在下载，完成后会提示安装');
+      return;
+    }
+    _downloading = true;
+
+    // 提前捕获 NavigatorState：后面几处 pop 都在 async gap 之后，
+    // 直接持有它就不必反复用已可能失效的 BuildContext。
+    final nav = Navigator.of(context);
     final cancelToken = CancelToken();
     double progress = 0;
     String progressText = '准备下载...';
     String routeText = '线路：正在选择最快线路…';
     bool dialogClosed = false;
+
+    /// 用户点了「后台下载」：弹窗已关，下载继续
+    bool inBackground = false;
     StateSetter? dialogSetState;
 
     showDialog(
@@ -176,10 +194,20 @@ class UpdateChecker {
                       TextStyle(fontSize: 12 * s, color: DesignDialog.cancelGray),
                 ),
                 if (!info.force) ...[
-                  SizedBox(height: 22 * s),
+                  SizedBox(height: 18 * s),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      DesignDialog.cancelText(ctx, '后台下载', () {
+                        inBackground = true;
+                        dialogClosed = true;
+                        Navigator.of(ctx).pop();
+                        final root = appNavigatorKey.currentContext;
+                        if (root != null) {
+                          DesignToast.show(root, '已转入后台下载，可继续使用');
+                        }
+                      }),
+                      SizedBox(width: 6 * s),
                       DesignDialog.cancelText(
                         ctx,
                         '取消',
@@ -213,31 +241,91 @@ class UpdateChecker {
         });
       },
     ).then((savePath) async {
-      if (!context.mounted) return;
-      Navigator.of(context).pop(); // 关闭下载弹窗
-      dialogClosed = true;
-      // 安装阶段错误单独处理，避免误报为下载失败
+      _downloading = false;
+      if (!inBackground) {
+        nav.pop(); // 关闭下载弹窗
+        dialogClosed = true;
+      }
+
+      if (inBackground) {
+        final go = await _confirmInstall(info.versionName);
+        if (!go) return;
+      }
+
+      // 安装阶段错误单独处理，避免误报为下载失败。
+      // 一律用全局导航键取上下文：页面此时可能已被用户切走。
       try {
         final err = await UpdateService.installApk(savePath);
-        if (err != null && context.mounted) {
-          _showTip(context, '安装', '无法调起安装：$err');
+        final c = appNavigatorKey.currentContext;
+        if (err != null && c != null) {
+          // ignore: use_build_context_synchronously
+          _showTip(c, '安装', '无法调起安装：$err');
         }
       } catch (e) {
         debugPrint('调起安装异常: $e');
-        if (context.mounted) {
-          _showTip(context, '安装', '无法调起安装，请确认已允许安装未知应用后重试');
+        // 全局导航键的 context 与应用根绑定，不随页面销毁失效
+        final c = appNavigatorKey.currentContext;
+        if (c != null) {
+          // ignore: use_build_context_synchronously
+          _showTip(c, '安装', '无法调起安装，请确认已允许安装未知应用后重试');
         }
       }
     }).catchError((Object e) {
-      if (!context.mounted) return;
-      // 弹窗可能已在成功分支关闭，避免二次 pop 把页面弹出导致黑屏
+      _downloading = false;
+      // 弹窗可能已在成功 / 后台分支关闭，避免二次 pop 把页面弹出导致黑屏
       if (!dialogClosed) {
-        Navigator.of(context).pop();
+        nav.pop();
         dialogClosed = true;
       }
       final cancelled = e is DioException && e.type == DioExceptionType.cancel;
-      if (!cancelled) _showTip(context, '下载失败', '下载失败，请检查网络后重试');
+      if (cancelled) return;
+      final c = appNavigatorKey.currentContext;
+      // ignore: use_build_context_synchronously
+      if (c != null) _showTip(c, '下载失败', '下载失败，请检查网络后重试');
     });
+  }
+
+  /// 后台下载完成后的安装确认（用全局导航键，不依赖发起下载的页面）。
+  static Future<bool> _confirmInstall(String version) async {
+    final context = appNavigatorKey.currentContext;
+    if (context == null) return false;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final s = DesignDialog.s(ctx);
+        return DesignDialog.shell(
+          ctx,
+          child: DesignDialog.card(
+            ctx,
+            children: [
+              DesignDialog.title(ctx, '下载完成'),
+              SizedBox(height: 8 * s),
+              Text(
+                'v$version 已下载完成，是否立即安装？',
+                style: TextStyle(
+                  fontSize: 14 * s,
+                  color: DesignDialog.contentGray,
+                  height: 1.6,
+                ),
+              ),
+              SizedBox(height: 20 * s),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  DesignDialog.cancelText(
+                      ctx, '稍后', () => Navigator.pop(ctx, false)),
+                  SizedBox(width: 10 * s),
+                  DesignDialog.confirmButton(
+                      ctx, '立即安装', () => Navigator.pop(ctx, true)),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    return result ?? false;
   }
 
   /// 通用提示弹窗（最新版本 / 检查失败 / 安装失败）：标题 + 正文 + 蓝色「确定」
