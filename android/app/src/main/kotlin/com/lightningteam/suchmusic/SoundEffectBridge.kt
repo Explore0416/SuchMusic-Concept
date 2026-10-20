@@ -1,9 +1,15 @@
 package com.lightningteam.suchmusic
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.media.audiofx.DynamicsProcessing
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 
 /**
@@ -45,6 +51,12 @@ class SoundEffectBridge(private val context: Context) {
 
         /** 关闭音效时写入的标记值 */
         private const val PRESET_OFF = "off"
+
+        /** 系统音量变化广播（AOSP 内部常量，字符串稳定可用） */
+        private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
+
+        /** 能力探测失败结果的缓存时长（毫秒），过期后重新探测 */
+        private const val AVAILABLE_FAIL_TTL_MS = 30_000L
 
         /** 处理帧长（毫秒），取 HxCore 常用的 10ms */
         private const val FRAME_DURATION_MS = 10f
@@ -126,6 +138,17 @@ class SoundEffectBridge(private val context: Context) {
     /** 可用性探测结果缓存（null 表示尚未确定） */
     private var availableCache: Boolean? = null
 
+    /** 缓存写入时间：**失败**只缓存一小段时间，避免一次失败永久禁用入口 */
+    private var availableCacheAt: Long = 0L
+
+    /** 音量变化监听（系统调音量会让部分 ROM 重置 AudioEffect，导致音效"消失"） */
+    private var volumeReceiver: BroadcastReceiver? = null
+
+    /** 音量连按时防抖，只重建一次 */
+    private var pendingReapply: Runnable? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     /**
      * DynamicsProcessing 是否可用。
      *
@@ -141,7 +164,15 @@ class SoundEffectBridge(private val context: Context) {
             availableCache = false
             return false
         }
-        availableCache?.let { return it }
+        // 成功结果可以长期复用；**失败结果只缓存 30 秒**。
+        // 否则一次探测失败（如会话切换瞬间）会让入口永久显示「不可用」，
+        // 用户表现为「音效没了、而且再也设置不了」。
+        if (availableCache == true) return true
+        if (availableCache == false &&
+            SystemClock.elapsedRealtime() - availableCacheAt < AVAILABLE_FAIL_TTL_MS
+        ) {
+            return false
+        }
 
         val session = if (currentSessionId > 0) currentSessionId else 0
         if (session <= 0) {
@@ -150,6 +181,7 @@ class SoundEffectBridge(private val context: Context) {
         }
         val ok = probe(session)
         availableCache = ok
+        availableCacheAt = SystemClock.elapsedRealtime()
         return ok
     }
 
@@ -248,6 +280,9 @@ class SoundEffectBridge(private val context: Context) {
                 success = true
                 lastStrategy = strategy.name
                 lastError = null
+                availableCache = true
+                availableCacheAt = SystemClock.elapsedRealtime()
+                ensureVolumeWatcher()
                 return true
             } catch (e: Exception) {
                 lastError = e.message
@@ -305,6 +340,65 @@ class SoundEffectBridge(private val context: Context) {
     /** 当前 preset code；未启用任何音效时返回 "off" */
     fun current(): String {
         return currentCode
+    }
+
+    /**
+     * 监听系统音量变化。
+     *
+     * 部分 ROM（小米 HyperOS 等）在按音量键时会重建音频输出链路，
+     * 已绑定的 `DynamicsProcessing` 被系统静默 detach —— 表现就是「调一下音量，
+     * 音效突然没了」，而且实例引用还在、`enabled` 仍是 true，后续不会再重建。
+     *
+     * 这里在音量变化后 250ms（防连按）用当前会话重建一次效果器。
+     * 广播是系统内部广播，只需动态注册，不需要任何权限。
+     */
+    private fun ensureVolumeWatcher() {
+        if (volumeReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action == VOLUME_CHANGED_ACTION) scheduleReapply()
+            }
+        }
+        try {
+            val filter = IntentFilter(VOLUME_CHANGED_ACTION)
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+            volumeReceiver = receiver
+        } catch (e: Exception) {
+            Log.w(TAG, "register volume receiver failed: " + e.message)
+        }
+    }
+
+    /** 音量变化后防抖重建（只重建用户当前选择的预设） */
+    private fun scheduleReapply() {
+        val desired = desiredCode
+        if (desired.isEmpty() || desired == PRESET_OFF) return
+        pendingReapply?.let { mainHandler.removeCallbacks(it) }
+        val run = Runnable {
+            pendingReapply = null
+            val code = desiredCode
+            if (code.isEmpty() || code == PRESET_OFF) return@Runnable
+            val ok = apply(code, currentSessionId)
+            Log.i(TAG, "volume changed -> reapply $code ok=$ok session=$currentSessionId")
+        }
+        pendingReapply = run
+        mainHandler.postDelayed(run, 250)
+    }
+
+    /** 释放监听（进程结束时由系统回收，这里只供显式清理） */
+    fun releaseWatcher() {
+        pendingReapply?.let { mainHandler.removeCallbacks(it) }
+        pendingReapply = null
+        volumeReceiver?.let {
+            try {
+                context.unregisterReceiver(it)
+            } catch (_: Exception) {
+            }
+        }
+        volumeReceiver = null
     }
 
     /**

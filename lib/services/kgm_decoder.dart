@@ -391,10 +391,22 @@ class KgmDecoder {
       if (chosen == null) {
         final declared = ByteData.sublistView(head, 0x10, 0x14)
             .getUint32(0, Endian.little);
+        // 0x14 处的容器版本：>= 5 的酷狗新格式把密钥放在客户端本地数据库
+        // （KGMusicV3.db，SQLCipher），**不随文件分发**，纯文件解密无法还原。
+        final version = head.length >= 0x18
+            ? ByteData.sublistView(head, 0x14, 0x18).getUint32(0, Endian.little)
+            : 0;
+        if (version >= 5) {
+          throw KgmDecodeException(
+            '该文件是酷狗新版加密（容器版本 $version），密钥保存在酷狗客户端数据库中，'
+            '不随文件分发，任何离线工具都无法解密。请在酷狗客户端重新下载为 MP3/FLAC 后导入',
+          );
+        }
         throw KgmDecodeException(
-          '解密失败：已尝试 ${candidates.length} 种头部布局（头长 '
+          '解密失败：已尝试 ${candidates.length} 种布局（头长 '
           '${declared == 0 ? '未知' : '0x${declared.toRadixString(16)}'}，'
-          '魔数 ${_hex(head, 8)}），均未解出可识别音频',
+          '版本 $version，密钥表${pub == null ? '未加载' : '已加载'}，'
+          '魔数 ${_hex(head, 8)}）',
         );
       }
 
