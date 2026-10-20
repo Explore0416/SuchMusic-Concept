@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+
+import 'app_keys.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:marquee/marquee.dart';
@@ -112,6 +114,7 @@ class MyApp extends StatelessWidget {
         systemNavigationBarContrastEnforced: false,
       ),
       child: MaterialApp(
+        navigatorKey: appNavigatorKey,
         title: 'SuchMusic概念版',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
