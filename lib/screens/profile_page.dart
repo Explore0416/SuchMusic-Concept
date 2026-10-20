@@ -11,10 +11,9 @@ import '../models/song_model.dart';
 import '../services/music_api_service.dart';
 import '../services/app_init.dart';
 import '../services/kugou_credential_service.dart';
-import '../utils/app_constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/fade_slide_in.dart';
-import '../widgets/kugou_login_dialog.dart';
+import '../widgets/kugou_account_sheet.dart';
 import 'kugou_playlist_page.dart';
 import 'local_music_page.dart';
 import 'playlist_detail_page.dart';
@@ -501,8 +500,23 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() {});
   }
 
-  /// 音源账号卡片：可在「我的」页直接登录网易云 / 酷狗概念版 / 酷狗音乐。
+  /// 音源账号卡片：网易云一家、酷狗一家，共两行。
+  ///
+  /// 酷狗概念版与原版本质是同一个账号体系的两个 appid，原先并排占两行，
+  /// 看起来像「要登录两个账号」。现在收进一个入口，点开后分别授权。
   Widget _buildAccountCard() {
+    final cred = KugouCredentialService.instance;
+    final liteLogged = cred.hasCredentialsFor(KugouPlatform.lite);
+    final stdLogged = cred.hasCredentialsFor(KugouPlatform.standard);
+    final anyKugou = liteLogged || stdLogged;
+
+    final subtitle = switch ((liteLogged, stdLogged)) {
+      (true, true) => '已登录 · 概念版 / 原版',
+      (true, false) => '已登录 · 概念版',
+      (false, true) => '已登录 · 原版',
+      _ => '扫码登录后可使用酷狗音源',
+    };
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -524,27 +538,16 @@ class _ProfilePageState extends State<ProfilePage> {
             actionText: '扫码登录',
             onTap: _showQrCodeLoginDialog,
           ),
-          for (final platform in KugouPlatform.values) ...[
-            const Divider(height: 1, indent: 56, endIndent: 16),
-            _buildKugouAccountRow(platform),
-          ],
+          const Divider(height: 1, indent: 56, endIndent: 16),
+          _buildAccountRow(
+            icon: Icons.library_music_outlined,
+            title: '酷狗音乐',
+            subtitle: subtitle,
+            actionText: anyKugou ? '管理' : '扫码登录',
+            onTap: () => showKugouAccountSheet(context),
+          ),
         ],
       ),
-    );
-  }
-
-  /// 单个酷狗平台（概念版 / 原版）的账号行。
-  Widget _buildKugouAccountRow(KugouPlatform platform) {
-    final logged =
-        KugouCredentialService.instance.hasCredentialsFor(platform);
-    final uid = AppConstants.maskToken(
-        KugouCredentialService.instance.userIdOf(platform));
-    return _buildAccountRow(
-      icon: Icons.library_music_outlined,
-      title: platform.label,
-      subtitle: logged ? '已登录（$uid）' : '扫码登录后可使用对应 VIP',
-      actionText: logged ? '重新登录' : '扫码登录',
-      onTap: () => _openKugouLogin(platform),
     );
   }
 
@@ -608,13 +611,6 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
       ),
     );
-  }
-
-  /// 打开酷狗扫码登录弹窗（与网易云登录 UI 形态一致），登录成功后刷新登录态。
-  Future<void> _openKugouLogin(KugouPlatform platform) async {
-    await showKugouLoginDialog(context, platform: platform);
-    if (!mounted) return;
-    setState(() {});
   }
 
   Future<void> _openPlaylistDetail(PlaylistModel playlist) async {
