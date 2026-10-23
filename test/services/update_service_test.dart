@@ -5,6 +5,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:such_music/services/update_service.dart';
 
 void main() {
@@ -36,6 +37,21 @@ void main() {
         await slow.close();
       }
     }, timeout: const Timeout(Duration(seconds: 90)));
+  });
+
+  test('有历史成功线路时直接置顶并跳过测速（「准备下载」不再卡 5 秒）', () async {
+    SharedPreferences.setMockInitialValues({
+      'update_best_route': 'https://slow.example/b.apk',
+    });
+    final sw = Stopwatch()..start();
+    final ordered = await UpdateService.rankBySpeed([
+      'https://slow.example/b.apk',
+      'https://fast.example/b.apk',
+    ]);
+    sw.stop();
+    expect(ordered.first, 'https://slow.example/b.apk');
+    // 跳过测速：不应出现秒级等待（默认测速预算 2 秒）
+    expect(sw.elapsedMilliseconds, lessThan(1500));
   });
 }
 
