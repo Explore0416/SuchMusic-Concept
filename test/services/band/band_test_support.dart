@@ -1,6 +1,6 @@
 // 手环测试公共支撑：可编程伪播放器端口（不依赖 just_audio / IO / 真实网络）。
 //
-// 供 band_relay_test.dart 等复用；band_router_test.dart 保留自有的独立实现。
+// 供 band_router_test.dart 等复用。
 import 'dart:async';
 
 import 'package:such_music/models/song_model.dart';
