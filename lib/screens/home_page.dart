@@ -8,7 +8,7 @@ import '../models/song_model.dart';
 import '../services/music_api_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/app_init.dart';
-import '../services/play_history_service.dart';
+import '../services/recommend_service.dart';
 import '../services/play_context_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
@@ -65,9 +65,12 @@ class _HomePageState extends State<HomePage> {
   final PageController _recommendPageController = PageController(viewportFraction: 0.95 / 1.05);
   final PageController _recommendPageController2 = PageController(viewportFraction: 0.95 / 1.05);
 
-  /// 「猜你想听」：完全基于**本机播放历史**计算，不上传任何数据。
-  void _loadLocalPicks() {
-    final picks = PlayHistoryService().suggest(limit: 12);
+  /// 「猜你想听」：本地播放历史 + 当前音源的个性化新歌混排。
+  ///
+  /// 本地部分完全在本机计算，不上传任何数据；新歌来自用户已登录的音源
+  /// （网易云每日推荐 / 私人 FM），未登录或取不到时只用本地结果。
+  Future<void> _loadLocalPicks() async {
+    final picks = await RecommendService.instance.smartPicks(limit: 12);
     if (!mounted || picks.isEmpty) return;
     setState(() => _localPicks = picks);
   }

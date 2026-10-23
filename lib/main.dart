@@ -13,7 +13,6 @@ import 'screens/profile_page.dart';
 import 'services/audio_player_handler.dart';
 import 'services/audio_player_service.dart';
 import 'services/band/band_service.dart';
-import 'services/band/band_relay_service.dart';
 import 'services/local_audio_intent_service.dart';
 import 'services/local_lyric_service.dart';
 import 'services/play_history_service.dart';
@@ -90,10 +89,7 @@ void main() async {
   // 手环桥接：读取「启用手环控制」开关，按需把 AudioPlayerService 接入手环链路
   // （与 AudioPlayerHandler 同源订阅，命令直接落到 service）。SDK 未就绪时静默不可用。
   unawaited(BandService.instance.init());
-  // 电脑控制（局域网中继）：**默认关闭**，仅在用户于「设置 → 手环」显式开启后，
-  // 才在私网地址上监听 WebSocket，供 Windows 端 (SuchMusic-NG) 经手机中转控制播放。
   // 未开启时不监听任何端口、不产生任何网络入口。
-  unawaited(BandRelayService.instance.init());
   // 酷狗设备注册（取播放直链前置，未注册会被风控拒绝）；
   // 后台进行、失败静默，取链时会自动再补一次。
   unawaited(KugouDeviceService.instance.init());
