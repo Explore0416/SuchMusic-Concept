@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -7,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 远端版本信息（对应分发仓库里的 update.json）
 class AppUpdateInfo {
@@ -118,16 +120,18 @@ class UpdateService {
   }) async {
     Object? lastError;
     final candidates = _expandMirrors(urls.where((u) => u.isNotEmpty).toList());
-    // 下载前并发探测各线路速率，优先走最快线路；探测异常时回退为原始顺序
+    // 下载前选线路：有历史成功记录时直接复用，否则做一次**有总时限**的测速
     final ordered = await rankBySpeed(candidates);
     for (final url in ordered) {
       try {
         onRouteChanged?.call(_routeNameOf(url));
-        return await _downloadOne(
+        final path = await _downloadOne(
           url,
           onProgress: onProgress,
           cancelToken: cancelToken,
         );
+        unawaited(_saveBestRoute(url));
+        return path;
       } catch (e) {
         if (e is DioException && e.type == DioExceptionType.cancel) rethrow;
         lastError = e;
@@ -180,23 +184,66 @@ class UpdateService {
     return 'GitHub 备用线路';
   }
 
-  /// 下载前对候选线路并发测速，按实测速率降序返回。
-  /// 任一步骤失败均不抛异常：探测失败视为 0，全部为 0 时回退为原顺序，
-  /// 保证「测速」环节本身永不阻断更新流程。
+  /// 上次成功下载的线路（下次直接复用，跳过测速）。
+  static const String _prefBestRoute = 'update_best_route';
+
+  /// 首次测速的**总时限**：到点就用当前已知顺序开下，不再等。
+  static const Duration _probeBudget = Duration(milliseconds: 2000);
+
+  /// 选择下载线路顺序。
+  ///
+  /// 用户可见的问题是「准备下载」停很久：原先每次都要并发探测全部候选，
+  /// 单条最长 5 秒（连接建立 + 首字节），最坏情况要等满 5 秒才开始传数据。
+  /// 现在：
+  /// 1. **有历史成功线路就直接置顶并跳过测速**（成功率比一次 2 秒探测更可靠）；
+  /// 2. 否则并发测速，但整轮最多 [_probeBudget]，超时按原顺序继续；
+  /// 3. 全部探测失败也回退原顺序，测速环节永不阻断更新。
   static Future<List<String>> rankBySpeed(List<String> urls) async {
     if (urls.length <= 1) return urls;
+
+    final cached = await _readBestRoute();
+    if (cached != null && urls.contains(cached)) {
+      return <String>[cached, ...urls.where((u) => u != cached)];
+    }
+
+    // 用「结果数组 + 总时限」而不是 Future.wait(...).timeout：
+    // 后者超时会丢弃已经测完的结果，把快线路也一起抹成 0。
+    final speeds = List<int>.filled(urls.length, 0);
+    final futures = <Future<void>>[];
+    for (var i = 0; i < urls.length; i++) {
+      final idx = i;
+      futures.add(_probeSpeed(urls[idx]).then((v) => speeds[idx] = v));
+    }
     try {
-      final speeds = await Future.wait(urls.map(_probeSpeed));
-      if (speeds.every((v) => v == 0)) return urls; // 全部探测失败 → 原顺序
-      final order = List<int>.generate(urls.length, (i) => i)
-        ..sort((a, b) => speeds[b].compareTo(speeds[a]));
-      return order.map((i) => urls[i]).toList();
+      await Future.wait(futures).timeout(_probeBudget);
     } catch (_) {
-      return urls;
+      // 到点即止：已完成的结果保留，未完成的按 0 处理（排在后面但仍会尝试）
+    }
+    if (speeds.every((v) => v == 0)) return urls; // 全部探测失败 → 原顺序
+    final order = List<int>.generate(urls.length, (i) => i)
+      ..sort((a, b) => speeds[b].compareTo(speeds[a]));
+    return order.map((i) => urls[i]).toList();
+  }
+
+  static Future<String?> _readBestRoute() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_prefBestRoute);
+    } catch (_) {
+      return null;
     }
   }
 
-  /// 探测单条线路速率：Range 取前 128KB（≤3s），返回字节/秒；失败返回 0。
+  static Future<void> _saveBestRoute(String url) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefBestRoute, url);
+    } catch (_) {
+      // 记录失败不影响下载
+    }
+  }
+
+  /// 探测单条线路速率：Range 取前 128KB（≤1.2s），返回字节/秒；失败返回 0。
   static Future<int> _probeSpeed(String url) async {
     final sw = Stopwatch()..start();
     int bytes = 0;
@@ -206,15 +253,15 @@ class UpdateService {
         options: Options(
           responseType: ResponseType.stream,
           headers: {'Range': 'bytes=0-131071'},
-          sendTimeout: const Duration(seconds: 5),
-          receiveTimeout: const Duration(seconds: 5),
+          sendTimeout: const Duration(seconds: 2),
+          receiveTimeout: const Duration(seconds: 2),
         ),
       );
       final stream = resp.data?.stream;
       if (stream != null) {
         await for (final chunk in stream) {
           bytes += chunk.length;
-          if (bytes >= 131072 || sw.elapsedMilliseconds >= 3000) break;
+          if (bytes >= 131072 || sw.elapsedMilliseconds >= 1200) break;
         }
       }
     } catch (e) {
