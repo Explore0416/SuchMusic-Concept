@@ -1,9 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import '../services/band/band_relay_service.dart';
 import '../services/band/band_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
@@ -21,12 +19,11 @@ class BandPage extends StatefulWidget {
 
 class _BandPageState extends State<BandPage> {
   final BandService _band = BandService.instance;
-  final BandRelayService _relay = BandRelayService.instance;
   StreamSubscription<BandConnectionState>? _stateSub;
-  StreamSubscription<RelayStatus>? _relaySub;
   bool _busy = false;
 
-  /// 令牌默认打码显示，用户点「显示」后才明文（降低肩窥风险）。
+  // 中继功能移除后不再使用；保留以便将来恢复局域网控制
+  // ignore: unused_field, prefer_final_fields
   bool _showToken = false;
 
   /// 原生适配器诊断（nodeId / 权限 / 安装状态 / 最近错误），用于定位连接失败。
@@ -53,16 +50,11 @@ class _BandPageState extends State<BandPage> {
       if (mounted) setState(() {});
       _loadDiag();
     });
-    // 中继：状态 / 连接数变化时刷新
-    _relaySub = _relay.onStatusChanged.listen((_) {
-      if (mounted) setState(() {});
-    });
   }
 
   @override
   void dispose() {
     _stateSub?.cancel();
-    _relaySub?.cancel();
     super.dispose();
   }
 
@@ -83,27 +75,6 @@ class _BandPageState extends State<BandPage> {
       DesignToast.show(context, '手环 SDK 未就绪，请先按指引放置 AAR 后重新构建');
     }
   }
-
-  /// 开启 / 关闭「电脑控制（局域网中继）」。
-  Future<void> _toggleRelay(bool value) async {
-    setState(() => _busy = true);
-    await _relay.setEnabled(value);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      if (!value) _showToken = false;
-    });
-    if (value && _relay.status == RelayStatus.unavailable) {
-      DesignToast.show(context, '未找到可用的局域网地址，请确认手机已连接 Wi-Fi');
-    }
-  }
-
-  Future<void> _copy(String label, String? text) async {
-    if (text == null || text.isEmpty) return;
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) DesignToast.show(context, '已复制$label');
-  }
-
   String get _stateText => switch (_band.state) {
         BandConnectionState.ready => '已连接',
         BandConnectionState.connecting => '连接中…',
@@ -121,19 +92,6 @@ class _BandPageState extends State<BandPage> {
         'installed' => '已安装',
         'not_installed' => '未安装',
         _ => '未知',
-      };
-
-  String get _relayStateText => switch (_relay.status) {
-        RelayStatus.running => '监听中',
-        RelayStatus.starting => '启动中…',
-        RelayStatus.unavailable => '不可用',
-        RelayStatus.disabled => '未开启',
-      };
-
-  Color get _relayStateColor => switch (_relay.status) {
-        RelayStatus.running => const Color(0xFF2F84FE),
-        RelayStatus.starting => const Color(0xFFFF9800),
-        _ => const Color(0xFF838383),
       };
 
   @override
@@ -307,10 +265,6 @@ class _BandPageState extends State<BandPage> {
                     ),
                   ),
                   SizedBox(height: 10 * s),
-                  _sectionHeader('电脑控制（局域网）', s),
-                  SizedBox(height: 10 * s),
-                  _relayBlock(s),
-                  SizedBox(height: 10 * s),
                   _sectionHeader('绑定指引', s),
                   SizedBox(height: 10 * s),
                   _card(s: s, child: _guide(s)),
@@ -334,117 +288,8 @@ class _BandPageState extends State<BandPage> {
   }
 
   // ── 构建件 ────────────────────────────────────────────────
-
-  /// 「电脑控制（局域网）」区块：开关 / 地址 / 令牌 / 连接数 / 最近连接 / 关闭中继。
-  Widget _relayBlock(double s) {
-    final running = _relay.status == RelayStatus.running;
-    final token = _relay.token;
-    final addresses = _relay.addresses;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _hintCard(
-          s: s,
-          text: '开启后，同一局域网内的电脑（Windows 版 SuchMusic-NG）可经手机中转控制播放。'
-              '仅在局域网内通信、不暴露到公网，连接需令牌配对；默认关闭，随时可关。',
-        ),
-        SizedBox(height: 10 * s),
-        _card(
-          s: s,
-          child: Column(
-            children: [
-              _statusRow('中继状态', _relayStateText, s,
-                  valueColor: _relayStateColor),
-              _divider(s),
-              _copyRow(
-                s: s,
-                label: '连接地址',
-                value: addresses.isEmpty ? '—' : addresses.first,
-                valueColor: addresses.isEmpty
-                    ? const Color(0xFF838383)
-                    : const Color(0xFF333333),
-                onCopy:
-                    addresses.isEmpty ? null : () => _copy('地址', addresses.first),
-              ),
-              _divider(s),
-              _copyRow(
-                s: s,
-                label: '配对令牌',
-                value: token == null
-                    ? '—'
-                    : (_showToken ? token : '••••••••••••••••'),
-                valueColor: token == null
-                    ? const Color(0xFF838383)
-                    : const Color(0xFF333333),
-                trailing: token == null
-                    ? null
-                    : GestureDetector(
-                        onTap: () => setState(() => _showToken = !_showToken),
-                        behavior: HitTestBehavior.opaque,
-                        child: Text(
-                          _showToken ? '隐藏' : '显示',
-                          style: TextStyle(
-                              color: const Color(0xFF2F84FE), fontSize: 13 * s),
-                        ),
-                      ),
-                onCopy: token == null ? null : () => _copy('令牌', token),
-              ),
-              _divider(s),
-              _statusRow('当前连接数', '${_relay.connectionCount}', s),
-              _divider(s),
-              _statusRow('最近连接', _relay.lastConnectionSummary, s,
-                  valueColor: const Color(0xFF838383)),
-            ],
-          ),
-        ),
-        SizedBox(height: 10 * s),
-        _tappableCard(
-          s: s,
-          onTap: _busy ? null : () => _toggleRelay(!_relay.enabled),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text('开启电脑控制（局域网）',
-                        style: TextStyle(color: Colors.black, fontSize: 16 * s)),
-                    SizedBox(height: 2 * s),
-                    Text('允许电脑经手机中转控制播放（需令牌配对）',
-                        style: TextStyle(
-                            color: const Color(0xFF838383), fontSize: 11 * s)),
-                  ],
-                ),
-              ),
-              _switch(
-                  s, _relay.enabled, _busy ? null : () => _toggleRelay(!_relay.enabled)),
-            ],
-          ),
-        ),
-        if (running) ...[
-          SizedBox(height: 10 * s),
-          _tappableCard(
-            s: s,
-            onTap: _busy ? null : () => _toggleRelay(false),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('关闭中继',
-                      style: TextStyle(
-                          color: const Color(0xFFD32F2F), fontSize: 16 * s)),
-                ),
-                const Icon(Icons.power_settings_new,
-                    size: 20, color: Color(0xFFD32F2F)),
-              ],
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  /// 可复制的一行（label + 值 + 可选尾部件 + 复制按钮）。
+/// 可复制的一行（label + 值 + 可选尾部件 + 复制按钮）。
+  // ignore: unused_element
   Widget _copyRow({
     required double s,
     required String label,
