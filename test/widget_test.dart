@@ -1,7 +1,7 @@
 // 外壳组件（ResponsiveScaffold / ResponsiveContent）多尺寸冒烟测试。
 //
 // 目的：在 320→1600dp 各断点下 pump 外壳，断言**无 overflow / 无未捕获异常**，
-// 并验证横屏大屏（B4/B5）切换为「PC 风格侧边栏 + 底部常驻播放条」、
+// 并验证横屏大屏（B4/B5）沿用 Android 底部胶囊栏（不再移植 PC 侧边栏）、
 // 竖屏（B1/B3）与手机横屏（B2）保留原版悬浮胶囊栏。
 // 说明：PlayerPage / SettingsPage 依赖 just_audio/audio_service 等平台插件，
 // 在纯 Dart 测试环境无法构造，需真机验证（见 QA 报告「未验证项」）。
@@ -56,13 +56,14 @@ void main() {
       expect(tester.takeException(), isNull);
 
       if (Responsive.showRail(Responsive.of(size))) {
-        // 横屏大屏（B4/B5）：PC 风格侧边栏（Logo 文案）+ 底部常驻播放条
-        expect(find.text('SuchMusic概念版'), findsOneWidget,
-            reason: '横屏大屏应使用 PC 风格侧边栏（含 Logo）');
+        // 横屏大屏：**不再使用 PC 侧边栏**，沿用 Android 底部胶囊栏
+        expect(find.text('SuchMusic概念版'), findsNothing,
+            reason: '横屏不应出现 PC 侧边栏的 Logo 区');
         expect(find.byType(NavigationRail), findsNothing,
-            reason: '横屏大屏已改为自定义侧边栏');
-        expect(find.byKey(_playerBarKey), findsOneWidget,
-            reason: '横屏大屏应渲染底部常驻播放条');
+            reason: '横屏不使用 NavigationRail');
+        expect(find.byKey(_playerBarKey), findsNothing,
+            reason: '横屏不再渲染 PC 风格常驻播放条');
+        expect(tester.takeException(), isNull);
       } else {
         // 竖屏（B1 手机竖屏 / B3 平板竖屏）与手机横屏（B2）：原版悬浮胶囊栏
         expect(find.byType(NavigationRail), findsNothing,

@@ -238,7 +238,7 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                       const SizedBox(height: 14),
                       // 概念版定位说明：一行小字，与流光背景同灰阶，不抢卡片注意力
                       Text(
-                        '功能试验田 · 可能与正式版存在差异',
+                        '独立开发 · 与官方版无隶属或合作关系',
                         style: TextStyle(
                           fontSize: 11,
                           color: const Color(0xFF9A9AA0).withValues(alpha: 0.9),

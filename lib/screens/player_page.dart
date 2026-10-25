@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
+import '../services/user_library_service.dart';
+import '../widgets/design_dialog.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
 import '../widgets/lyric_picker_sheet.dart';
@@ -603,31 +605,49 @@ class _PlayerPageState extends State<PlayerPage> {
       );
     }
 
+    final centered = textAlign == TextAlign.center;
     final child = Column(
       crossAxisAlignment: cross,
       children: [
-        Text(
-          song.name,
-          maxLines: 1,
-          textAlign: textAlign,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          song.artist,
-          maxLines: 1,
-          textAlign: textAlign,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
+        Row(
+          mainAxisAlignment:
+              centered ? MainAxisAlignment.center : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Flexible(
+              child: Column(
+                crossAxisAlignment: cross,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    song.name,
+                    maxLines: 1,
+                    textAlign: textAlign,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    song.artist,
+                    maxLines: 1,
+                    textAlign: textAlign,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _LikeButton(song: song),
+          ],
         ),
         if (!collapsed) ...[
           const SizedBox(height: 8),
@@ -679,22 +699,19 @@ class _PlayerPageState extends State<PlayerPage> {
                           PlayMode.shuffle =>
                             'assets/images/svg/shuffle-one.svg',
                         };
-                        // 播放模式切换：淡入淡出 + 轻微缩放/旋转，避免生硬跳变
+                        // 播放模式切换：纯淡入淡出 + 轻微缩放，不做旋转
+                        // （旋转会让图标像在「转圈」，切换顺序 / 随机时尤其明显）
                         return AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 320),
+                          duration: const Duration(milliseconds: 220),
                           switchInCurve: Curves.easeOutCubic,
-                          switchOutCurve: Curves.easeInCubic,
+                          switchOutCurve: Curves.easeOutCubic,
                           transitionBuilder: (child, animation) {
                             return FadeTransition(
                               opacity: animation,
                               child: ScaleTransition(
-                                scale: Tween<double>(begin: 0.65, end: 1.0)
+                                scale: Tween<double>(begin: 0.84, end: 1.0)
                                     .animate(animation),
-                                child: RotationTransition(
-                                  turns: Tween<double>(begin: -0.28, end: 0.0)
-                                      .animate(animation),
-                                  child: child,
-                                ),
+                                child: child,
                               ),
                             );
                           },
@@ -1506,6 +1523,70 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
       ),
       ),
       ),
+    );
+  }
+}
+
+/// 播放页的点赞按钮：点一下加入「我喜欢的音乐」，再点取消。
+///
+/// 只在这一处放按钮，不新增独立页面——点赞结果统一出现在「歌单 → 我喜欢的音乐」。
+class _LikeButton extends StatefulWidget {
+  const _LikeButton({required this.song});
+
+  final SongModel song;
+
+  @override
+  State<_LikeButton> createState() => _LikeButtonState();
+}
+
+class _LikeButtonState extends State<_LikeButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+  late final Animation<double> _scale = TweenSequence<double>([
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.28), weight: 45),
+    TweenSequenceItem(tween: Tween(begin: 1.28, end: 1.0), weight: 55),
+  ]).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    final nowLiked =
+        await UserLibraryService.instance.toggleLike(widget.song);
+    if (!mounted) return;
+    _controller.forward(from: 0);
+    DesignToast.show(context, nowLiked ? '已加入我喜欢的音乐' : '已取消喜欢');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: UserLibraryService.instance.version,
+      builder: (_, _, _) {
+        final liked =
+            UserLibraryService.instance.isLiked(widget.song.id);
+        return GestureDetector(
+          onTap: _toggle,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: ScaleTransition(
+              scale: _scale,
+              child: Icon(
+                liked ? Icons.favorite : Icons.favorite_border,
+                size: 22,
+                color: liked ? const Color(0xFFFF5A7A) : Colors.white70,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
