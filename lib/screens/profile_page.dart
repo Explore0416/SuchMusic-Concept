@@ -14,7 +14,7 @@ import '../services/kugou_credential_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/fade_slide_in.dart';
 import '../widgets/kugou_account_sheet.dart';
-import 'kugou_playlist_page.dart';
+import 'library_page.dart';
 import 'local_music_page.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
@@ -432,10 +432,8 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 酷狗歌单入口（查看已登录账号的歌单 / 导入任意歌单）。
+  /// 歌单入口：我喜欢的音乐 / 自建歌单 / 酷狗歌单。
   Widget _buildKugouPlaylistEntry() {
-    final cred = KugouCredentialService.instance;
-    final logged = KugouPlatform.values.any(cred.hasCredentialsFor);
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -450,10 +448,10 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       child: _buildAccountRow(
         icon: Icons.queue_music,
-        title: '酷狗歌单',
-        subtitle: logged ? '查看我的歌单，或粘贴链接导入' : '粘贴链接即可导入任意酷狗歌单',
+        title: '歌单',
+        subtitle: '我喜欢的、自建歌单与酷狗歌单',
         actionText: '进入',
-        onTap: _openKugouPlaylists,
+        onTap: _openLibrary,
       ),
     );
   }
@@ -491,10 +489,10 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() {});
   }
 
-  Future<void> _openKugouPlaylists() async {
+  Future<void> _openLibrary() async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const KugouPlaylistPage()),
+      MaterialPageRoute(builder: (_) => const LibraryPage()),
     );
     if (!mounted) return;
     setState(() {});
