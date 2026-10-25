@@ -229,6 +229,9 @@ class UpdateChecker {
       onRouteChanged: (route) {
         dialogSetState?.call(() {
           routeText = '线路：$route';
+          // 选定线路后立刻把状态切到「连接中」，避免进度条还没动时
+          // 界面一直停在「正在选择最快线路…」，看起来像卡死。
+          if (progress == 0) progressText = '正在连接服务器…';
         });
       },
       onProgress: (received, total) {
