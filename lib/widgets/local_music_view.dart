@@ -1,12 +1,12 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:on_audio_query/on_audio_query.dart' as aq;
 
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
+import '../services/kgm_decoder.dart';
+import '../services/local_music_service.dart';
 import '../utils/audio_cover.dart';
 
 /// 本地音乐嵌入视图（首页「本地」标签内容区）：
@@ -22,11 +22,14 @@ class LocalMusicView extends StatefulWidget {
 class _LocalMusicViewState extends State<LocalMusicView>
     with TickerProviderStateMixin {
   final _audioPlayer = AudioPlayerService();
-  final _audioQuery = aq.OnAudioQuery();
 
   /// 扫描结果缓存（静态，跨标签切换/页面重建保留）：
   /// 首页「本地」标签切走会销毁本 widget，切回时直接用缓存避免重新全盘扫描
   static List<SongModel>? _cache;
+
+  /// 播放时按 id 反查原始条目（判断是否加密格式、取真实路径）
+  static Map<String, LocalTrack>? _trackCache;
+  Map<String, LocalTrack> _tracks = {};
 
   List<SongModel> _songs = [];
   bool _loading = true;
@@ -48,6 +51,7 @@ class _LocalMusicViewState extends State<LocalMusicView>
       // 有缓存直接显示，不重扫
       setState(() {
         _songs = cached;
+        _tracks = _trackCache ?? const {};
         _loading = false;
         _granted = true;
       });
@@ -70,58 +74,24 @@ class _LocalMusicViewState extends State<LocalMusicView>
 
   Future<void> _checkPermissionAndScan() async {
     setState(() => _loading = true);
-    var granted = await _audioQuery.permissionsStatus();
-    if (!granted) {
-      granted = await _audioQuery.permissionsRequest();
-    }
-    if (!mounted) return;
-    setState(() => _granted = granted);
-    if (granted) {
-      await _scanSongs();
-    } else {
-      setState(() => _loading = false);
-    }
-  }
-
-  /// 支持的音频文件扩展名（文件系统补充扫描用）
-  static const _audioExtensions = {
-    'mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'wma', 'ape',
-  };
-
-  /// 内部存储根目录；跳过不扫描的目录（应用私有/缓存目录无音频或无权限）
-  static const _fsRoot = '/storage/emulated/0';
-  static const _skippedDirs = {'Android', 'LOST.DIR', '.thumbnails'};
-
-  Future<void> _scanSongs() async {
     try {
-      // MediaStore 查询：覆盖系统已收录的音频（含元数据/时长）
-      final list = await _audioQuery.querySongs();
-      final knownPaths = <String>{};
-      final songs = <SongModel>[];
-      for (final s in list) {
-        final path = s.data;
-        knownPaths.add(path);
-        songs.add(SongModel(
-          id: 'local_${s.id}',
-          name: s.title,
-          artist: (s.artist == null || s.artist == '<unknown>')
-              ? '未知歌手'
-              : s.artist!,
-          album: s.album ?? '',
-          duration: s.duration,
-          localPath: path,
-        ));
-      }
-      // 文件系统补充扫描：MediaStore 不会实时收录新放入的文件
-      //（adb push/文件管理器复制后常延迟入库），直接遍历内部存储兜底
-      songs.addAll(_scanFilesystem(knownPaths));
-      // 按名称排序（不区分大小写），保证两个来源合并后顺序稳定
-      songs.sort(
-          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      // 走原生扫描（Kotlin 后台线程）：MediaStore 一次查询 + 目录遍历都在
+      // 原生侧完成，主 isolate 不做任何 listSync —— 旧实现的同步全盘遍历
+      // 会卡死 UI，切到别的标签也无响应。
+      final result = await LocalMusicService.instance.scan();
       if (!mounted) return;
+      final tracks = <String, LocalTrack>{
+        for (final t in result.tracks) t.id: t,
+      };
+      final songs = result.tracks
+          .map((t) => t.toSongModel())
+          .toList(growable: false);
       _cache = songs;
+      _trackCache = tracks;
       setState(() {
         _songs = songs;
+        _tracks = tracks;
+        _granted = result.audioPermission;
         _loading = false;
       });
     } catch (_) {
@@ -130,50 +100,15 @@ class _LocalMusicViewState extends State<LocalMusicView>
     }
   }
 
-  /// 递归遍历内部存储，找出 MediaStore 中缺失的音频文件
-  List<SongModel> _scanFilesystem(Set<String> knownPaths) {
-    final found = <SongModel>[];
-    final rootDir = Directory(_fsRoot);
-    if (!rootDir.existsSync()) return found;
-    final stack = <Directory>[rootDir];
-    while (stack.isNotEmpty) {
-      final dir = stack.removeLast();
-      List<FileSystemEntity> entries;
-      try {
-        entries = dir.listSync(followLinks: false);
-      } catch (_) {
-        continue; // 无权限/已删除的目录直接跳过
-      }
-      for (final e in entries) {
-        final name = e.path.split(Platform.pathSeparator).last;
-        if (e is Directory) {
-          if (!_skippedDirs.contains(name) && !name.startsWith('.')) {
-            stack.add(e);
-          }
-        } else if (e is File) {
-          final dot = name.lastIndexOf('.');
-          if (dot < 0) continue;
-          final ext = name.substring(dot + 1).toLowerCase();
-          if (!_audioExtensions.contains(ext)) continue;
-          final path = e.path;
-          if (knownPaths.contains(path)) continue;
-          knownPaths.add(path);
-          found.add(SongModel(
-            id: 'local_fs_${path.hashCode}',
-            name: name.substring(0, dot),
-            artist: '未知歌手',
-            album: '',
-            localPath: path,
-          ));
-        }
-      }
-    }
-    return found;
-  }
-
   Future<void> _playAll() async {
     if (_songs.isEmpty) return;
-    await _audioPlayer.playSongs(_songs);
+    final prepared = <SongModel>[];
+    for (final song in _songs) {
+      final item = await _playableOf(trackOf(song));
+      if (item != null) prepared.add(item);
+    }
+    if (prepared.isEmpty) return;
+    await _audioPlayer.playSongs(prepared);
   }
 
   Future<void> _playSong(int index) async {
@@ -183,8 +118,33 @@ class _LocalMusicViewState extends State<LocalMusicView>
     final current = _audioPlayer.currentSong;
     if (current != null && current.id == song.id) {
       await _audioPlayer.togglePlayPause();
-    } else {
-      await _audioPlayer.playAndAdd(song);
+      return;
+    }
+    final playable = await _playableOf(trackOf(song));
+    if (playable == null) return;
+    await _audioPlayer.playAndAdd(playable);
+  }
+
+  LocalTrack? trackOf(SongModel song) => _tracks[song.id];
+
+  /// 加密格式（.kgm/.kgg 等）先在本机解密到缓存，返回可直接播放的歌曲。
+  /// 普通音频原样返回，不做任何额外处理。
+  Future<SongModel?> _playableOf(LocalTrack? track) async {
+    if (track == null) return null;
+    final base = track.toSongModel();
+    if (!track.isKgm) return base;
+    final path = track.path;
+    if (path == null) return base;
+    try {
+      final decoded = await KgmDecoder.instance.decodeToCache(path);
+      return base.copyWith(localUri: decoded.uri.toString());
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('解码失败：$e')),
+        );
+      }
+      return null;
     }
   }
 
@@ -404,8 +364,20 @@ class _LocalMusicViewState extends State<LocalMusicView>
 
   /// 封面缩略图：解析音频内嵌封面（懒加载+缓存），无封面显示灰底音符占位
   Widget _buildCover(SongModel song) {
+    final path = song.localPath;
+    if (path == null || path.isEmpty) {
+      return Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: const Color(0xFFEDEDED),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: const Icon(Icons.music_note, size: 20, color: Color(0xFFB5B5B5)),
+      );
+    }
     return FutureBuilder<Uint8List?>(
-      future: AudioCoverExtractor.extract(song.localPath!),
+      future: AudioCoverExtractor.extract(path),
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (bytes != null) {

@@ -48,6 +48,9 @@ class _HomePageState extends State<HomePage> {
 
   // 顶部标签当前页：0=首页 1=本地（「歌单」暂未开放）
   int _homeTabIndex = 0;
+  // 「本地」标签是否被打开过：首次进入才创建 LocalMusicView，
+  // 之后用 IndexedStack 保活，切走再切回不重建、不重扫。
+  bool _localTabVisited = false;
   List<PlaylistModel> _rankings = [];
   bool _loadingRankings = true;
   List<SongModel> _hotSongs = [];
@@ -389,7 +392,10 @@ class _HomePageState extends State<HomePage> {
                           active: _homeTabIndex == 1,
                           onTap: () {
                             if (_homeTabIndex != 1) {
-                              setState(() => _homeTabIndex = 1);
+                              setState(() {
+                                _homeTabIndex = 1;
+                                _localTabVisited = true;
+                              });
                             }
                           }),
                       const SizedBox(width: 28),
@@ -407,9 +413,10 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           Expanded(
-            child: _homeTabIndex == 1
-                ? const LocalMusicView()
-                : SingleChildScrollView(
+            child: IndexedStack(
+              index: _homeTabIndex,
+              children: [
+                SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -465,6 +472,13 @@ class _HomePageState extends State<HomePage> {
                       ],
                     ),
                   ),
+                // 本地标签：首次打开后才创建，之后常驻（不重建、不重扫）
+                if (_localTabVisited)
+                  const LocalMusicView()
+                else
+                  const SizedBox.shrink(),
+              ],
+            ),
           ),
         ],
         ),

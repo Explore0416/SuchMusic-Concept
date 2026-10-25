@@ -285,7 +285,10 @@ class _MainShellState extends State<MainShell> {
         builder: (context, constraints) {
           // 横屏 / 平板只在宽屏时限宽居中，避免卡片被横向拉长；
           // 不做电脑版侧边栏，导航仍是手机端的底部胶囊栏。
+          // 宽屏用「屏宽减边距」而不是固定 720：1024 宽下 720 会留下
+          // 两侧各 150+ 的空带，看起来就是手机界面被裁切后居中。
           final wide = constraints.maxWidth >= 720;
+          final contentMax = (constraints.maxWidth - 160).clamp(720.0, 900.0);
           final content = IndexedStack(index: _currentIndex, children: _pages);
           return Stack(
             children: [
@@ -293,7 +296,7 @@ class _MainShellState extends State<MainShell> {
                 child: wide
                     ? Center(
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 720),
+                          constraints: BoxConstraints(maxWidth: contentMax),
                           child: content,
                         ),
                       )
