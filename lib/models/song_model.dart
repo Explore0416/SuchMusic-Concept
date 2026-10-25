@@ -52,22 +52,35 @@ class SongModel {
   final String? coverUrl;
   final int? duration;
 
-  /// 音源归属（新增，默认网易云 → 旧调用点零改动）
+  /// 音源归属（默认网易云 → 旧调用点零改动）
   final SongSource source;
 
-  /// 酷狗 hash（新增）
+  /// 酷狗 hash
   final String? hash;
 
-  /// 酷狗 album_id（新增）
+  /// 酷狗 album_id
   final String? albumId;
 
-  /// 酷狗 album_audio_id（新增）
+  /// 酷狗 album_audio_id
   final String? albumAudioId;
 
-  /// 本地音频 Uri（仅 [SongSource.local] 有值；形如 `content://...` 或 `file://...`）。
-  ///
+  /// 本地音频 Uri（形如 `content://...` 或 `file://...`）。
   /// 非空时播放器直接用该 Uri 播放，**不请求任何在线接口**。
   final String? localUri;
+
+  /// 收费标记：0=免费 1=VIP 4=购买专辑 8=低音质免费，接口未返回时为 null
+  final int? fee;
+
+  /// 本地音频文件绝对路径（官方本地音乐用），在线歌曲为 null
+  final String? localPath;
+
+  /// 是否为本地歌曲。
+  ///
+  /// 官方用 [localPath]，概念版用 [localUri] / [source]，三种表示都算本地。
+  bool get isLocal =>
+      localPath != null ||
+      (localUri != null && localUri!.isNotEmpty) ||
+      source == SongSource.local;
 
   const SongModel({
     required this.id,
@@ -81,6 +94,8 @@ class SongModel {
     this.albumId,
     this.albumAudioId,
     this.localUri,
+    this.fee,
+    this.localPath,
   });
 
   /// 用系统「打开方式」/分享进来的本地音频构造歌曲。
@@ -127,6 +142,7 @@ class SongModel {
       album: song.album?.name ?? '',
       coverUrl: song.album?.picUrl,
       duration: song.duration,
+      fee: song.fee,
     );
   }
 
@@ -145,6 +161,7 @@ class SongModel {
       album: song.al.name ?? '',
       coverUrl: song.al.picUrl,
       duration: song.dt,
+      fee: song.fee,
     );
   }
 
@@ -272,6 +289,8 @@ class SongModel {
     String? hash,
     String? albumId,
     String? albumAudioId,
+    int? fee,
+    String? localPath,
   }) {
     return SongModel(
       id: id ?? this.id,
@@ -284,6 +303,8 @@ class SongModel {
       hash: hash ?? this.hash,
       albumId: albumId ?? this.albumId,
       albumAudioId: albumAudioId ?? this.albumAudioId,
+      fee: fee ?? this.fee,
+      localPath: localPath ?? this.localPath,
     );
   }
 
@@ -301,6 +322,7 @@ class SongModel {
       album: (json['al'] as Map<String, dynamic>?)?['name'] as String? ?? '',
       coverUrl: (json['al'] as Map<String, dynamic>?)?['picUrl'] as String?,
       duration: json['dt'] as int?,
+      fee: json['fee'] as int?,
     );
   }
 
@@ -326,6 +348,8 @@ class SongModel {
       'albumAudioId': albumAudioId,
       // 本地曲目必须带上播放地址：丢了就再也放不出来（会回退到在线音源并报 Source error）
       'localUri': localUri,
+      'fee': fee,
+      'localPath': localPath,
     };
   }
 
@@ -345,6 +369,8 @@ class SongModel {
       localUri: (json['localUri'] as String?)?.trim().isNotEmpty == true
           ? (json['localUri'] as String).trim()
           : localUriFromId(json['id'] as String?),
+      fee: json['fee'] as int?,
+      localPath: json['localPath'] as String?,
     );
   }
 

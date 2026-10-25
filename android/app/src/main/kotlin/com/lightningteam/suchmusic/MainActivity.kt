@@ -20,6 +20,10 @@ class MainActivity : AudioServiceActivity() {
     companion object {
         /** 入站音频事件通道：系统在「打开方式」/分享中呼起本 App 时，把音频 Uri 送给 Flutter。 */
         const val INBOUND_AUDIO_CHANNEL = "com.lightningteam.suchmusic/inbound_audio"
+
+        /** 悬浮歌词通道：Service 销毁时反向通知 Flutter（停止同步位置）。 */
+        @JvmStatic
+        var floatingLyricChannel: MethodChannel? = null
     }
 
     /** 尚未送达 Flutter 的入站音频（Flutter 侧监听通道后再投递）。 */
@@ -198,6 +202,9 @@ class MainActivity : AudioServiceActivity() {
      */
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // 逐字歌词：原生解码音频（MediaCodec）后交给 Dart 侧做对齐计算
+        KaraokeDecoder.register(flutterEngine)
+        registerFloatingLyricChannel(flutterEngine)
         val bridge = IslandBridge(applicationContext)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IslandBridge.CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -303,4 +310,95 @@ class MainActivity : AudioServiceActivity() {
                 }
             })
     }
+
+    /**
+     * 桌面悬浮歌词通道。
+     *
+     * 悬浮窗由 [FloatingLyricService] 承载，这里只做「权限查询 / 启动停止 / 文本更新」的转发；
+     * Service 尚未创建时通过 [FloatingLyricService.dispatch] 暂存，创建后按序回放。
+     */
+    private fun registerFloatingLyricChannel(flutterEngine: FlutterEngine) {
+        val channel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            FloatingLyricService.CHANNEL,
+        )
+        floatingLyricChannel = channel
+        channel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "canDrawOverlays" -> result.success(Settings.canDrawOverlays(this))
+                "requestOverlayPermission" -> {
+                    if (!Settings.canDrawOverlays(this)) {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName"),
+                        )
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                    }
+                    result.success(null)
+                }
+                "showFloatingLyric" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    FloatingLyricService.start(this, text)
+                    // startService 是异步的：服务就绪前先暂存，onCreate 后回放
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.updateText(text)
+                    }
+                    result.success(null)
+                }
+                "updateFloatingLyric" -> {
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.updateText(call.argument<String>("text") ?: "")
+                    }
+                    result.success(null)
+                }
+                "setKaraokeLine" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val tokens = call.argument<List<Map<*, *>>>("tokens") ?: emptyList()
+                    val text = call.argument<String>("text") ?: ""
+                    val lineEndMs =
+                        (call.argument<Any>("lineEndMs") as? Number)?.toLong() ?: -1L
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.setKaraokeLine(tokens, text, lineEndMs)
+                    }
+                    result.success(null)
+                }
+                "syncPosition" -> {
+                    val positionMs =
+                        (call.argument<Any>("positionMs") as? Number)?.toLong() ?: 0L
+                    val playing = call.argument<Boolean>("playing") == true
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.syncPosition(positionMs, playing)
+                    }
+                    result.success(null)
+                }
+                "clearKaraoke" -> {
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.clearKaraoke()
+                    }
+                    result.success(null)
+                }
+                "setFloatingLyricLocked" -> {
+                    val locked = call.argument<Boolean>("locked") == true
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.setLocked(locked)
+                    }
+                    result.success(null)
+                }
+                "setFloatingLyricAlign" -> {
+                    val align = call.argument<String>("align") ?: "center"
+                    FloatingLyricService.dispatch(FloatingLyricService.instance) {
+                        it.setAlign(align)
+                    }
+                    result.success(null)
+                }
+                "hideFloatingLyric" -> {
+                    stopService(Intent(this, FloatingLyricService::class.java))
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
 }

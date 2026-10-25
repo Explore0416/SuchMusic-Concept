@@ -20,6 +20,8 @@
         tools:ignore="ScopedStorage" />
     <!-- App内更新：允许安装APK（Android 8+） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- 桌面悬浮歌词：在其他应用上层显示（需用户在系统设置中手动授予） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <application
         android:label="SuchMusic概念版"
         android:name="${applicationName}"
@@ -62,6 +64,10 @@
                 <data android:mimeType="audio/*"/>
             </intent-filter>
         </activity>
+        <!-- 桌面悬浮歌词服务（前台服务，持有悬浮窗） -->
+        <service
+            android:name=".FloatingLyricService"
+            android:exported="false" />
         <!-- audio_service 后台播放服务 -->
         <service android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"

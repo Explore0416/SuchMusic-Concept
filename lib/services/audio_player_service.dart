@@ -14,6 +14,9 @@ import '../utils/app_constants.dart';
 import 'island_service.dart';
 import 'local_lyric_service.dart';
 import 'lyrics_parser.dart';
+import '../utils/audio_cover.dart';
+import 'karaoke/karaoke_model.dart';
+import 'karaoke_service.dart';
 import 'music_api_service.dart';
 import 'notification_lyric_service.dart';
 import 'sound_effect_service.dart';
@@ -42,16 +45,75 @@ class AudioPlayerService {
 
   static final Map<String, Uint8List> _coverCache = {};
   static final Map<String, String> _coverFileCache = {};
+  static final Map<String, Future<void>> _coverFetching = {};
+  static const int _coverMemoryLimit = 50; // 内存封面缓存上限（LRU 淘汰）
+  static const String _localCoverPrefix = 'local://';
   static Uint8List? _lastCoverBytes;
   static final Dio _coverDio = Dio();
 
-  static Uint8List? cachedCover(String url) => _coverCache[url];
+  /// 本地歌曲封面的缓存键（伪 URL，指向音频文件本身）
+  static String localCoverKey(String path) => '$_localCoverPrefix$path';
+
+  /// LRU 读取：命中后移到末尾，保证淘汰的是最久未用的
+  static Uint8List? _coverFromMemory(String url) {
+    final bytes = _coverCache.remove(url);
+    if (bytes != null) {
+      _coverCache[url] = bytes;
+    }
+    return bytes;
+  }
+
+  static Uint8List? cachedCover(String url) => _coverFromMemory(url);
   static Uint8List? get lastCoverBytes => _lastCoverBytes;
 
   static String? coverFileUri(String url) => _coverFileCache[url];
 
   static Future<void> preFetchCover(String url) async {
-    if (_coverCache.containsKey(url)) return;
+    if (_coverFromMemory(url) != null) return;
+    // 并发去重：同一 URL 的重复请求只发一次
+    final inFlight = _coverFetching[url];
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+    final task = _fetchAndCacheCover(url);
+    _coverFetching[url] = task;
+    try {
+      await task;
+    } finally {
+      _coverFetching.remove(url);
+    }
+  }
+
+  static Future<void> _fetchAndCacheCover(String url) async {
+    // 本地歌曲封面：local://<音频文件路径> 伪 URL，解析内嵌图后入同一缓存链路
+    if (url.startsWith(_localCoverPrefix)) {
+      final path = url.substring(_localCoverPrefix.length);
+      final bytes = await AudioCoverExtractor.extract(path);
+      if (bytes == null || bytes.isEmpty) return;
+      _coverCache[url] = bytes;
+      while (_coverCache.length > _coverMemoryLimit) {
+        _coverCache.remove(_coverCache.keys.first);
+      }
+      _lastCoverBytes = bytes;
+      // 保存到本地文件，用于通知栏封面显示
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final coverDir = Directory('${dir.path}/covers');
+        if (!await coverDir.exists()) {
+          await coverDir.create(recursive: true);
+        }
+        final ext =
+            (bytes.length > 3 && bytes[0] == 0x89) ? 'png' : 'jpg';
+        final file =
+            File('${coverDir.path}/local_${path.hashCode}.$ext');
+        if (!await file.exists()) {
+          await file.writeAsBytes(bytes);
+        }
+        _coverFileCache[url] = file.path;
+      } catch (_) {}
+      return;
+    }
     try {
       // 压缩到 500px 加载（原图可达数 MB），缓存键仍用原始 URL
       final response = await _coverDio.get(
@@ -69,6 +131,9 @@ class AudioPlayerService {
       if (response.statusCode == 200 && response.data != null) {
         final bytes = response.data as Uint8List;
         _coverCache[url] = bytes;
+        while (_coverCache.length > _coverMemoryLimit) {
+          _coverCache.remove(_coverCache.keys.first);
+        }
         _lastCoverBytes = bytes;
 
         // 保存到本地文件，用于通知栏封面显示
@@ -125,6 +190,9 @@ class AudioPlayerService {
   }
 
   AudioPlayerService._internal() {
+    // 音效不走 just_audio 的 AudioPipeline：概念版用原生 DynamicsProcessing
+    // （SoundEffectService + SoundEffectBridge），支持 10 段 PEQ 与音量键重建。
+    _player = AudioPlayer();
     _player.playerStateStream.listen((state) {
       if (state.processingState == ProcessingState.completed) {
         return;
@@ -152,7 +220,8 @@ class AudioPlayerService {
             _currentIndex = 0;
             _currentSong = _playlist.isNotEmpty ? _playlist[0] : null;
             _currentSongController.add(_currentSong);
-            await _player.seek(Duration.zero);
+            // 必须带 index: 0，否则只会从"当前最后一首"重新播放而不是回到列表开头
+            await _player.seek(Duration.zero, index: 0);
             await _player.play();
           } else if (_playMode == PlayMode.single && _currentSong != null) {
             await _player.seek(Duration.zero);
@@ -165,7 +234,7 @@ class AudioPlayerService {
         if (_playMode == PlayMode.single && _currentSong != null) {
           await play(_currentSong!);
         } else if (_playlist.isNotEmpty && _currentIndex >= 0) {
-          _playHistory.add(_currentIndex);
+          _pushPlayHistory(_currentIndex);
           if (_playMode == PlayMode.shuffle) {
             _currentIndex = _nextShuffleIndex();
           } else {
@@ -180,6 +249,9 @@ class AudioPlayerService {
     });
 
     _player.currentIndexStream.listen((index) {
+      // 仅拼接音源模式下播放器索引与播放列表索引一一对应；
+      // 单曲模式下播放器索引恒为 0，不能映射回播放列表（否则会覆盖成第一首）
+      if (!_usingConcatenatingSource) return;
       if (index != null && index >= 0 && index < _playlist.length) {
         _currentIndex = index;
         _captureCompletion();
@@ -224,6 +296,13 @@ class AudioPlayerService {
       final prefs = await SharedPreferences.getInstance();
       await applyMixWithOthers(
           prefs.getBool(AppConstants.allowMixWithOthers) ?? false);
+    } catch (_) {}
+    // 恢复逐字歌词开关与下一首预缓存开关
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _karaokeEnabled = prefs.getBool(_karaokeEnabledPrefKey) ?? true;
+      _karaokePrecacheEnabled =
+          prefs.getBool(_karaokePrecacheEnabledPrefKey) ?? true;
     } catch (_) {}
     await _loadPlaylist();
     // 通知/灵动岛歌词开关（读取失败走默认值）
@@ -290,7 +369,7 @@ class AudioPlayerService {
     return File('${dir.path}${Platform.pathSeparator}$_playlistFileName');
   }
 
-  final AudioPlayer _player = AudioPlayer();
+  late final AudioPlayer _player;
 
   /// 底层 just_audio / ExoPlayer 的真实音频会话 ID（由 `onAudioSessionIdChanged` 驱动）。
   /// 音效（DynamicsProcessing）必须绑定此会话才能在主流安卓机型上生效；
@@ -311,6 +390,20 @@ class AudioPlayerService {
 
   List<LyricLine> _lyrics = [];
   String _currentLyric = '';
+
+  // 逐字歌词（异步生成，就绪后推送给 UI）
+  KaraokeSong? _karaoke;
+  StreamSubscription<KaraokeState>? _karaokeSub;
+  // 逐字歌词开关（持久化）：关闭后 UI 回退普通 LRC，且不再生成逐字数据
+  bool _karaokeEnabled = true;
+  static const _karaokeEnabledPrefKey = 'karaokeEnabled';
+  // 下一首逐字预缓存开关（持久化）：打开后每次切歌自动预缓存下一首
+  bool _karaokePrecacheEnabled = false;
+  static const _karaokePrecacheEnabledPrefKey = 'karaokePrecacheEnabled';
+  // 等待当前歌曲对齐结束后再预缓存的监听（一次性）
+  StreamSubscription<KaraokeState>? _precacheSub;
+  // 当前歌词原文（重新打开逐字时复用，避免重新拉取导致歌词列表闪烁）
+  String _currentLrc = '';
 
   List<SongModel> _playlist = [];
   int _currentIndex = -1;
@@ -348,14 +441,17 @@ class AudioPlayerService {
   List<SongModel> get playlist => List.unmodifiable(_playlist);
   int get currentIndex => _currentIndex;
   PlayMode get playMode => _playMode;
+  bool get karaokeEnabled => _karaokeEnabled;
+  bool get karaokePrecacheEnabled => _karaokePrecacheEnabled;
 
   bool _isFmMode = false;
   bool get isFmMode => _isFmMode;
 
   bool _usingConcatenatingSource = false;
 
-  /// 播放请求序号：异步结果应用前校验，避免快切歌时旧结果覆盖新播放
-  int _playSeq = 0;
+  /// 播放请求代际：每次 play/playSongs 自增；
+  /// await 返回后若代际不一致，说明已被更新的播放请求取代，应丢弃本次结果
+  int _playGeneration = 0;
 
   final StreamController<bool> _fmModeController =
       StreamController<bool>.broadcast();
@@ -377,6 +473,10 @@ class AudioPlayerService {
       StreamController<SongModel?>.broadcast();
   final StreamController<PlayMode> _playModeController =
       StreamController<PlayMode>.broadcast();
+  final StreamController<KaraokeSong?> _karaokeController =
+      StreamController<KaraokeSong?>.broadcast();
+  final StreamController<bool> _trialController =
+      StreamController<bool>.broadcast();
 
   Stream<PlayerState> get onStateChanged => _stateController.stream;
   Stream<Duration> get onPositionChanged => _positionController.stream;
@@ -386,6 +486,13 @@ class AudioPlayerService {
   Stream<List<SongModel>> get onPlaylistChanged => _playlistController.stream;
   Stream<SongModel?> get onCurrentSongChanged => _currentSongController.stream;
   Stream<PlayMode> get onPlayModeChanged => _playModeController.stream;
+  Stream<KaraokeSong?> get onKaraokeChanged => _karaokeController.stream;
+
+  /// 当前播放是否为 VIP 试听片段（true=试听，false=完整播放，免费听时长生效时为 false）
+  Stream<bool> get onTrialPlaybackChanged => _trialController.stream;
+
+  /// 当前歌曲的逐字歌词（可能为 null：未生成/生成中/失败）
+  KaraokeSong? get karaoke => _karaoke;
 
   void _updateState(PlayerState newState) {
     if (_state != newState) {
@@ -423,8 +530,26 @@ class AudioPlayerService {
     _currentLyric = '';
     _lyricController.add('');
     _lyricsController.add([]);
+    _karaoke = _karaokeEnabled ? KaraokeService().cachedKaraoke(song.id) : null;
+    _karaokeController.add(_karaoke);
+    _karaokeSub?.cancel();
+    _karaokeSub = KaraokeService().onStateChanged.listen((s) {
+      if (!_karaokeEnabled) return;
+      if (s.songId != _currentSong?.id) return;
+      if (s.status == KaraokeStatus.ready) {
+        final k = KaraokeService().cachedKaraoke(s.songId);
+        if (k != null) {
+          _karaoke = k;
+          _karaokeController.add(k);
+        }
+      } else if (s.status == KaraokeStatus.failed &&
+          _karaoke?.songId == s.songId) {
+        _karaoke = null;
+        _karaokeController.add(null);
+      }
+    });
 
-    // 优先用用户手动指定的歌词（本地音乐识别不到歌词时由用户搜索选择，仅存本机）
+    // 1) 用户手动指定的歌词优先（本地音乐识别不到时由用户搜索选择，仅存本机）
     String? manual;
     try {
       manual = LocalLyricService().get(song.id);
@@ -435,86 +560,308 @@ class AudioPlayerService {
       _lyrics = parseLrc(manual);
       _lyricsController.add(List.unmodifiable(_lyrics));
       _updateCurrentLyric(_position);
+      _currentLrc = manual;
+      await _requestKaraoke(song.id, manual, localAudioPath: song.localPath);
       return;
     }
 
-    // 按歌曲归属音源取歌词；失败静默无歌词（与现有行为一致，不回退音源）
+    // 2) 按歌曲归属音源取歌词（网易云 / 酷狗各自接口）；失败静默无歌词
     final lrcText = await SourceManager()
         .withFallback<String>(song, (src, s, strict) => src.getLyrics(s));
+    if (_currentSong?.id != song.id) return; // 等待期间已切歌，丢弃过期结果
     if (lrcText != null && lrcText.isNotEmpty) {
       _lyrics = parseLrc(lrcText);
       _lyricsController.add(List.unmodifiable(_lyrics));
       _updateCurrentLyric(_position);
+      _currentLrc = lrcText;
+      // 触发逐字对齐（后台：下载→解码→isolate 计算，就绪后经上面监听推送）
+      await _requestKaraoke(song.id, lrcText, localAudioPath: song.localPath);
+    }
+    unawaited(_maybePrecacheNext());
+  }
+
+  /// 触发逐字对齐（后台：下载→解码→isolate 计算，就绪后经监听推送）。
+  /// 逐字开关关闭时直接跳过；缓存命中立即推送。
+  Future<void> _requestKaraoke(String songId, String lrcText,
+      {String? localAudioPath}) async {
+    if (!_karaokeEnabled) return;
+    KaraokeService().attachLyrics(songId, lrcText);
+    final hit = localAudioPath != null
+        ? await KaraokeService().requestLocal(songId, lrcText, localAudioPath)
+        : await KaraokeService().request(songId, lrcText);
+    if (hit != null && _karaokeEnabled && _currentSong?.id == songId) {
+      _karaoke = hit;
+      _karaokeController.add(hit);
     }
   }
 
+  /// 逐字歌词开关：关闭立即回退普通歌词；打开后立即重新生成当前歌曲逐字数据
+  Future<void> setKaraokeEnabled(bool v) async {
+    if (_karaokeEnabled == v) return;
+    _karaokeEnabled = v;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_karaokeEnabledPrefKey, v);
+    } catch (_) {}
+    if (!v) {
+      _karaoke = null;
+      _karaokeController.add(null);
+      return;
+    }
+    final song = _currentSong;
+    if (song == null) return;
+    if (_currentLrc.isNotEmpty) {
+      // 复用当前歌词原文直接重新对齐，避免重新拉歌词导致歌词列表闪烁
+      await _requestKaraoke(song.id, _currentLrc,
+          localAudioPath: song.isLocal ? song.localPath : null);
+    } else {
+      _loadLyricsFor(song);
+    }
+  }
+
+  /// 下一首逐字预缓存开关：打开后立即尝试预缓存；之后每次切歌自动触发
+  Future<String?> setKaraokePrecacheEnabled(bool v) async {
+    if (_karaokePrecacheEnabled == v) return null;
+    _karaokePrecacheEnabled = v;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_karaokePrecacheEnabledPrefKey, v);
+    } catch (_) {}
+    if (!v) return null;
+    return _maybePrecacheNext();
+  }
+
+  /// 预缓存协调：当前歌曲正在对齐时等它结束（就绪/失败）再预缓存，
+  /// 避免抢占当前歌曲的计算位；否则立即预缓存下一首。
+  /// 返回提示文案（null = 已开始后台缓存或进入等待）。
+  Future<String?> _maybePrecacheNext() async {
+    if (!_karaokePrecacheEnabled) return null;
+    final cur = _currentSong;
+    if (cur == null) return null;
+    final st = KaraokeService().stateOf(cur.id)?.status;
+    final computing = st == KaraokeStatus.downloading ||
+        st == KaraokeStatus.decoding ||
+        st == KaraokeStatus.aligning;
+    if (computing) {
+      _precacheSub?.cancel();
+      _precacheSub = KaraokeService().onStateChanged.listen((s) {
+        if (s.songId != cur.id) return;
+        if (s.status == KaraokeStatus.ready ||
+            s.status == KaraokeStatus.failed) {
+          _precacheSub?.cancel();
+          _precacheSub = null;
+          _maybePrecacheNext();
+        }
+      });
+      return null;
+    }
+    _precacheSub?.cancel();
+    _precacheSub = null;
+    return _precacheNextKaraoke();
+  }
+
+  /// 预览下一首（只读，不改变任何播放状态）；无可用下一首返回 null
+  SongModel? _peekNextSong() {
+    if (_playlist.isEmpty || _currentSong == null || _currentIndex < 0) {
+      return null;
+    }
+    if (_playMode == PlayMode.shuffle) {
+      // 随机队列失效时播放中会重建，这里无法预知下一首
+      if (_shuffleQueue.isEmpty ||
+          _shuffleQueue.any((i) => i >= _playlist.length)) {
+        return null;
+      }
+      final pos = _shuffleQueuePos + 1;
+      if (pos >= _shuffleQueue.length) {
+        // 走到队尾会重洗队列；队列只剩当前一首时下一首仍是它
+        return _shuffleQueue.length == 1 ? _playlist[_shuffleQueue[0]] : null;
+      }
+      return _playlist[_shuffleQueue[pos]];
+    }
+    // 顺序/单曲循环：手动切歌均按顺序下一首
+    return _playlist[(_currentIndex + 1) % _playlist.length];
+  }
+
+  /// 预缓存下一首的逐字歌词（提前取歌词+对齐，切歌时秒出）。
+  /// 不受逐字显示开关限制：关掉显示也可提前缓存。
+  /// 返回给 UI 的提示文案；null 表示已开始后台缓存。
+  Future<String?> _precacheNextKaraoke() async {
+    final next = _peekNextSong();
+    if (next == null) return '暂无下一首歌曲';
+    if (KaraokeService().cachedKaraoke(next.id) != null) {
+      return '下一首逐字歌词已缓存';
+    }
+    if (KaraokeService().stateOf(next.id)?.status == KaraokeStatus.failed) {
+      return '下一首逐字歌词暂无法缓存';
+    }
+    String? lrc;
+    if (next.isLocal && next.localPath != null) {
+      lrc = await AudioCoverExtractor.extractLyrics(next.localPath!);
+    } else {
+      lrc = await MusicApiService().getLyrics(next.id);
+    }
+    if (lrc == null || lrc.trim().isEmpty) return '下一首没有歌词，无法缓存';
+    final hit = next.isLocal && next.localPath != null
+        ? await KaraokeService().requestLocal(next.id, lrc, next.localPath!)
+        : await KaraokeService().request(next.id, lrc);
+    if (hit != null) return '下一首逐字歌词已缓存';
+    return null;
+  }
+
+  /// 清空歌词与卡拉OK状态（切歌时清掉上一首的残留）
+  void _clearLyricsState() {
+    _lyrics = [];
+    _currentLyric = '';
+    _lyricController.add('');
+    _lyricsController.add([]);
+    _karaoke = null;
+    _currentLrc = '';
+    _karaokeController.add(null);
+  }
+
+  /// 按歌曲类型加载歌词：本地歌提取内嵌/同名LRC，在线歌请求接口
+  void _loadLyricsFor(SongModel song) {
+    if (song.isLocal) {
+      _clearLyricsState();
+      _extractLocalLyrics(song);
+    } else {
+      _fetchLyrics(song);
+    }
+  }
+
+  /// 本地歌曲歌词：同名 .lrc 文件或 mp3 内嵌 USLT 帧；
+  /// 有本地音频源，直接跑逐字对齐管线（无需下载）
+  Future<void> _extractLocalLyrics(SongModel song) async {
+    final songId = song.id;
+    _karaokeSub?.cancel();
+    _karaokeSub = KaraokeService().onStateChanged.listen((s) {
+      if (!_karaokeEnabled) return;
+      if (s.songId != _currentSong?.id) return;
+      if (s.status == KaraokeStatus.ready) {
+        final k = KaraokeService().cachedKaraoke(s.songId);
+        if (k != null) {
+          _karaoke = k;
+          _karaokeController.add(k);
+        }
+      } else if (s.status == KaraokeStatus.failed &&
+          _karaoke?.songId == s.songId) {
+        _karaoke = null;
+        _karaokeController.add(null);
+      }
+    });
+    final lrc = await AudioCoverExtractor.extractLyrics(song.localPath!);
+    if (_currentSong?.id != songId) return; // 等待期间已切歌，丢弃过期结果
+    if (lrc != null && lrc.isNotEmpty) {
+      _lyrics = parseLrc(lrc);
+      _lyricsController.add(List.unmodifiable(_lyrics));
+      _updateCurrentLyric(_position);
+      _currentLrc = lrc;
+      // 本地文件直接送对齐管线生成逐字数据（就绪后经上面监听推送）
+      await _requestKaraoke(songId, lrc, localAudioPath: song.localPath);
+    }
+    unawaited(_maybePrecacheNext());
+  }
+
   Future<bool> play(SongModel song, {bool exitFm = true}) async {
+    // 竞态代际：仅最后一次播放请求的结果可被应用
+    final gen = ++_playGeneration;
     _usingConcatenatingSource = false;
-    // 竞态序号：仅最后一次请求结果可被应用
-    final seq = ++_playSeq;
     try {
       if (exitFm && _isFmMode) {
-        await exitFmMode();
+        _exitFmState();
       }
       _lastError = null;
-      _updateState(PlayerState.loading);
       _captureCompletion();
-      _currentSong = song;
+      _updateState(PlayerState.loading);
+
+      // 本地曲目判定：优先 localUri（解密后的 .kgm 等），其次 localPath
+      final localUri = localSourceUriOf(song);
+      final localPath = song.localPath;
+      final localFile = (localPath != null && localPath.isNotEmpty)
+          ? localPath
+          : null;
+      final isLocalSong = localUri != null || localFile != null ||
+          song.source.isLocal;
+
+      // 本地歌曲：注入 local:// 封面键（走内嵌封面缓存链路），不污染原对象
+      final uiSong = localFile != null && song.coverUrl == null
+          ? song.copyWith(coverUrl: localCoverKey(localFile))
+          : song;
+      _currentSong = uiSong;
       _currentSongController.add(_currentSong);
 
-      if (song.coverUrl != null && song.coverUrl!.isNotEmpty) {
-        preFetchCover(song.coverUrl!);
+      if (uiSong.coverUrl != null && uiSong.coverUrl!.isNotEmpty) {
+        preFetchCover(uiSong.coverUrl!);
       }
 
       await _player.stop();
 
-      _fetchLyrics(song);
-
-      // 本地音乐：直接用入站 Uri 播放，不请求任何在线接口
-      Uri? sourceUri = localSourceUriOf(song);
-      if (sourceUri == null && song.source.isLocal) {
-        // 本地曲目没有地址时绝不回退在线音源：那只会拿到 404/断链，
-        // 表现为 just_audio 的 "Connection aborted" / "(0) Source error"。
-        _lastError = '本地文件路径已失效，请从「本地音乐」重新选择该歌曲';
-        _updateState(PlayerState.error);
-        return false;
-      }
-      if (sourceUri == null) {
-        final url = await SourceManager().withFallback<String>(
-            song, (src, s, strict) => src.getSongUrl(s, strict: strict));
-        if (seq != _playSeq) return false; // 已切到更新请求，丢弃过期结果
-        if (url == null) {
+      // 本地歌曲：直接播文件，跳过在线取址 / 试听判定 / 封面回填
+      if (isLocalSong) {
+        final target = localUri ??
+            (localFile != null ? Uri.file(localFile) : null);
+        if (target == null) {
+          // 本地曲目没有地址时绝不回退在线音源：那只会拿到 404/断链，
+          // 表现为 just_audio 的 "Connection aborted" / "(0) Source error"。
+          _lastError = '本地文件路径已失效，请从「本地音乐」重新选择该歌曲';
           _updateState(PlayerState.error);
           return false;
         }
-        sourceUri = Uri.parse(url);
+        _fetchLyrics(uiSong);
+        if (target.scheme == 'file') {
+          // 原生文件通道：避免把 file:// 当网络流处理时 duration=00:00
+          await _player
+              .setFilePath(target.toFilePath(), preload: true)
+              .timeout(const Duration(seconds: 15));
+        } else {
+          await _player
+              .setAudioSource(AudioSource.uri(target))
+              .timeout(const Duration(seconds: 15));
+        }
+        if (gen != _playGeneration) return true;
+        _trialController.add(false);
+        await _player.play();
+        _savePlaylist();
+        return true;
       }
-      if (seq != _playSeq) return false;
 
-      if (sourceUri.scheme == 'file') {
-        // 本地文件走 setFilePath：just_audio 的原生文件通道，
-        // 避免把 file:// 当网络流处理时出现 duration=00:00 / 直接失败。
-        await _player
-            .setFilePath(sourceUri.toFilePath(), preload: true)
-            .timeout(const Duration(seconds: 15));
-      } else {
-        await _player
-            .setAudioSource(AudioSource.uri(sourceUri))
-            .timeout(const Duration(seconds: 15));
+      _fetchLyrics(uiSong);
+
+      // 在线曲目：按歌曲归属音源取地址（网易云 / 酷狗），严格模式下不用兜底外链
+      final url = await SourceManager().withFallback<String>(
+          song, (src, s, strict) => src.getSongUrl(s, strict: strict));
+      if (gen != _playGeneration) {
+        return true; // 等待期间用户已切歌，本次请求被取代，不算失败
       }
-      if (seq != _playSeq) return false;
+      if (url == null) {
+        _lastError = '音频源未返回可用地址（可能版权受限或需登录）';
+        _updateState(PlayerState.error);
+        return false;
+      }
+
+      // 试听判定：未登录时 VIP 歌（fee=1）只能拿到试听片段
+      _trialController.add(
+          !MusicApiService().hasCachedUser && (song.fee ?? 0) == 1);
+
+      await _player
+          .setAudioSource(AudioSource.uri(Uri.parse(url)))
+          .timeout(const Duration(seconds: 15));
+      if (gen != _playGeneration) return true;
 
       await _player.play();
 
       if (song.coverUrl == null || song.coverUrl!.isEmpty) {
         final detail = await SourceManager().withFallback<SongModel>(
             song, (src, s, strict) => src.getSongDetail(s));
+        if (gen != _playGeneration) return true;
         if (detail != null && detail.coverUrl != null) {
           _currentSong = detail;
           _currentSongController.add(_currentSong);
           preFetchCover(detail.coverUrl!);
-          if (_currentIndex >= 0 && _currentIndex < _playlist.length) {
-            _playlist[_currentIndex] = detail;
+          // 按 id 定位，避免请求期间播放列表变化导致改错位置
+          final idx = _playlist.indexWhere((s) => s.id == song.id);
+          if (idx >= 0) {
+            _playlist[idx] = detail;
             _playlistController.add(_playlist);
             _savePlaylist();
           }
@@ -523,13 +870,17 @@ class AudioPlayerService {
 
       return true;
     } on TimeoutException {
-      _lastError = '加载音频超时（文件不可读或格式不受支持）';
-      _updateState(PlayerState.error);
+      if (gen == _playGeneration) {
+        _lastError = '加载音频超时（文件不可读或格式不受支持）';
+        _updateState(PlayerState.error);
+      }
       return false;
     } catch (e) {
-      _lastError = e.toString();
-      debugPrint('[player] 播放失败: $e');
-      _updateState(PlayerState.error);
+      if (gen == _playGeneration) {
+        _lastError = e.toString();
+        debugPrint('[player] 播放失败: $e');
+        _updateState(PlayerState.error);
+      }
       return false;
     }
   }
@@ -557,6 +908,7 @@ class AudioPlayerService {
   }
 
   Future<void> stop() async {
+    _playGeneration++; // 使进行中的 play/playSongs 请求失效
     await _player.stop();
     _captureCompletion();
     _currentSong = null;
@@ -565,6 +917,8 @@ class AudioPlayerService {
     _currentLyric = '';
     _lyricController.add('');
     _lyricsController.add([]);
+    _karaoke = null;
+    _karaokeController.add(null);
     _updateState(PlayerState.idle);
   }
 
@@ -602,13 +956,11 @@ class AudioPlayerService {
     final existingIndex = _playlist.indexWhere((s) => s.id == song.id);
     if (existingIndex >= 0) {
       if (_currentIndex >= 0 && existingIndex != _currentIndex) {
-        _playHistory.add(_currentIndex);
+        _pushPlayHistory(_currentIndex);
       }
       _currentIndex = existingIndex;
     } else {
-      if (_currentIndex >= 0) {
-        _playHistory.add(_currentIndex);
-      }
+      _pushPlayHistory(_currentIndex);
       _playlist.insert(0, song);
       _currentIndex = 0;
       _playlistController.add(_playlist);
@@ -626,63 +978,131 @@ class AudioPlayerService {
 
   Future<void> playSongs(List<SongModel> songs) async {
     if (songs.isEmpty) return;
-    // 竞态序号：快速切歌 / 换队列时旧结果作废
-    final seq = ++_playSeq;
+    // 竞态代际：快速切歌 / 换队列时旧结果作废
+    final gen = ++_playGeneration;
     _usingConcatenatingSource = true;
     if (_isFmMode) {
-      await exitFmMode();
+      _exitFmState();
     }
 
+    // 本地歌曲：注入 local:// 封面键（走内嵌封面缓存链路），不污染原列表对象
+    final displaySongs = <SongModel>[
+      for (final s in songs)
+        if (s.localPath != null && s.localPath!.isNotEmpty &&
+            s.coverUrl == null)
+          s.copyWith(coverUrl: localCoverKey(s.localPath!))
+        else
+          s,
+    ];
     _playlist.clear();
-    _playlist.addAll(songs);
+    _playlist.addAll(displaySongs);
     _currentIndex = 0;
     _playlistController.add(_playlist);
 
     _updateState(PlayerState.loading);
     _captureCompletion();
-    _currentSong = songs[0];
+    _currentSong = displaySongs[0];
     _currentSongController.add(_currentSong);
 
-    if (songs[0].coverUrl != null && songs[0].coverUrl!.isNotEmpty) {
-      preFetchCover(songs[0].coverUrl!);
+    if (displaySongs[0].coverUrl != null &&
+        displaySongs[0].coverUrl!.isNotEmpty) {
+      preFetchCover(displaySongs[0].coverUrl!);
     }
 
     await _player.stop();
+    _fetchLyrics(displaySongs[0]);
 
-    _fetchLyrics(songs[0]);
+    // 并行预取全部播放地址（最多 6 并发），大歌单不再长时间阻塞开播
+    final urls = List<String?>.filled(songs.length, null);
+    final trialFlags = List<bool>.filled(songs.length, false);
+    // 未登录时 VIP 歌（fee=1）必然是试听，不依赖服务端字段
+    final anonymous = !MusicApiService().hasCachedUser;
+    var cursor = 0;
+    Future<void> fetchWorker() async {
+      while (cursor < songs.length) {
+        final i = cursor++;
+        final song = songs[i];
+        // 本地歌曲无需在线取址
+        if (localSourceUriOf(song) != null || song.source.isLocal) {
+          urls[i] = 'local';
+          trialFlags[i] = false;
+          continue;
+        }
+        // 按歌曲归属音源取地址（网易云 / 酷狗），严格模式避免拿兜底断链
+        final url = await SourceManager().withFallback<String>(
+            song, (src, x, strict) => src.getSongUrl(x, strict: strict));
+        urls[i] = url;
+        trialFlags[i] = anonymous && (song.fee ?? 0) == 1;
+      }
+    }
 
+    final workerCount = songs.length < 6 ? songs.length : 6;
+    await Future.wait(List.generate(workerCount, (_) => fetchWorker()));
+    if (gen != _playGeneration) return;
+
+    // 取不到 URL 的歌从列表同步剔除，保证播放器索引与播放列表索引一一对应
+    final playable = <SongModel>[];
+    final playableTrial = <bool>[];
     final sources = <AudioSource>[];
-    for (final song in songs) {
-      if (seq != _playSeq) return; // 队列已切换，放弃本次构建
-      // 本地音乐（含解密后的 .kgm）必须用 localUri：它没有在线音源，
-      // 走 SourceManager 只会拿到 null → 队列为空 → 直接 error、时长 00:00。
+    for (var i = 0; i < songs.length; i++) {
+      final song = songs[i];
       final localUri = localSourceUriOf(song);
+      final localPath = song.localPath;
+      // 本地音乐（含解密后的 .kgm）优先用 localUri：它没有在线音源，
+      // 走 SourceManager 只会拿到 null → 队列为空 → 直接 error、时长 00:00。
       if (localUri != null) {
+        playable.add(displaySongs[i]);
+        playableTrial.add(false);
         sources.add(AudioSource.uri(localUri));
+        continue;
+      }
+      if (localPath != null && localPath.isNotEmpty) {
+        playable.add(displaySongs[i]);
+        playableTrial.add(false);
+        sources.add(AudioSource.file(localPath));
         continue;
       }
       // 本地曲目缺地址时不回退在线音源（见 play() 同名判断）
       if (song.source.isLocal) continue;
-      final url = await SourceManager().withFallback<String>(
-          song, (src, s, strict) => src.getSongUrl(s, strict: strict));
+      final url = urls[i];
       if (url != null) {
+        playable.add(song);
+        playableTrial.add(trialFlags[i]);
         sources.add(AudioSource.uri(Uri.parse(url)));
       }
     }
 
-    if (seq != _playSeq) return;
-    if (sources.isEmpty) {
+    if (gen != _playGeneration) return;
+    if (playable.isEmpty || sources.isEmpty) {
       _lastError = '没有可播放的地址：本地文件路径可能已失效，请重新扫描本地音乐';
       _updateState(PlayerState.error);
       return;
+    }
+
+    if (playable.length != songs.length) {
+      _playlist
+        ..clear()
+        ..addAll(playable);
+      _playlistController.add(_playlist);
+    }
+    // 首歌取不到地址时顺延到下一首可播的歌
+    if (_currentSong?.id != playable[0].id) {
+      _currentIndex = 0;
+      _currentSong = playable[0];
+      _currentSongController.add(_currentSong);
+      _fetchLyrics(playable[0]);
+      if (playable[0].coverUrl != null && playable[0].coverUrl!.isNotEmpty) {
+        preFetchCover(playable[0].coverUrl!);
+      }
     }
 
     try {
       await _player
           .setAudioSource(ConcatenatingAudioSource(children: sources))
           .timeout(const Duration(seconds: 15));
-      if (seq != _playSeq) return;
+      if (gen != _playGeneration) return;
       await _player.play();
+      _trialController.add(playableTrial[0]);
     } on TimeoutException {
       _lastError = '加载音频超时（文件不可读或格式不受支持）';
       _updateState(PlayerState.error);
@@ -727,7 +1147,11 @@ class AudioPlayerService {
   }
 
   void _generateShuffleQueue() {
-    if (_playlist.isEmpty) return;
+    if (_playlist.isEmpty) {
+      _shuffleQueue = [];
+      _shuffleQueuePos = 0;
+      return;
+    }
     _shuffleQueue = List.generate(_playlist.length, (i) => i);
     for (int i = _shuffleQueue.length - 1; i > 0; i--) {
       final j = _random.nextInt(i + 1);
@@ -744,15 +1168,29 @@ class AudioPlayerService {
   }
 
   int _nextShuffleIndex() {
-    if (_shuffleQueue.isEmpty || _playlist.isEmpty) {
+    if (_playlist.isEmpty) return 0;
+    // 播放列表增删后旧队列里可能残留越界索引，需要重建
+    if (_shuffleQueue.isEmpty ||
+        _shuffleQueue.any((i) => i >= _playlist.length)) {
       _generateShuffleQueue();
     }
+    if (_shuffleQueue.isEmpty) return 0;
     _shuffleQueuePos++;
     if (_shuffleQueuePos >= _shuffleQueue.length) {
       _generateShuffleQueue();
-      _shuffleQueuePos = 1;
+      // 重洗后第 0 位是当前歌，从第 1 位取；列表只剩 1 首时只能取 0
+      _shuffleQueuePos = _shuffleQueue.length > 1 ? 1 : 0;
     }
     return _shuffleQueue[_shuffleQueuePos];
+  }
+
+  /// 记录播放历史（供"上一首"回退），限制长度防止长会话无限增长
+  void _pushPlayHistory(int index) {
+    if (index < 0) return;
+    _playHistory.add(index);
+    if (_playHistory.length > 100) {
+      _playHistory.removeAt(0);
+    }
   }
 
   Future<void> playNext() async {
@@ -767,7 +1205,7 @@ class AudioPlayerService {
       return;
     }
 
-    _playHistory.add(_currentIndex);
+    _pushPlayHistory(_currentIndex);
     if (_playMode == PlayMode.shuffle) {
       _currentIndex = _nextShuffleIndex();
     } else {
@@ -789,7 +1227,7 @@ class AudioPlayerService {
     if (_playHistory.isNotEmpty) {
       _currentIndex = _playHistory.removeLast();
     } else if (_playMode == PlayMode.shuffle) {
-      _playHistory.add(_currentIndex);
+      _pushPlayHistory(_currentIndex);
       _currentIndex = _nextShuffleIndex();
     } else {
       _currentIndex =
@@ -808,7 +1246,7 @@ class AudioPlayerService {
     }
 
     if (_currentIndex >= 0 && index != _currentIndex) {
-      _playHistory.add(_currentIndex);
+      _pushPlayHistory(_currentIndex);
     }
     _currentIndex = index;
     _savePlaylist();
@@ -888,15 +1326,21 @@ class AudioPlayerService {
     await play(songs.first, exitFm: false);
   }
 
-  Future<void> exitFmMode() async {
+  /// 退出 FM 的纯状态清理（不停止播放器），供 play/playSongs 内部切换时复用，
+  /// 避免经过 stop() 导致自身的播放代际被作废
+  void _exitFmState() {
     _isFmMode = false;
     _fmModeController.add(false);
     _playlist.clear();
     _currentIndex = -1;
     _playHistory.clear();
-    await stop();
     _playlistController.add(_playlist);
     _savePlaylist();
+  }
+
+  Future<void> exitFmMode() async {
+    _exitFmState();
+    await stop();
   }
 
   Future<void> fmTrash() async {
@@ -910,6 +1354,8 @@ class AudioPlayerService {
   void dispose() {
     _player.dispose();
     _fmModeController.close();
+    _karaokeSub?.cancel();
+    _precacheSub?.cancel();
     _stateController.close();
     _positionController.close();
     _durationController.close();
@@ -918,5 +1364,6 @@ class AudioPlayerService {
     _playlistController.close();
     _currentSongController.close();
     _playModeController.close();
+    _karaokeController.close();
   }
 }
