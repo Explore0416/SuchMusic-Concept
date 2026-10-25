@@ -60,3 +60,4 @@ android/keystore/
 *.jks
 *.keystore
 *.p12
+android/build/
