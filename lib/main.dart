@@ -16,6 +16,7 @@ import 'services/band/band_service.dart';
 import 'services/local_audio_intent_service.dart';
 import 'services/local_lyric_service.dart';
 import 'services/play_history_service.dart';
+import 'services/user_library_service.dart';
 import 'services/sound_effect_service.dart';
 import 'services/app_init.dart';
 import 'services/crash_log_service.dart';
@@ -60,6 +61,8 @@ void main() async {
   LocalAudioIntentService.instance.start();
   // 本地播放历史 + 手动歌词映射（**只存本机，不上传任何数据**）
   await PlayHistoryService().init();
+  // 点赞歌曲 + 自建歌单（仅本机）
+  await UserLibraryService.instance.init();
   await LocalLyricService().init();
   // 播放历史用于首页本地个性化推荐；明确不上传云端。
   // 同时结算「上一首」的完成度 / 跳过（切歌时读取 position/duration），
