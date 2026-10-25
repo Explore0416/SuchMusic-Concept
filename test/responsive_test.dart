@@ -80,14 +80,14 @@ void main() {
   });
 
   group('尺寸取值：永不为负 / 永不越界', () {
-    test('bottomBarWidth ∈ (0, 560]，且 430dp 处等于基线 321.5', () {
+    test('bottomBarWidth ∈ (0, 400]，且 430dp 处为 354.4', () {
       for (final s in all) {
         final v = Responsive.bottomBarWidth(s);
         expect(v, greaterThan(0), reason: '$s');
-        expect(v, lessThanOrEqualTo(560), reason: '$s');
+        expect(v, lessThanOrEqualTo(400), reason: '$s');
       }
       expect(Responsive.bottomBarWidth(const Size(430, 932)),
-          closeTo(321.5, 0.001));
+          closeTo(354.4, 0.001));
     });
 
     test('uiScale ∈ [0.7, 1.15]，430dp 处等于 1.0', () {
@@ -146,7 +146,7 @@ void main() {
     test('bottomBarWidth 数组等于期望值（非递减）', () {
       final got =
           widths.map((w) => Responsive.bottomBarWidth(Size(w, 900))).toList();
-      const expected = [228.0, 290.05, 321.5, 466.0, 560.0, 560.0, 560.0, 560.0];
+      const expected = [257.6, 321.84, 354.4, 400.0, 400.0, 400.0, 400.0, 400.0];
       for (var i = 0; i < got.length; i++) {
         expect(got[i], closeTo(expected[i], 1e-9), reason: 'w=${widths[i]}');
       }
@@ -200,8 +200,8 @@ void main() {
   group('430×932 竖屏基线护栏', () {
     const base = Size(430, 932);
 
-    test('bottomBarWidth == 321.5', () {
-      expect(Responsive.bottomBarWidth(base), closeTo(321.5, 1e-9));
+    test('bottomBarWidth == 354.4', () {
+      expect(Responsive.bottomBarWidth(base), closeTo(354.4, 1e-9));
     });
 
     test('coverSize(B1) == 380', () {
@@ -216,6 +216,26 @@ void main() {
 
     test('dialogScale == 1.0', () {
       expect(Responsive.dialogScale(base), closeTo(1.0, 1e-9));
+    });
+  });
+
+  group('底部导航宽度', () {
+    test('平板 / 横屏固定 400，不随屏宽拉伸', () {
+      expect(Responsive.bottomBarWidth(const Size(1024, 700)), 400);
+      expect(Responsive.bottomBarWidth(const Size(1600, 900)), 400);
+    });
+
+    test('手机跟随屏宽并留边距', () {
+      final w430 = Responsive.bottomBarWidth(const Size(430, 932));
+      expect(w430, closeTo(354.4, 0.5));
+      expect(w430, lessThanOrEqualTo(400));
+    });
+
+    test('窄屏不会超出屏幕宽度', () {
+      for (final w in [320.0, 360.0, 393.0]) {
+        final bar = Responsive.bottomBarWidth(Size(w, 800));
+        expect(bar, lessThan(w), reason: '宽度 ${w.toInt()} 时底栏不得溢出');
+      }
     });
   });
 }

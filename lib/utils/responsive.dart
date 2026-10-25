@@ -104,8 +104,13 @@ class Responsive {
   }
 
   /// 底部悬浮胶囊栏宽度（加 560 上限）
-  static double bottomBarWidth(Size size) =>
-      math.min(size.width * 0.85 - 44, 560);
+  static double bottomBarWidth(Size size) {
+    // 手机：跟随屏宽留一点边距；平板 / 横屏：固定 400 的悬浮 dock。
+    // 旧实现上限 560，在 1024 宽的平板上会拉成 560×72 的长条，
+    // 图标被推到两端、胶囊比例失调，看起来就是「手机界面横向拉伸」。
+    final w = size.width * 0.88 - 24;
+    return math.min(w, 400);
+  }
 
   /// 全局 UI 缩放系数（沿用原 430 设计稿基准，夹取 [0.7, 1.15]）
   static double uiScale(Size size) => (math.min(size.width, contentMaxWidth) /

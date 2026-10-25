@@ -291,6 +291,7 @@ class SongModel {
     String? albumAudioId,
     int? fee,
     String? localPath,
+    String? localUri,
   }) {
     return SongModel(
       id: id ?? this.id,
@@ -305,6 +306,7 @@ class SongModel {
       albumAudioId: albumAudioId ?? this.albumAudioId,
       fee: fee ?? this.fee,
       localPath: localPath ?? this.localPath,
+      localUri: localUri ?? this.localUri,
     );
   }
 
