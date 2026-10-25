@@ -629,9 +629,29 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildSlidingCards() {
-    final contentW = Responsive.contentWidth(MediaQuery.sizeOf(context));
+    final size = MediaQuery.sizeOf(context);
+    final contentW = Responsive.contentWidth(size);
+    // 宽屏（平板 / 横屏）只显示主卡：原来的 3 张滑动卡在宽屏下会
+    // 左右各露出相邻占位卡的一条窄边，看起来像「被裁切」。
+    final isWide = size.width >= 720;
     // 卡片高度设上限，避免大屏被放大失衡
     final cardH = (contentW * 0.277 + 25).clamp(0.0, 240.0);
+
+    if (isWide) {
+      return SizedBox(
+        height: cardH,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15),
+          child: _buildCard(
+            contentW - 30,
+            cardH,
+            null,
+            isCenter: true,
+            cardType: _fmFirstSong != null ? CardType.fm : CardType.placeholder,
+          ),
+        ),
+      );
+    }
 
     return SizedBox(
       height: cardH,
