@@ -4,7 +4,7 @@
 //  - 展示歌名 / 歌手 / 时间；
 //  - 播放暂停 / 上一首 / 下一首 / 播放模式 回调；
 //  - 无歌曲时展示占位且控件禁用；
-//  - 平板断点下 ResponsiveScaffold 确实渲染 PlayerBar（横屏可控制）。
+//  - 平板断点下 ResponsiveScaffold 采用 Android 底部胶囊栏（不移植 PC 侧边栏）。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:such_music/models/song_model.dart';
@@ -122,7 +122,7 @@ void main() {
     // 真实 PlayerBar 在多个平板/横屏尺寸下渲染，均不得溢出
     for (final size in const [Size(900, 600), Size(1280, 800), Size(1600, 900)]) {
       testWidgets(
-          '宽 ${size.width.toInt()}（平板横屏）→ 侧边栏 + PlayerBar 且无溢出',
+          '宽 ${size.width.toInt()}（平板横屏）→ 底部胶囊栏且无溢出',
           (tester) async {
         tester.view.physicalSize = size;
         tester.view.devicePixelRatio = 1.0;
@@ -150,14 +150,11 @@ void main() {
         await tester.pump();
 
         expect(tester.takeException(), isNull, reason: '不应有溢出/异常');
-        // PC 风格侧边栏：Logo 文案 + 导航项
-        expect(find.text('SuchMusic概念版'), findsOneWidget);
-        expect(find.text('首页'), findsOneWidget);
-        // 底部常驻播放条（横屏可看到/控制）
-        expect(find.byType(PlayerBar), findsOneWidget);
-        expect(find.text('晴天'), findsOneWidget);
-        // 手机竖屏的悬浮胶囊栏在平板形态下不渲染
-        expect(find.text('手机底部胶囊栏'), findsNothing);
+        // 横屏不再移植 PC 侧边栏：没有 Logo 区、没有常驻播放条
+        expect(find.text('SuchMusic概念版'), findsNothing);
+        expect(find.byType(PlayerBar), findsNothing);
+        // 沿用手机端底部胶囊栏
+        expect(find.text('手机底部胶囊栏'), findsOneWidget);
       });
     }
 
