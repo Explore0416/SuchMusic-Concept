@@ -53,6 +53,19 @@ void main() {
     // 跳过测速：不应出现秒级等待（默认测速预算 2 秒）
     expect(sw.elapsedMilliseconds, lessThan(1500));
   });
+
+  test('分发主线路（de5.net / pages.dev）直接置顶且不发起测速', () async {
+    SharedPreferences.setMockInitialValues({});
+    final sw = Stopwatch()..start();
+    final ordered = await UpdateService.rankBySpeed([
+      'https://github.com/x/y/releases/download/apk-latest/SuchMusic-latest.apk',
+      'https://dl.lightning-team.de5.net/latest.apk',
+    ]);
+    sw.stop();
+    expect(ordered.first, 'https://dl.lightning-team.de5.net/latest.apk');
+    // 不测速：应远小于 2 秒预算
+    expect(sw.elapsedMilliseconds, lessThan(1000));
+  });
 }
 
 class _Srv {

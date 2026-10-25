@@ -206,6 +206,16 @@ class UpdateService {
       return <String>[cached, ...urls.where((u) => u != cached)];
     }
 
+    // 自建分发域名（Cloudflare Worker）实测首字节 1.2s、吞吐 4 MB/s，
+    // 比任何镜像都稳；直接置顶并跳过测速，用户点「立即更新」后立刻开始传数据。
+    final primary = urls.firstWhere(
+      (u) => u.contains('de5.net') || u.contains('pages.dev'),
+      orElse: () => '',
+    );
+    if (primary.isNotEmpty) {
+      return <String>[primary, ...urls.where((u) => u != primary)];
+    }
+
     // 用「结果数组 + 总时限」而不是 Future.wait(...).timeout：
     // 后者超时会丢弃已经测完的结果，把快线路也一起抹成 0。
     final speeds = List<int>.filled(urls.length, 0);
@@ -285,28 +295,37 @@ class UpdateService {
     final old = File(savePath);
     if (await old.exists()) await old.delete();
 
-    try {
-      final ok = await _downloadParallel(
-        url,
-        savePath,
-        onProgress: onProgress,
-        cancelToken: cancelToken,
-      );
-      if (ok) return savePath;
-    } catch (e) {
-      if (e is DioException && e.type == DioExceptionType.cancel) rethrow;
-      debugPrint('⚠️ 多连接下载失败，回退单连接: $e');
+    // Cloudflare Worker 不支持 Range：走并行会先 HEAD、再 Range 探测、
+    // 最后回退单连接，白等两轮。实测单连接已有 4 MB/s，直接单线下。
+    final preferSingle = url.contains('de5.net') || url.contains('pages.dev');
+    if (!preferSingle) {
       try {
-        if (await old.exists()) await old.delete();
-      } catch (_) {}
+        final ok = await _downloadParallel(
+          url,
+          savePath,
+          onProgress: onProgress,
+          cancelToken: cancelToken,
+        );
+        if (ok) return savePath;
+      } catch (e) {
+      if (e is DioException && e.type == DioExceptionType.cancel) rethrow;
+        debugPrint('⚠️ 多连接下载失败，回退单连接: $e');
+        try {
+          if (await old.exists()) await old.delete();
+        } catch (_) {}
+      }
     }
 
-    // 大文件下载：放宽接收超时
+    // 单连接下载：60 秒内收不到数据即判失败（切换下一条线路），
+    // 不再用 30 分钟的超时——那会让断流变成「界面永久卡住」。
     await _dio.download(
       url,
       savePath,
       cancelToken: cancelToken,
-      options: Options(receiveTimeout: const Duration(minutes: 30)),
+      options: Options(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 60),
+      ),
       onReceiveProgress: onProgress,
     );
     return savePath;
@@ -361,8 +380,11 @@ class UpdateService {
         final cr = probe.headers.value('content-range') ?? '';
         final slash = cr.lastIndexOf('/');
         if (slash > 0) total = int.tryParse(cr.substring(slash + 1)) ?? total;
-        // 立即丢弃探测流
-        await probe.data?.stream.drain<void>();
+        // 关键：不是 206 说明服务器忽略 Range（Cloudflare Worker 就是这样），
+        // 此时响应体是**整个文件**。必须立刻取消订阅，绝不能 drain ——
+        // drain 会把 30 MB 完整下载一遍，而结果还被丢弃，用户只看到「卡住」。
+        final sub = probe.data?.stream.listen(null);
+        await sub?.cancel();
       } catch (e) {
         debugPrint('Range 探测失败: $e');
       }
