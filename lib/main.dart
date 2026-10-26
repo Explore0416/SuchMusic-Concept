@@ -283,32 +283,63 @@ class _MainShellState extends State<MainShell> {
       extendBody: true,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          // 横屏 / 平板只在宽屏时限宽居中，避免卡片被横向拉长；
-          // 不做电脑版侧边栏，导航仍是手机端的底部胶囊栏。
-          // 宽屏用「屏宽减边距」而不是固定 720：1024 宽下 720 会留下
-          // 两侧各 150+ 的空带，看起来就是手机界面被裁切后居中。
           final wide = constraints.maxWidth >= 720;
-          final contentMax = (constraints.maxWidth - 160).clamp(720.0, 900.0);
-          final content = IndexedStack(index: _currentIndex, children: _pages);
-          return Stack(
-            children: [
-              Positioned.fill(
-                child: wide
-                    ? Center(
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: contentMax),
-                          child: content,
+
+          // 宽屏（平板 / 横屏）：左侧固定导航栏 + 右侧内容。
+          // 这是 Android 平板的常规形态（导航在左、内容在右），
+          // 不是把手机界面等比放大后居中，也不是 PC 那种工具条。
+          if (wide) {
+            final contentMax = (constraints.maxWidth - 220 - 80)
+                .clamp(640.0, 900.0);
+            return Scaffold(
+              backgroundColor: const Color(0xFFF1F2F4),
+              body: Row(
+                children: [
+                  _buildSideNav(bottomPadding),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(maxWidth: contentMax),
+                              child: IndexedStack(
+                                index: _currentIndex,
+                                children: _pages,
+                              ),
+                            ),
+                          ),
                         ),
-                      )
-                    : content,
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 10 + bottomPadding,
+                          child: Center(child: _buildTabBar()),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 10 + bottomPadding,
-                child: Center(child: _buildTabBar()),
-              ),
-            ],
+            );
+          }
+
+          return Scaffold(
+            backgroundColor: const Color(0xFFF1F2F4),
+            extendBody: true,
+            body: Stack(
+              children: [
+                Positioned.fill(
+                  child: IndexedStack(index: _currentIndex, children: _pages),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 10 + bottomPadding,
+                  child: Center(child: _buildTabBar()),
+                ),
+              ],
+            ),
           );
         },
       ),
@@ -379,6 +410,100 @@ class _MainShellState extends State<MainShell> {
         _miniDragOffset = Offset.zero;
       });
     }
+  }
+
+  /// 宽屏左侧导航栏：白色底、圆角选中态，与应用内卡片风格一致。
+  ///
+  /// 只有「首页 / 我的」两项，因此不放分组标题，避免为了填空而堆无意义条目。
+  Widget _buildSideNav(double bottomPadding) {
+    const items = <({IconData icon, IconData activeIcon, String label})>[
+      (icon: Icons.home_outlined, activeIcon: Icons.home, label: '首页'),
+      (icon: Icons.person_outline, activeIcon: Icons.person, label: '我的'),
+    ];
+
+    return Container(
+      width: 220,
+      color: Colors.white,
+      child: SafeArea(
+        right: false,
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(22, 26, 22, 4),
+              child: Text(
+                'SuchMusic',
+                style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  color: Colors.black87,
+                ),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(22, 0, 22, 18),
+              child: Text(
+                '概念版',
+                style: TextStyle(fontSize: 11.5, color: Color(0xFF9C9C9C)),
+              ),
+            ),
+            for (var i = 0; i < items.length; i++)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                child: _buildSideNavItem(
+                  icon: i == _currentIndex
+                      ? items[i].activeIcon
+                      : items[i].icon,
+                  label: items[i].label,
+                  active: i == _currentIndex,
+                  onTap: () => setState(() => _currentIndex = i),
+                ),
+              ),
+            const Spacer(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSideNavItem({
+    required IconData icon,
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFFF1F2F4) : Colors.transparent,
+          borderRadius: BorderRadius.circular(26),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: active ? Colors.black87 : const Color(0xFF8A8A8A),
+            ),
+            const SizedBox(width: 14),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                color: active ? Colors.black87 : const Color(0xFF5A5A5A),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildTabBar() {
