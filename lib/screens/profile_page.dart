@@ -15,7 +15,6 @@ import '../utils/responsive.dart';
 import '../widgets/fade_slide_in.dart';
 import '../widgets/kugou_account_sheet.dart';
 import 'library_page.dart';
-import 'local_music_page.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
 
@@ -423,8 +422,6 @@ class _ProfilePageState extends State<ProfilePage> {
               _buildAccountCard(),
               const SizedBox(height: 12),
               _buildKugouPlaylistEntry(),
-              const SizedBox(height: 12),
-              _buildLocalMusicEntry(),
             ],
           ),
         ),
@@ -454,39 +451,6 @@ class _ProfilePageState extends State<ProfilePage> {
         onTap: _openLibrary,
       ),
     );
-  }
-
-  /// 本地音乐入口：查看设备上的全部音频（含 .kgm 加密格式）并离线播放。
-  Widget _buildLocalMusicEntry() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: _buildAccountRow(
-        icon: Icons.folder_open_rounded,
-        title: '本地音乐',
-        subtitle: '扫描设备音频，支持 .kgm 等加密格式离线播放',
-        actionText: '进入',
-        onTap: _openLocalMusic,
-      ),
-    );
-  }
-
-  Future<void> _openLocalMusic() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const LocalMusicPage()),
-    );
-    if (!mounted) return;
-    setState(() {});
   }
 
   Future<void> _openLibrary() async {
