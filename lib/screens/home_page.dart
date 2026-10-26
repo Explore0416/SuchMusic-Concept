@@ -13,12 +13,13 @@ import '../services/recommend_service.dart';
 import '../services/play_context_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/responsive.dart';
+import '../utils/home_tab.dart';
+import 'library_page.dart';
 import 'playlist_detail_page.dart';
 import 'search_page.dart';
 import '../widgets/local_music_view.dart';
 import '../utils/navigation_guard.dart';
 import '../utils/player_route.dart';
-import '../widgets/design_dialog.dart';
 
 enum CardType { fm, placeholder }
 
@@ -46,11 +47,15 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // 顶部标签当前页：0=首页 1=本地（「歌单」暂未开放）
-  int _homeTabIndex = 0;
+  // 顶部标签当前页：0=首页 1=本地 2=歌单。
+  // 状态放在全局 [HomeTab] 里：窄屏由顶部标签行切换，宽屏由左侧导航切换，
+  // 两处共用同一份状态，侧栏高亮与右侧内容不会错位。
+  int get _homeTabIndex => HomeTab.index.value;
   // 「本地」标签是否被打开过：首次进入才创建 LocalMusicView，
   // 之后用 IndexedStack 保活，切走再切回不重建、不重扫。
   bool _localTabVisited = false;
+  // 「歌单」标签同理：首次点开才创建 LibraryPage，避免启动时就读本机歌单数据
+  bool _playlistTabVisited = false;
   List<PlaylistModel> _rankings = [];
   bool _loadingRankings = true;
   List<SongModel> _hotSongs = [];
@@ -72,23 +77,35 @@ class _HomePageState extends State<HomePage> {
   final Set<PageController> _hintShownCtrls = {};
   // 提示展示后该次手势已结束，下一次 overscroll 手势进入榜单
   final Set<PageController> _hintArmedCtrls = {};
-  final PageController _cardPageController = PageController(viewportFraction: 0.86);
-  final PageController _recommendPageController = PageController(viewportFraction: 0.95 / 1.05);
-  final PageController _recommendPageController2 = PageController(viewportFraction: 0.95 / 1.05);
+  final PageController _cardPageController = PageController(
+    viewportFraction: 0.86,
+  );
+  final PageController _recommendPageController = PageController(
+    viewportFraction: 0.95 / 1.05,
+  );
+  final PageController _recommendPageController2 = PageController(
+    viewportFraction: 0.95 / 1.05,
+  );
 
   /// 「猜你想听」：本地播放历史 + 当前音源的个性化新歌混排。
   ///
   /// 本地部分完全在本机计算，不上传任何数据；新歌来自用户已登录的音源
   /// （网易云每日推荐 / 私人 FM），未登录或取不到时只用本地结果。
   Future<void> _loadLocalPicks() async {
-    final picks = await RecommendService.instance.smartPicks(limit: 12);
-    if (!mounted || picks.isEmpty) return;
-    setState(() => _localPicks = picks);
+    // 网络 / 音源异常一律静默：拿不到就整块不显示，不能冒泡成未捕获异常
+    try {
+      final picks = await RecommendService.instance.smartPicks(limit: 12);
+      if (!mounted || picks.isEmpty) return;
+      setState(() => _localPicks = picks);
+    } catch (e) {
+      debugPrint('⚠️ 猜你想听加载失败: $e');
+    }
   }
 
   @override
   void initState() {
     super.initState();
+    HomeTab.index.addListener(_onHomeTabChanged);
     _loadRankings();
     _loadDailySongs();
     _loadPlaylistSquare();
@@ -109,11 +126,22 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    HomeTab.index.removeListener(_onHomeTabChanged);
     _fmSongSub?.cancel();
     _cardPageController.dispose();
     _recommendPageController.dispose();
     _recommendPageController2.dispose();
     super.dispose();
+  }
+
+  /// 标签变化（无论来自顶部标签行还是宽屏左侧导航）：
+  /// 标记懒加载页面已访问，并重建 IndexedStack 的当前页。
+  void _onHomeTabChanged() {
+    if (!mounted) return;
+    setState(() {
+      if (_homeTabIndex == HomeTab.local) _localTabVisited = true;
+      if (_homeTabIndex == HomeTab.playlists) _playlistTabVisited = true;
+    });
   }
 
   Future<void> _loadRankings() async {
@@ -151,7 +179,8 @@ class _HomePageState extends State<HomePage> {
     final songs = results[1] as List<SongModel>;
     final hotChart = rankings.firstWhere(
       (r) => r.name.contains('热歌'),
-      orElse: () => rankings.isNotEmpty ? rankings[0] : PlaylistModel(id: '', name: ''),
+      orElse: () =>
+          rankings.isNotEmpty ? rankings[0] : PlaylistModel(id: '', name: ''),
     );
     setState(() {
       _rankings = rankings;
@@ -190,8 +219,10 @@ class _HomePageState extends State<HomePage> {
     await ensureInitialized;
     final offset = _random.nextInt(150) * 18;
     try {
-      var playlists =
-          await _apiService.fetchCategoryPlaylists(limit: 18, offset: offset);
+      var playlists = await _apiService.fetchCategoryPlaylists(
+        limit: 18,
+        offset: offset,
+      );
       if (playlists.isEmpty && offset > 0) {
         playlists = await _apiService.fetchCategoryPlaylists(limit: 18);
       }
@@ -217,9 +248,7 @@ class _HomePageState extends State<HomePage> {
   void _openSquarePlaylist(PlaylistModel playlist) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PlaylistDetailPage(playlist: playlist),
-      ),
+      MaterialPageRoute(builder: (_) => PlaylistDetailPage(playlist: playlist)),
     );
   }
 
@@ -291,7 +320,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// 顶部分类标签：选中项黑字加底部下划线，未选中灰字
-  Widget _buildHomeTab(String label, {bool active = false, VoidCallback? onTap}) {
+  Widget _buildHomeTab(
+    String label, {
+    bool active = false,
+    VoidCallback? onTap,
+  }) {
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -320,9 +353,7 @@ class _HomePageState extends State<HomePage> {
   void _openRanking(PlaylistModel ranking) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PlaylistDetailPage(playlist: ranking),
-      ),
+      MaterialPageRoute(builder: (_) => PlaylistDetailPage(playlist: ranking)),
     );
   }
 
@@ -339,84 +370,93 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 与 MainShell 同一断点：宽屏时导航在左侧，顶部标签行不再显示
+    final wide = HomeTab.useSideNav(MediaQuery.sizeOf(context).width);
+    // 宽屏下「本地 / 歌单」有自己的内容头部，不再挂首页的问候语与搜索
+    final showHomeHeader = !wide || _homeTabIndex == HomeTab.home;
     return Padding(
-      padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top,
-      ),
+      padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
       child: ResponsiveContent(
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _getGreeting(),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showHomeHeader) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 15),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _getGreeting(),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildSourceBadge(),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              // 宽屏（横屏 / 平板）：「首页 / 本地 / 歌单」已移到左侧导航，
+              // 页面顶部只保留搜索入口，不再重复一排标签。
+              if (wide)
+                Padding(
+                  padding: const EdgeInsets.only(right: 15),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _SearchCircleButton(),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 15),
+                  child: SizedBox(
+                    // 必须占满整行宽度：否则 Stack 收缩为标签行宽度，
+                    // Positioned(right:0) 的搜索按钮会叠在「歌单」上
+                    width: double.infinity,
+                    height: 40,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildHomeTab(
+                              '首页',
+                              active: _homeTabIndex == HomeTab.home,
+                              onTap: () => HomeTab.select(HomeTab.home),
+                            ),
+                            const SizedBox(width: 28),
+                            _buildHomeTab(
+                              '本地',
+                              active: _homeTabIndex == HomeTab.local,
+                              onTap: () => HomeTab.select(HomeTab.local),
+                            ),
+                            const SizedBox(width: 28),
+                            _buildHomeTab(
+                              '歌单',
+                              active: _homeTabIndex == HomeTab.playlists,
+                              onTap: () => HomeTab.select(HomeTab.playlists),
+                            ),
+                          ],
+                        ),
+                        Positioned(right: 0, child: _SearchCircleButton()),
+                      ],
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                _buildSourceBadge(),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            child: SizedBox(
-              // 必须占满整行宽度：否则 Stack 收缩为标签行宽度，
-              // Positioned(right:0) 的搜索按钮会叠在「歌单」上
-              width: double.infinity,
-              height: 40,
-              child: Stack(
-                alignment: Alignment.center,
+            ],
+            // 宽屏切到「本地 / 歌单」时不再显示首页头部，仅留少量上边距
+            if (!showHomeHeader) const SizedBox(height: 10),
+            Expanded(
+              child: IndexedStack(
+                index: _homeTabIndex,
                 children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildHomeTab('首页',
-                          active: _homeTabIndex == 0,
-                          onTap: () {
-                            if (_homeTabIndex != 0) {
-                              setState(() => _homeTabIndex = 0);
-                            }
-                          }),
-                      const SizedBox(width: 28),
-                      _buildHomeTab('本地',
-                          active: _homeTabIndex == 1,
-                          onTap: () {
-                            if (_homeTabIndex != 1) {
-                              setState(() {
-                                _homeTabIndex = 1;
-                                _localTabVisited = true;
-                              });
-                            }
-                          }),
-                      const SizedBox(width: 28),
-                      _buildHomeTab('歌单',
-                          onTap: () =>
-                              DesignToast.show(context, '歌单功能敬请期待')),
-                    ],
-                  ),
-                  Positioned(
-                    right: 0,
-                    child: _SearchCircleButton(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Expanded(
-            child: IndexedStack(
-              index: _homeTabIndex,
-              children: [
-                SingleChildScrollView(
+                  SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -468,19 +508,25 @@ class _HomePageState extends State<HomePage> {
                           padding: const EdgeInsets.symmetric(horizontal: 15),
                           child: _buildPlaylistSquare(),
                         ),
-                        const SizedBox(height: 100),
+                        // 宽屏没有底部播放胶囊，不必留出胶囊高度
+                        SizedBox(height: wide ? 28 : 100),
                       ],
                     ),
                   ),
-                // 本地标签：首次打开后才创建，之后常驻（不重建、不重扫）
-                if (_localTabVisited)
-                  const LocalMusicView()
-                else
-                  const SizedBox.shrink(),
-              ],
+                  // 本地标签：首次打开后才创建，之后常驻（不重建、不重扫）
+                  if (_localTabVisited)
+                    const LocalMusicView()
+                  else
+                    const SizedBox.shrink(),
+                  // 歌单标签：我喜欢的音乐 / 自建歌单 / 酷狗歌单（同 LibraryPage 内容）
+                  if (_playlistTabVisited)
+                    const LibraryPage(embedded: true)
+                  else
+                    const SizedBox.shrink(),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -531,7 +577,9 @@ class _HomePageState extends State<HomePage> {
                 width: 22,
                 height: 22,
                 colorFilter: const ColorFilter.mode(
-                    Colors.black54, BlendMode.srcIn),
+                  Colors.black54,
+                  BlendMode.srcIn,
+                ),
               ),
             ),
           ],
@@ -633,7 +681,7 @@ class _HomePageState extends State<HomePage> {
     final contentW = Responsive.contentWidth(size);
     // 宽屏（平板 / 横屏）只显示主卡：原来的 3 张滑动卡在宽屏下会
     // 左右各露出相邻占位卡的一条窄边，看起来像「被裁切」。
-    final isWide = size.width >= 720;
+    final isWide = HomeTab.useSideNav(size.width);
     // 卡片高度设上限，避免大屏被放大失衡
     final cardH = (contentW * 0.277 + 25).clamp(0.0, 240.0);
 
@@ -658,7 +706,8 @@ class _HomePageState extends State<HomePage> {
       child: AnimatedBuilder(
         animation: _cardPageController,
         builder: (_, _) {
-          final page = _cardPageController.hasClients &&
+          final page =
+              _cardPageController.hasClients &&
                   _cardPageController.position.haveDimensions
               ? (_cardPageController.page ?? 0)
               : 0.0;
@@ -676,25 +725,25 @@ class _HomePageState extends State<HomePage> {
                 child: Transform.scale(
                   scale: scale,
                   child: GestureDetector(
-                  onTap: () {
-                    if (cardType == CardType.fm) {
-                      if (_cardIndex == 0) {
-                        _openFm();
-                      } else {
+                    onTap: () {
+                      if (cardType == CardType.fm) {
+                        if (_cardIndex == 0) {
+                          _openFm();
+                        } else {
+                          _cardPageController.animateToPage(
+                            0,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      } else if (_cardIndex != index) {
                         _cardPageController.animateToPage(
-                          0,
+                          index,
                           duration: const Duration(milliseconds: 300),
                           curve: Curves.easeOut,
                         );
                       }
-                    } else if (_cardIndex != index) {
-                      _cardPageController.animateToPage(
-                        index,
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeOut,
-                      );
-                    }
-                  },
+                    },
                     child: _buildCard(
                       contentW * 0.86,
                       cardH,
@@ -829,117 +878,130 @@ class _HomePageState extends State<HomePage> {
                   child: Transform.translate(
                     offset: Offset(-availableW * 0.05, 0),
                     child: NotificationListener<ScrollNotification>(
-              onNotification: (notification) {
-                if (notification is ScrollEndNotification) {
-                  final onLast = (_safePageOf(ctrl)?.round() ?? 0) == pages.length - 1;
-                  if (!onLast) {
-                    // 离开最后一页，重置提示状态
-                    final removed = _hintShownCtrls.remove(ctrl);
-                    _hintArmedCtrls.remove(ctrl);
-                    if (removed) setState(() {});
-                  } else if (_hintShownCtrls.contains(ctrl)) {
-                    // 本次手势结束，下一次 overscroll 才进入榜单
-                    _hintArmedCtrls.add(ctrl);
-                  }
-                  return false;
-                }
-                if (notification is OverscrollNotification &&
-                    notification.overscroll > 0 &&
-                    (_safePageOf(ctrl)?.round() ?? 0) == pages.length - 1) {
-                  if (_hintShownCtrls.contains(ctrl)) {
-                    if (_hintArmedCtrls.contains(ctrl) && onSlideEnter != null) {
-                      setState(() {
-                        _hintShownCtrls.remove(ctrl);
-                        _hintArmedCtrls.remove(ctrl);
-                      });
-                      onSlideEnter();
-                    }
-                    return true;
-                  }
-                  // 第一次在最后一页继续滑动：显示提示（仅限手指主动拖动，
-                  // 到达最后一页时的惯性越界不算）
-                  if (notification.dragDetails != null) {
-                    setState(() => _hintShownCtrls.add(ctrl));
-                  }
-                  return true;
-                }
-                return false;
-              },
-              child: PageView.builder(
-                controller: ctrl,
-                padEnds: true,
-                itemCount: pages.length,
-                itemBuilder: (_, pageIndex) {
-                final chunk = pages[pageIndex];
-                final isLast = pageIndex == pages.length - 1;
-                final listColumn = Column(
-                  children: chunk
-                      .map((song) => _buildRecommendItem(song,
-                          iconRightPadding: isLast ? 10 : 18))
-                      .toList(),
-                );
-                if (!isLast) return listColumn;
-                final showHint = _hintShownCtrls.contains(ctrl);
-                return Row(
-                  children: [
-                    Expanded(child: listColumn),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 250),
-                      switchInCurve: Curves.easeOut,
-                      switchOutCurve: Curves.easeIn,
-                      transitionBuilder: (child, animation) {
-                        // 槽位宽度渐变使列表（播放按钮等）平滑让位，同时淡入淡出
-                        return SizeTransition(
-                          axis: Axis.horizontal,
-                          sizeFactor: animation,
-                          alignment: Alignment.centerLeft,
-                          child: FadeTransition(
-                            opacity: animation,
-                            child: child,
-                          ),
-                        );
+                      onNotification: (notification) {
+                        if (notification is ScrollEndNotification) {
+                          final onLast =
+                              (_safePageOf(ctrl)?.round() ?? 0) ==
+                              pages.length - 1;
+                          if (!onLast) {
+                            // 离开最后一页，重置提示状态
+                            final removed = _hintShownCtrls.remove(ctrl);
+                            _hintArmedCtrls.remove(ctrl);
+                            if (removed) setState(() {});
+                          } else if (_hintShownCtrls.contains(ctrl)) {
+                            // 本次手势结束，下一次 overscroll 才进入榜单
+                            _hintArmedCtrls.add(ctrl);
+                          }
+                          return false;
+                        }
+                        if (notification is OverscrollNotification &&
+                            notification.overscroll > 0 &&
+                            (_safePageOf(ctrl)?.round() ?? 0) ==
+                                pages.length - 1) {
+                          if (_hintShownCtrls.contains(ctrl)) {
+                            if (_hintArmedCtrls.contains(ctrl) &&
+                                onSlideEnter != null) {
+                              setState(() {
+                                _hintShownCtrls.remove(ctrl);
+                                _hintArmedCtrls.remove(ctrl);
+                              });
+                              onSlideEnter();
+                            }
+                            return true;
+                          }
+                          // 第一次在最后一页继续滑动：显示提示（仅限手指主动拖动，
+                          // 到达最后一页时的惯性越界不算）
+                          if (notification.dragDetails != null) {
+                            setState(() => _hintShownCtrls.add(ctrl));
+                          }
+                          return true;
+                        }
+                        return false;
                       },
-                      child: showHint
-                          ? Row(
-                              key: const ValueKey('hint'),
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Padding(
-                                  padding: EdgeInsets.zero,
-                                  child: Text(
-                                    lastPageHint,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.black38,
-                                      height: 1.5,
-                                    ),
-                                    textAlign: TextAlign.center,
+                      child: PageView.builder(
+                        controller: ctrl,
+                        padEnds: true,
+                        itemCount: pages.length,
+                        itemBuilder: (_, pageIndex) {
+                          final chunk = pages[pageIndex];
+                          final isLast = pageIndex == pages.length - 1;
+                          final listColumn = Column(
+                            children: chunk
+                                .map(
+                                  (song) => _buildRecommendItem(
+                                    song,
+                                    iconRightPadding: isLast ? 10 : 18,
                                   ),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: SvgPicture.asset(
-                                    'assets/images/svg/Chevron Right.svg',
-                                    width: 14,
-                                    height: 14,
-                                    colorFilter: const ColorFilter.mode(
-                                      Colors.black38,
-                                      BlendMode.srcIn,
+                                )
+                                .toList(),
+                          );
+                          if (!isLast) return listColumn;
+                          final showHint = _hintShownCtrls.contains(ctrl);
+                          return Row(
+                            children: [
+                              Expanded(child: listColumn),
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 250),
+                                switchInCurve: Curves.easeOut,
+                                switchOutCurve: Curves.easeIn,
+                                transitionBuilder: (child, animation) {
+                                  // 槽位宽度渐变使列表（播放按钮等）平滑让位，同时淡入淡出
+                                  return SizeTransition(
+                                    axis: Axis.horizontal,
+                                    sizeFactor: animation,
+                                    alignment: Alignment.centerLeft,
+                                    child: FadeTransition(
+                                      opacity: animation,
+                                      child: child,
                                     ),
-                                  ),
-                                ),
-                              ],
-                            )
-                          : const SizedBox.shrink(key: ValueKey('hint-none')),
+                                  );
+                                },
+                                child: showHint
+                                    ? Row(
+                                        key: const ValueKey('hint'),
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Padding(
+                                            padding: EdgeInsets.zero,
+                                            child: Text(
+                                              lastPageHint,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.black38,
+                                                height: 1.5,
+                                              ),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              right: 8,
+                                            ),
+                                            child: SvgPicture.asset(
+                                              'assets/images/svg/Chevron Right.svg',
+                                              width: 14,
+                                              height: 14,
+                                              colorFilter:
+                                                  const ColorFilter.mode(
+                                                    Colors.black38,
+                                                    BlendMode.srcIn,
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : const SizedBox.shrink(
+                                        key: ValueKey('hint-none'),
+                                      ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
                     ),
-                  ],
-                );
-              },
-            ),
-            ),
-          ),
-            ),
-          );
+                  ),
+                ),
+              );
             },
           ),
         ],
@@ -985,10 +1047,7 @@ class _HomePageState extends State<HomePage> {
                     song.artist,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.black45,
-                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.black45),
                   ),
                 ],
               ),
@@ -1030,8 +1089,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildCard(double width, double height, String? imageUrl,
-      {bool isCenter = false, CardType cardType = CardType.placeholder}) {
+  Widget _buildCard(
+    double width,
+    double height,
+    String? imageUrl, {
+    bool isCenter = false,
+    CardType cardType = CardType.placeholder,
+  }) {
     if (cardType == CardType.fm) {
       return _buildFmCard(width, height, isCenter);
     }
@@ -1060,9 +1124,7 @@ class _HomePageState extends State<HomePage> {
         child: Stack(
           children: [
             if (coverUrl != null)
-              Positioned.fill(
-                child: _FmCoverBackground(url: coverUrl),
-              ),
+              Positioned.fill(child: _FmCoverBackground(url: coverUrl)),
             if (coverUrl != null)
               // 深色遮罩保证白色文字/图标可读
               Positioned.fill(
@@ -1160,37 +1222,37 @@ class _HomePageState extends State<HomePage> {
         ),
         const SizedBox(height: 12),
         if (_loadingRankings)
-          SizedBox(
-            height: 140,
-            child: Row(
-              children: List.generate(
-                4,
-                (i) => Expanded(
-                  child: Container(
-                    margin: EdgeInsets.only(right: i == 3 ? 0 : 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        AspectRatio(
-                          aspectRatio: 1,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade300,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Container(
-                          width: 56,
-                          height: 12,
+          // 骨架高度跟随列宽（正方形封面 + 文字行），不再固定 140：
+          // 宽屏下列宽变大，固定高度会把正方形封面挤到溢出 22px
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List.generate(
+              4,
+              (i) => Expanded(
+                child: Container(
+                  margin: EdgeInsets.only(right: i == 3 ? 0 : 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      AspectRatio(
+                        aspectRatio: 1,
+                        child: Container(
                           decoration: BoxDecoration(
                             color: Colors.grey.shade300,
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: 56,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1241,8 +1303,7 @@ class _HomePageState extends State<HomePage> {
                       borderRadius: BorderRadius.circular(12),
                       child: _RankingCoverImage(url: ranking.coverUrl!),
                     )
-                  : const Icon(Icons.music_note,
-                      size: 40, color: Colors.grey),
+                  : const Icon(Icons.music_note, size: 40, color: Colors.grey),
             ),
             const SizedBox(height: 6),
             Text(
@@ -1299,11 +1360,7 @@ class _SearchCircleButtonState extends State<_SearchCircleButton> {
         child: const SizedBox(
           width: 36,
           height: 36,
-          child: Icon(
-            Icons.search,
-            size: 24,
-            color: Color(0xFF09244B),
-          ),
+          child: Icon(Icons.search, size: 24, color: Color(0xFF09244B)),
         ),
       ),
     );
@@ -1322,10 +1379,12 @@ class _RankingCoverImageState extends State<_RankingCoverImage> {
   Uint8List? _imageBytes;
   bool _loading = true;
 
-  static final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   @override
   void initState() {
@@ -1365,11 +1424,7 @@ class _RankingCoverImageState extends State<_RankingCoverImage> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Container(
-        width: 110,
-        height: 110,
-        color: Colors.grey.shade300,
-      );
+      return Container(width: 110, height: 110, color: Colors.grey.shade300);
     }
     if (_imageBytes != null) {
       return Image.memory(
@@ -1401,10 +1456,12 @@ class _SongCoverImageState extends State<_SongCoverImage> {
   Uint8List? _imageBytes;
   bool _loading = true;
 
-  static final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   @override
   void initState() {
@@ -1461,7 +1518,11 @@ class _SongCoverImageState extends State<_SongCoverImage> {
       width: widget.width,
       height: widget.height,
       color: Colors.grey[300],
-      child: Icon(Icons.music_note, color: Colors.grey, size: widget.width * 0.5),
+      child: Icon(
+        Icons.music_note,
+        color: Colors.grey,
+        size: widget.width * 0.5,
+      ),
     );
   }
 }
@@ -1478,10 +1539,12 @@ class _FmCoverBackground extends StatefulWidget {
 class _FmCoverBackgroundState extends State<_FmCoverBackground> {
   Uint8List? _imageBytes;
 
-  static final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   @override
   void initState() {
