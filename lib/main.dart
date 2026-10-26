@@ -23,9 +23,11 @@ import 'services/crash_log_service.dart';
 import 'services/sources/kugou_device_service.dart';
 import 'models/song_model.dart';
 import 'utils/player_route.dart';
+import 'utils/home_tab.dart';
 import 'utils/responsive.dart';
 import 'utils/navigation_guard.dart';
 import 'widgets/design_dialog.dart';
+import 'widgets/main_side_nav.dart';
 import 'widgets/update_checker.dart';
 
 void main() async {
@@ -77,11 +79,13 @@ void main() async {
     if (prev != null && prev.id != song.id) {
       final ratio = AudioPlayerService().lastCompletionRatio;
       if (ratio >= 0) {
-        unawaited(PlayHistoryService().recordCompletion(
-          prev,
-          completionRatio: ratio,
-          skipped: AudioPlayerService().lastPlayWasSkipped,
-        ));
+        unawaited(
+          PlayHistoryService().recordCompletion(
+            prev,
+            completionRatio: ratio,
+            skipped: AudioPlayerService().lastPlayWasSkipped,
+          ),
+        );
       }
     }
     lastRecordedSong = song;
@@ -283,40 +287,30 @@ class _MainShellState extends State<MainShell> {
       extendBody: true,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 720;
+          final wide = HomeTab.useSideNav(constraints.maxWidth);
 
           // 宽屏（平板 / 横屏）：左侧固定导航栏 + 右侧内容。
-          // 这是 Android 平板的常规形态（导航在左、内容在右），
-          // 不是把手机界面等比放大后居中，也不是 PC 那种工具条。
+          // 导航在左、内容在右，是 Android 平板的常规形态；
+          // 横屏不再叠底部悬浮胶囊（播放入口在侧栏底部的当前播放卡里）。
           if (wide) {
-            final contentMax = (constraints.maxWidth - 220 - 80)
-                .clamp(640.0, 900.0);
+            final contentMax = (constraints.maxWidth - 220 - 80).clamp(
+              640.0,
+              900.0,
+            );
             return Scaffold(
               backgroundColor: const Color(0xFFF1F2F4),
               body: Row(
                 children: [
                   _buildSideNav(bottomPadding),
                   Expanded(
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: Center(
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(maxWidth: contentMax),
-                              child: IndexedStack(
-                                index: _currentIndex,
-                                children: _pages,
-                              ),
-                            ),
-                          ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: contentMax),
+                        child: IndexedStack(
+                          index: _currentIndex,
+                          children: _pages,
                         ),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 10 + bottomPadding,
-                          child: Center(child: _buildTabBar()),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
@@ -412,98 +406,38 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  /// 宽屏左侧导航栏：白色底、圆角选中态，与应用内卡片风格一致。
-  ///
-  /// 只有「首页 / 我的」两项，因此不放分组标题，避免为了填空而堆无意义条目。
+  /// 宽屏左侧导航栏（结构与样式见 [MainSideNav]）
   Widget _buildSideNav(double bottomPadding) {
-    const items = <({IconData icon, IconData activeIcon, String label})>[
-      (icon: Icons.home_outlined, activeIcon: Icons.home, label: '首页'),
-      (icon: Icons.person_outline, activeIcon: Icons.person, label: '我的'),
-    ];
-
-    return Container(
-      width: 220,
-      color: Colors.white,
-      child: SafeArea(
-        right: false,
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(22, 26, 22, 4),
-              child: Text(
-                'SuchMusic',
-                style: TextStyle(
-                  fontSize: 19,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.2,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(22, 0, 22, 18),
-              child: Text(
-                '概念版',
-                style: TextStyle(fontSize: 11.5, color: Color(0xFF9C9C9C)),
-              ),
-            ),
-            for (var i = 0; i < items.length; i++)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-                child: _buildSideNavItem(
-                  icon: i == _currentIndex
-                      ? items[i].activeIcon
-                      : items[i].icon,
-                  label: items[i].label,
-                  active: i == _currentIndex,
-                  onTap: () => setState(() => _currentIndex = i),
-                ),
-              ),
-            const Spacer(),
-          ],
-        ),
+    return ValueListenableBuilder<int>(
+      valueListenable: HomeTab.index,
+      builder: (_, tab, _) => MainSideNav(
+        tab: tab,
+        profileSelected: _currentIndex == 1,
+        song: _currentSong,
+        isPlaying: _audioPlayer.isPlaying,
+        onSelectTab: _selectHomeTab,
+        onSelectProfile: () => setState(() => _currentIndex = 1),
+        onTogglePlay: () => _audioPlayer.togglePlayPause(),
+        onOpenPlayer: _openPlayerPage,
+        cover: _currentSong == null ? null : _buildMiniCoverImage(40),
+        bottomPadding: bottomPadding,
       ),
     );
   }
 
-  Widget _buildSideNavItem({
-    required IconData icon,
-    required String label,
-    required bool active,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFFF1F2F4) : Colors.transparent,
-          borderRadius: BorderRadius.circular(26),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 22,
-              color: active ? Colors.black87 : const Color(0xFF8A8A8A),
-            ),
-            const SizedBox(width: 14),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                color: active ? Colors.black87 : const Color(0xFF5A5A5A),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  /// 切换首页内部标签（首页 / 本地 / 歌单），左侧导航与首页顶部标签同一份状态
+  void _selectHomeTab(int tab) {
+    if (_currentIndex != 0) setState(() => _currentIndex = 0);
+    HomeTab.select(tab);
+  }
+
+  /// 打开播放页（统一入口 + 防重复打开）
+  void _openPlayerPage() {
+    if (NavigationGuard.isPlayerPageOpen) return;
+    NavigationGuard.isPlayerPageOpen = true;
+    Navigator.push(context, playerPageRoute()).then((_) {
+      NavigationGuard.isPlayerPageOpen = false;
+    });
   }
 
   Widget _buildTabBar() {
@@ -620,7 +554,8 @@ class _MainShellState extends State<MainShell> {
                                     // 位移比例：灰区宽+封面宽——滑出灰色胶囊
                                     // 裁剪范围即可，不必跑整个屏幕
                                     final pillW = barWidth * (138 / 320);
-                                    final frac = (pillW + coverSize) / coverSize;
+                                    final frac =
+                                        (pillW + coverSize) / coverSize;
                                     // 拖动切歌补偿：冻结期间外层跟手位移仍生效，
                                     // 出/入位移各减去该量，300ms 外层归零后总位置连续
                                     final comp = _miniDragExitBegin == null
@@ -701,7 +636,8 @@ class _MainShellState extends State<MainShell> {
                                     // 位移按文字区宽度算足灰区宽：滑出灰色
                                     // 胶囊裁剪范围即可，不必跑整个屏幕
                                     final pillW = barWidth * (138 / 320);
-                                    final frac = (pillW + textWidth) / textWidth;
+                                    final frac =
+                                        (pillW + textWidth) / textWidth;
                                     return _miniSlideTransitionBuilder(
                                       child,
                                       animation,
@@ -774,7 +710,7 @@ class _MainShellState extends State<MainShell> {
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: () => setState(() => _currentIndex = 0),
+                      onTap: () => _selectHomeTab(HomeTab.home),
                       customBorder: const CircleBorder(),
                       child: Center(
                         child: SvgPicture.string(
