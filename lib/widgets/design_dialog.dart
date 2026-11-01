@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
 
 /// 设计稿风格弹窗组件（参照 cankao/1.txt，430 宽画布）
@@ -11,20 +12,18 @@ import '../utils/responsive.dart';
 class DesignDialog {
   DesignDialog._();
 
-  static const Color confirmBlue = Color(0xFF3080FF); // 确认按钮蓝
-  static const Color cancelGray = Color(0xFF8A8A8A); // 取消文字灰
-  static const Color titleDark = Color(0xFF333333);
-  static const Color contentGray = Color(0xFF666666);
+  /// 关键动作色：与全站 FilledButton 一致的墨色，避免弹窗和页面两套按钮
+  static const Color confirmBlue = AppColors.ink;
+  static const Color cancelGray = AppColors.inkSecondary;
+  static const Color titleDark = AppColors.ink;
+  static const Color contentGray = AppColors.inkSecondary;
 
   /// 设计稿比例：统一走响应式单一真源（夹取 [0.8, 1.0]）
   static double s(BuildContext context) =>
       Responsive.dialogScale(MediaQuery.of(context).size);
 
   /// 透明底 Dialog 包装（去掉默认灰白底和默认边距，卡片宽度按设计稿控制）
-  static Widget shell(
-    BuildContext context, {
-    required Widget child,
-  }) {
+  static Widget shell(BuildContext context, {required Widget child}) {
     final k = s(context);
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -35,19 +34,21 @@ class DesignDialog {
   }
 
   /// 白底圆角卡片容器
-  static Widget card(
-    BuildContext context, {
-    required List<Widget> children,
-  }) {
+  static Widget card(BuildContext context, {required List<Widget> children}) {
     final k = s(context);
     // 卡片宽上限 400，避免超宽屏弹窗过宽
     final cardWidth = (353 * k).clamp(0.0, 400.0);
     return Container(
       width: cardWidth,
-      padding: EdgeInsets.fromLTRB(24 * k, 26 * k, 24 * k, 18 * k),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.xl,
+        AppSpace.xxl,
+        AppSpace.xl,
+        AppSpace.lg,
+      ),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15 * k),
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -59,27 +60,17 @@ class DesignDialog {
 
   /// 弹窗标题
   static Widget title(BuildContext context, String text) {
-    final k = s(context);
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 18 * k,
-        fontWeight: FontWeight.w600,
-        color: titleDark,
-        height: 1.3,
-      ),
-    );
+    return Text(text, style: AppType.title.copyWith(height: 1.32));
   }
 
   /// 弹窗正文
   static Widget body(BuildContext context, String text) {
-    final k = s(context);
     return Text(
       text,
-      style: TextStyle(
-        fontSize: 14.5 * k,
+      style: AppType.body.copyWith(
         color: contentGray,
-        height: 1.6,
+        fontWeight: FontWeight.w400,
+        height: 1.62,
       ),
     );
   }
@@ -92,21 +83,23 @@ class DesignDialog {
     VoidCallback? onTap, {
     bool enabled = true,
   }) {
-    final k = s(context);
     return GestureDetector(
       onTap: enabled ? onTap : null,
       behavior: HitTestBehavior.opaque,
       child: Container(
-        height: 34 * k,
-        padding: EdgeInsets.symmetric(horizontal: 17 * k),
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 22),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: enabled ? confirmBlue : const Color(0xFFB9D0F5),
-          borderRadius: BorderRadius.circular(8 * k),
+          color: enabled ? confirmBlue : AppColors.inkDisabled,
+          borderRadius: BorderRadius.circular(AppRadius.row),
         ),
         child: Text(
           text,
-          style: TextStyle(color: Colors.white, fontSize: 15.6 * k),
+          style: AppType.body.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );
@@ -118,16 +111,12 @@ class DesignDialog {
     String text,
     VoidCallback onTap,
   ) {
-    final k = s(context);
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 8 * k, vertical: 7 * k),
-        child: Text(
-          text,
-          style: TextStyle(color: cancelGray, fontSize: 13.6 * k),
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        child: Text(text, style: AppType.body.copyWith(color: cancelGray)),
       ),
     );
   }
@@ -148,16 +137,15 @@ class DesignDialog {
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
-        final k = s(ctx);
         return shell(
           ctx,
           child: card(
             ctx,
             children: [
               DesignDialog.title(ctx, titleText),
-              SizedBox(height: 12 * k),
+              const SizedBox(height: AppSpace.md),
               DesignDialog.body(ctx, contentText),
-              SizedBox(height: 26 * k),
+              const SizedBox(height: AppSpace.xxl),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -166,7 +154,7 @@ class DesignDialog {
                       Navigator.of(ctx).pop();
                       onCancel?.call();
                     }),
-                    SizedBox(width: 12 * k),
+                    const SizedBox(width: AppSpace.xs),
                   ],
                   DesignDialog.confirmButton(ctx, confirmLabel, () {
                     Navigator.of(ctx).pop();
@@ -177,7 +165,8 @@ class DesignDialog {
             ],
           ),
         );
-    });
+      },
+    );
   }
 }
 
@@ -194,6 +183,12 @@ class DesignDialog {
 ///   在 release 下表现为**整屏灰框 RenderErrorBox（0xF0C0C0C0）并自动恢复**。）
 /// - 移除操作**幂等**：定时器 / 手动关闭竞争、重复调用均安全。
 /// - 整体 try/catch 兜底 —— 该根 Overlay 条目在任何情况下都不得成为异常源。
+/// Toast 胶囊条本体的 Key。
+///
+/// 供测试直接断言其尺寸：该容器必须由内容决定大小，一旦被父级松约束撑开
+/// （历史 Bug：内部套了 `Center` 且没有固定高度），就会变成盖住半屏的黑椭圆。
+const Key designToastKey = ValueKey<String>('design-toast');
+
 class DesignToast {
   DesignToast._();
 
@@ -204,8 +199,9 @@ class DesignToast {
   static Timer? _timer;
 
   /// 复用的数据载体：条目通过 [ValueListenableBuilder] 监听其变化并刷新内容。
-  static final ValueNotifier<_ToastData?> _data =
-      ValueNotifier<_ToastData?>(null);
+  static final ValueNotifier<_ToastData?> _data = ValueNotifier<_ToastData?>(
+    null,
+  );
 
   /// 显示一条轻提示（2 秒后自动消失；重复调用只刷新内容，不叠加）。
   static void show(BuildContext context, String text) {
@@ -223,9 +219,8 @@ class DesignToast {
         // `_dismiss()` 是唯一的移除点，且一定会把 `_entry` 置空，故 `_entry == null`
         // 即代表「当前没有在屏条目」，可直接作为插入条件。
         final created = OverlayEntry(
-          builder: (_) => Positioned.fill(
-            child: _DesignToastOverlay(data: _data),
-          ),
+          builder: (_) =>
+              Positioned.fill(child: _DesignToastOverlay(data: _data)),
         );
         _entry = created;
         overlay.insert(created);
@@ -301,31 +296,28 @@ class _DesignToastOverlay extends StatelessWidget {
                     maxWidth: MediaQuery.sizeOf(context).width * 0.86,
                   ),
                   child: Container(
-                    height: 36 * k,
-                    padding: EdgeInsets.symmetric(horizontal: 8 * k),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8 * k),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.12),
-                          blurRadius: 10 * k,
-                          offset: Offset(0, 2 * k),
-                        ),
-                      ],
+                    key: designToastKey,
+                    // 不要在这里套 Center：Container 无固定高度时，Center 会
+                    // 撑满父级给的松约束（整屏高度），圆角 pill 就变成一块
+                    // 盖住半屏的黑椭圆。容器必须由内容决定尺寸。
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpace.xl,
+                      vertical: 11,
                     ),
-                    child: Center(
-                      child: Text(
-                        value.text,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.black,
-                          fontSize: 15.6 * k,
-                          fontWeight: FontWeight.w400,
-                          letterSpacing: 0,
-                        ),
+                    constraints: const BoxConstraints(minWidth: 96),
+                    decoration: BoxDecoration(
+                      color: AppColors.ink,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      boxShadow: AppShadow.dock,
+                    ),
+                    child: Text(
+                      value.text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: AppType.body.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),

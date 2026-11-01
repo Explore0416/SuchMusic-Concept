@@ -81,6 +81,11 @@ void main() {
         .firstMatch(pubspec)!
         .group(1)!;
     await tester.pumpWidget(const MaterialApp(home: ChangelogPage()));
+    // 页面通过 rootBundle 读 assets/CHANGELOG.md，是真实文件 I/O：
+    // 假异步里 Future 不会推进，先用 runAsync 放行一次真实事件循环再 settle。
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
     await tester.pumpAndSettle();
     expect(find.text('更新日志'), findsOneWidget);
     expect(find.text('v$v'), findsOneWidget);

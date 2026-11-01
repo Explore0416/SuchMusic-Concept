@@ -1,28 +1,29 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
-import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+
 import '../models/song_model.dart';
-import '../services/music_api_service.dart';
 import '../services/audio_player_service.dart';
 import '../services/app_init.dart';
-import '../services/recommend_service.dart';
+import '../services/music_api_service.dart';
 import '../services/play_context_service.dart';
+import '../services/recommend_service.dart';
 import '../services/sources/source_manager.dart';
-import '../utils/responsive.dart';
-import '../utils/home_tab.dart';
-import 'library_page.dart';
-import 'playlist_detail_page.dart';
-import 'search_page.dart';
-import '../widgets/local_music_view.dart';
+import '../theme/app_theme.dart';
 import '../utils/navigation_guard.dart';
 import '../utils/player_route.dart';
+import '../utils/responsive.dart';
+import '../widgets/app_ui.dart';
+import 'playlist_detail_page.dart';
+import 'search_page.dart';
 
-enum CardType { fm, placeholder }
-
+/// 首页：私人 FM 主卡 + 个性化歌单轨 + 榜单 + 歌单广场。
+///
+/// 视觉走「纸感暖白 + 墨色文字 + 单一钴蓝强调」：标题用大字号建立层级，
+/// 内容用横向封面轨组织，避免把十几个模块平铺成一条无尽的列表。
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -33,29 +34,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _apiService = MusicApiService();
 
-  /// 安全读取 PageController 当前页。
-  /// `PageController.page` 内部调用 `position`（要求恰好 1 个 position），
-  /// 而在长列表滚动/重建期间可能瞬时挂载 0 或 2 个 position，直接取会抛
-  /// `Bad state: Too many elements`（每帧异常，页面卡顿）。
-  static double? _safePageOf(PageController c) {
-    try {
-      if (!c.hasClients) return null;
-      if (c.positions.length != 1) return null;
-      return c.page;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // 顶部标签当前页：0=首页 1=本地 2=歌单。
-  // 状态放在全局 [HomeTab] 里：窄屏由顶部标签行切换，宽屏由左侧导航切换，
-  // 两处共用同一份状态，侧栏高亮与右侧内容不会错位。
-  int get _homeTabIndex => HomeTab.index.value;
-  // 「本地」标签是否被打开过：首次进入才创建 LocalMusicView，
-  // 之后用 IndexedStack 保活，切走再切回不重建、不重扫。
-  bool _localTabVisited = false;
-  // 「歌单」标签同理：首次点开才创建 LibraryPage，避免启动时就读本机歌单数据
-  bool _playlistTabVisited = false;
   List<PlaylistModel> _rankings = [];
   bool _loadingRankings = true;
   List<SongModel> _hotSongs = [];
@@ -72,46 +50,16 @@ class _HomePageState extends State<HomePage> {
   String? _fmCoverUrl;
   SongModel? _fmFirstSong;
   StreamSubscription<SongModel?>? _fmSongSub;
-  int _cardIndex = 0;
-  // 已在最后一页显示"继续滑动"提示的列表
-  final Set<PageController> _hintShownCtrls = {};
-  // 提示展示后该次手势已结束，下一次 overscroll 手势进入榜单
-  final Set<PageController> _hintArmedCtrls = {};
-  final PageController _cardPageController = PageController(
-    viewportFraction: 0.86,
-  );
-  final PageController _recommendPageController = PageController(
-    viewportFraction: 0.95 / 1.05,
-  );
-  final PageController _recommendPageController2 = PageController(
-    viewportFraction: 0.95 / 1.05,
-  );
-
-  /// 「猜你想听」：本地播放历史 + 当前音源的个性化新歌混排。
-  ///
-  /// 本地部分完全在本机计算，不上传任何数据；新歌来自用户已登录的音源
-  /// （网易云每日推荐 / 私人 FM），未登录或取不到时只用本地结果。
-  Future<void> _loadLocalPicks() async {
-    // 网络 / 音源异常一律静默：拿不到就整块不显示，不能冒泡成未捕获异常
-    try {
-      final picks = await RecommendService.instance.smartPicks(limit: 12);
-      if (!mounted || picks.isEmpty) return;
-      setState(() => _localPicks = picks);
-    } catch (e) {
-      debugPrint('⚠️ 猜你想听加载失败: $e');
-    }
-  }
 
   @override
   void initState() {
     super.initState();
-    HomeTab.index.addListener(_onHomeTabChanged);
     _loadRankings();
     _loadDailySongs();
     _loadPlaylistSquare();
     _loadFmCover();
     _loadLocalPicks();
-    // FM模式切歌时，同步更新首页卡片封面
+    // FM 模式切歌时，同步更新首页主卡封面
     _fmSongSub = AudioPlayerService().onCurrentSongChanged.listen((song) {
       final player = AudioPlayerService();
       if (!player.isFmMode || song == null || song.coverUrl == null) return;
@@ -126,22 +74,23 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    HomeTab.index.removeListener(_onHomeTabChanged);
     _fmSongSub?.cancel();
-    _cardPageController.dispose();
-    _recommendPageController.dispose();
-    _recommendPageController2.dispose();
     super.dispose();
   }
 
-  /// 标签变化（无论来自顶部标签行还是宽屏左侧导航）：
-  /// 标记懒加载页面已访问，并重建 IndexedStack 的当前页。
-  void _onHomeTabChanged() {
-    if (!mounted) return;
-    setState(() {
-      if (_homeTabIndex == HomeTab.local) _localTabVisited = true;
-      if (_homeTabIndex == HomeTab.playlists) _playlistTabVisited = true;
-    });
+  /// 「猜你想听」：本地播放历史 + 当前音源的个性化新歌混排。
+  ///
+  /// 本地部分完全在本机计算，不上传任何数据；新歌来自用户已登录的音源
+  /// （网易云每日推荐 / 私人 FM），未登录或取不到时只用本地结果。
+  Future<void> _loadLocalPicks() async {
+    // 网络 / 音源异常一律静默：拿不到就整块不显示，不能冒泡成未捕获异常
+    try {
+      final picks = await RecommendService.instance.smartPicks(limit: 12);
+      if (!mounted || picks.isEmpty) return;
+      setState(() => _localPicks = picks);
+    } catch (e) {
+      debugPrint('⚠️ 猜你想听加载失败: $e');
+    }
   }
 
   Future<void> _loadRankings() async {
@@ -213,8 +162,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 歌单广场：热门歌单 18 个（6 行 × 每行 3 个），匿名可用，失败时隐藏模块
-  /// 每次随机取一页（'全部'+最热列表总量很大，偏移限制在安全范围避免越界），空结果回退第一页
+  /// 歌单广场：每次随机取一页（'全部'+最热列表总量很大，偏移限制在安全范围
+  /// 避免越界），空结果回退第一页。首页只展示 6 个，避免把整页拉成无限长。
   Future<void> _loadPlaylistSquare() async {
     await ensureInitialized;
     final offset = _random.nextInt(150) * 18;
@@ -238,7 +187,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 刷新按钮：换一批歌单
   void _refreshSquare() {
     if (_loadingSquare) return;
     setState(() => _loadingSquare = true);
@@ -252,8 +200,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// 私人FM卡片背景：取FM队列第一首歌的封面，失败时保留红色渐变。
-  /// 同时记住这首歌，点卡片进FM时直接从它开始播（/personal_fm 每次调用会刷新队列）
+  /// 私人 FM 主卡背景：取 FM 队列第一首歌的封面，失败时保留品牌渐变。
+  /// 同时记住这首歌，点卡片进 FM 时直接从它开始播（/personal_fm 每次调用会刷新队列）
   Future<void> _loadFmCover() async {
     await ensureInitialized;
     try {
@@ -274,80 +222,21 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  String _getGreeting() {
+  String _greeting() {
     final hour = DateTime.now().hour;
-    if (hour >= 0 && hour <= 5) {
-      return '深夜了 让旋律陪你入梦 💤';
-    } else if (hour >= 6 && hour <= 8) {
-      return '早安 用一首歌唤醒美好的一天♫';
-    } else if (hour >= 9 && hour <= 11) {
-      return '上午好 音乐伴你高效前行🎧✨';
-    } else if (hour >= 12 && hour <= 13) {
-      return '午安 听首轻音乐放松一下🍀';
-    } else if (hour >= 14 && hour <= 17) {
-      return '下午好 让节奏点亮心情♫😊';
-    } else if (hour >= 18 && hour <= 19) {
-      return '傍晚好 用音乐收尾一天的精彩🎇';
-    } else {
-      return '晚上好 沉浸在旋律里享受时光 🎧';
-    }
+    if (hour <= 5) return '夜深了';
+    if (hour <= 8) return '早上好';
+    if (hour <= 11) return '上午好';
+    if (hour <= 13) return '中午好';
+    if (hour <= 17) return '下午好';
+    if (hour <= 19) return '傍晚好';
+    return '晚上好';
   }
 
-  /// 顶栏音源标识：与 SourceManager 当前音源保持同步（REQ-07）
-  Widget _buildSourceBadge() {
-    return StreamBuilder<SongSource>(
-      stream: SourceManager().onSourceChanged,
-      initialData: SourceManager().currentSource,
-      builder: (context, snapshot) {
-        final kind = snapshot.data ?? SongSource.netease;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFE8F0FF),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            kind.label,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF2F84FE),
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  /// 顶部分类标签：选中项黑字加底部下划线，未选中灰字
-  Widget _buildHomeTab(
-    String label, {
-    bool active = false,
-    VoidCallback? onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        // 选中项 padding 4 + 下划线 2 = 6，与未选中 padding 6 对齐，保证文字基线一致
-        padding: EdgeInsets.only(bottom: active ? 4 : 6),
-        decoration: active
-            ? const BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: Color(0xFF1A1A1A), width: 2),
-                ),
-              )
-            : null,
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-            color: active ? const Color(0xFF1A1A1A) : const Color(0xFF9C9C9C),
-          ),
-        ),
-      ),
-    );
+  String _today() {
+    final now = DateTime.now();
+    const week = ['一', '二', '三', '四', '五', '六', '日'];
+    return '${now.month} 月 ${now.day} 日  星期${week[now.weekday - 1]}';
   }
 
   void _openRanking(PlaylistModel ranking) {
@@ -368,170 +257,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // 与 MainShell 同一断点：宽屏时导航在左侧，顶部标签行不再显示
-    final wide = HomeTab.useSideNav(MediaQuery.sizeOf(context).width);
-    // 宽屏下「本地 / 歌单」有自己的内容头部，不再挂首页的问候语与搜索
-    final showHomeHeader = !wide || _homeTabIndex == HomeTab.home;
-    return Padding(
-      padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
-      child: ResponsiveContent(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (showHomeHeader) ...[
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 15),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _getGreeting(),
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _buildSourceBadge(),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
-              // 宽屏（横屏 / 平板）：「首页 / 本地 / 歌单」已移到左侧导航，
-              // 页面顶部只保留搜索入口，不再重复一排标签。
-              if (wide)
-                Padding(
-                  padding: const EdgeInsets.only(right: 15),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: _SearchCircleButton(),
-                  ),
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 15),
-                  child: SizedBox(
-                    // 必须占满整行宽度：否则 Stack 收缩为标签行宽度，
-                    // Positioned(right:0) 的搜索按钮会叠在「歌单」上
-                    width: double.infinity,
-                    height: 40,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildHomeTab(
-                              '首页',
-                              active: _homeTabIndex == HomeTab.home,
-                              onTap: () => HomeTab.select(HomeTab.home),
-                            ),
-                            const SizedBox(width: 28),
-                            _buildHomeTab(
-                              '本地',
-                              active: _homeTabIndex == HomeTab.local,
-                              onTap: () => HomeTab.select(HomeTab.local),
-                            ),
-                            const SizedBox(width: 28),
-                            _buildHomeTab(
-                              '歌单',
-                              active: _homeTabIndex == HomeTab.playlists,
-                              onTap: () => HomeTab.select(HomeTab.playlists),
-                            ),
-                          ],
-                        ),
-                        Positioned(right: 0, child: _SearchCircleButton()),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-            // 宽屏切到「本地 / 歌单」时不再显示首页头部，仅留少量上边距
-            if (!showHomeHeader) const SizedBox(height: 10),
-            Expanded(
-              child: IndexedStack(
-                index: _homeTabIndex,
-                children: [
-                  SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 滑动卡片铺满全屏宽（父级已无水平边距）
-                        _buildSlidingCards(),
-                        // 本地个性化推荐：本机历史 + 在线新歌混排，无历史时整块不显示
-                        if (_localPicks.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Padding(
-                            padding: const EdgeInsets.only(left: 15),
-                            child: _buildRecommendPlaylists(
-                              title: '猜你想听',
-                              songs: _localPicks,
-                              loading: false,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        Padding(
-                          padding: const EdgeInsets.only(left: 15),
-                          child: _buildRecommendPlaylists(
-                            title: '每日推荐',
-                            songs: _dailySongs,
-                            loading: _loadingDailySongs,
-                            onSlideEnter: _openDailyRecommend,
-                            lastPageHint: '继\n续\n滑\n动\n进\n入\n每\n日\n推\n荐',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Padding(
-                          padding: const EdgeInsets.only(left: 15),
-                          child: _buildRecommendPlaylists(
-                            controller: _recommendPageController2,
-                            title: '热歌推荐',
-                            songs: _hotSongs,
-                            loading: _loadingHotSongs,
-                            onSlideEnter: _hotChart != null
-                                ? () => _openRanking(_hotChart!)
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Padding(
-                          padding: const EdgeInsets.only(left: 15),
-                          child: _buildRankingSection(),
-                        ),
-                        const SizedBox(height: 12),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 15),
-                          child: _buildPlaylistSquare(),
-                        ),
-                        // 宽屏没有底部播放胶囊，不必留出胶囊高度
-                        SizedBox(height: wide ? 28 : 100),
-                      ],
-                    ),
-                  ),
-                  // 本地标签：首次打开后才创建，之后常驻（不重建、不重扫）
-                  if (_localTabVisited)
-                    const LocalMusicView()
-                  else
-                    const SizedBox.shrink(),
-                  // 歌单标签：我喜欢的音乐 / 自建歌单 / 酷狗歌单（同 LibraryPage 内容）
-                  if (_playlistTabVisited)
-                    const LibraryPage(embedded: true)
-                  else
-                    const SizedBox.shrink(),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _openFm() async {
     if (NavigationGuard.isPlayerPageOpen) return;
     final audioPlayer = AudioPlayerService();
@@ -540,641 +265,234 @@ class _HomePageState extends State<HomePage> {
     await openPlayerPage(context);
   }
 
-  /// 歌单广场模块：2 行 × 每行 3 个热门歌单卡片（封面 + 歌单名），点击进歌单详情
-  Widget _buildPlaylistSquare() {
-    // 数据为空且已结束加载：不显示占位
-    if (!_loadingSquare && _squarePlaylists.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    final screenW = MediaQuery.of(context).size.width;
-    // 卡片宽 = (屏宽 - 左右 15 - 列间距 10*2) / 3；高 = 封面(正方形) + 间距 6 + 歌单名两行
-    // 文字高度留 36 而非理论值 34：中文行高渲染存在亚像素舍入（实测多出 ~0.5px），不足会触发溢出条纹
-    final cardW = (screenW - 15 - 15 - 10 * 2) / 3;
-    final cardH = cardW + 6 + 36;
+  void _playSong(SongModel song) {
+    final audioPlayer = AudioPlayerService();
+    // 记录播放来源上下文（首页推荐/热歌→无歌单标签），供本地曲风推断使用
+    PlayContextService().setSource(kind: PlaySourceKind.home);
+    audioPlayer.playAndAdd(song);
+  }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text(
-              '歌单广场',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
-              ),
-            ),
-            const Spacer(),
-            // 刷新按钮：换一批歌单（到底后自动回到第一页）；加载中保持图标不变，仅禁点
-            IconButton(
-              onPressed: _loadingSquare ? null : _refreshSquare,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              splashRadius: 18,
-              icon: SvgPicture.asset(
-                'assets/images/svg/refresh.svg',
-                width: 22,
-                height: 22,
-                colorFilter: const ColorFilter.mode(
-                  Colors.black54,
-                  BlendMode.srcIn,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        if (_loadingSquare)
-          SizedBox(
-            height: cardH * 6 + 14 * 5,
-            child: GridView.builder(
-              padding: EdgeInsets.zero,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 14,
-                crossAxisSpacing: 10,
-                childAspectRatio: cardW / cardH,
-              ),
-              itemCount: 18,
-              itemBuilder: (_, i) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AspectRatio(
-                    aspectRatio: 1,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: cardW * 0.8,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          )
-        else
-          SizedBox(
-            height: cardH * 6 + 14 * 5,
-            child: GridView.builder(
-              padding: EdgeInsets.zero,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 14,
-                crossAxisSpacing: 10,
-                childAspectRatio: cardW / cardH,
-              ),
-              itemCount: _squarePlaylists.length,
-              itemBuilder: (_, i) {
-                final playlist = _squarePlaylists[i];
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _openSquarePlaylist(playlist),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 1,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: _SongCoverImage(
-                            url: playlist.coverUrl ?? '',
-                            width: cardW,
-                            height: cardW,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        playlist.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          height: 1.3,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+      child: ResponsiveContent(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.only(
+            bottom: AppLayout.bottomInsetWithPlayer,
           ),
-      ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.page,
+                  0,
+                  AppSpace.page,
+                  AppSpace.xxl,
+                ),
+                child: _buildHero(),
+              ),
+              if (_localPicks.isNotEmpty)
+                _buildSongRail(
+                  title: '猜你想听',
+                  subtitle: '根据本机播放记录挑选',
+                  songs: _localPicks,
+                ),
+              _buildSongRail(
+                title: '每日推荐',
+                subtitle: '每天更新，为你挑 12 首',
+                songs: _dailySongs,
+                loading: _loadingDailySongs,
+                onAction: _openDailyRecommend,
+                actionLabel: '全部',
+              ),
+              _buildSongRail(
+                title: '热歌推荐',
+                songs: _hotSongs,
+                loading: _loadingHotSongs,
+                actionLabel: '榜单',
+                onAction: _hotChart == null
+                    ? null
+                    : () => _openRanking(_hotChart!),
+              ),
+              _buildRankingRail(),
+              _buildPlaylistSquare(),
+              const SizedBox(height: AppSpace.xxl),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _buildSlidingCards() {
-    final size = MediaQuery.sizeOf(context);
-    final contentW = Responsive.contentWidth(size);
-    // 宽屏（平板 / 横屏）只显示主卡：原来的 3 张滑动卡在宽屏下会
-    // 左右各露出相邻占位卡的一条窄边，看起来像「被裁切」。
-    final isWide = HomeTab.useSideNav(size.width);
-    // 卡片高度设上限，避免大屏被放大失衡
-    final cardH = (contentW * 0.277 + 25).clamp(0.0, 240.0);
-
-    if (isWide) {
-      return SizedBox(
-        height: cardH,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 15),
-          child: _buildCard(
-            contentW - 30,
-            cardH,
-            null,
-            isCenter: true,
-            cardType: _fmFirstSong != null ? CardType.fm : CardType.placeholder,
-          ),
-        ),
-      );
-    }
-
-    return SizedBox(
-      height: cardH,
-      child: AnimatedBuilder(
-        animation: _cardPageController,
-        builder: (_, _) {
-          final page =
-              _cardPageController.hasClients &&
-                  _cardPageController.position.haveDimensions
-              ? (_cardPageController.page ?? 0)
-              : 0.0;
-          return PageView.builder(
-            controller: _cardPageController,
-            itemCount: 3,
-            onPageChanged: (index) => setState(() => _cardIndex = index),
-            itemBuilder: (_, index) {
-              final cardType = index == 0 ? CardType.fm : CardType.placeholder;
-              final diff = (page - index).abs().clamp(0.0, 1.0);
-              final scale = 1 - diff * 0.12;
-              final dx = (index - page).clamp(-1.0, 1.0) * -8.0;
-              return Transform.translate(
-                offset: Offset(dx, 0),
-                child: Transform.scale(
-                  scale: scale,
-                  child: GestureDetector(
-                    onTap: () {
-                      if (cardType == CardType.fm) {
-                        if (_cardIndex == 0) {
-                          _openFm();
-                        } else {
-                          _cardPageController.animateToPage(
-                            0,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOut,
-                          );
-                        }
-                      } else if (_cardIndex != index) {
-                        _cardPageController.animateToPage(
-                          index,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeOut,
-                        );
-                      }
-                    },
-                    child: _buildCard(
-                      contentW * 0.86,
-                      cardH,
-                      null,
-                      isCenter: true,
-                      cardType: cardType,
-                    ),
-                  ),
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.page,
+        AppSpace.sm,
+        AppSpace.md,
+        AppSpace.xl,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_greeting(), style: AppType.display),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(_today(), style: AppType.caption),
+                    const SizedBox(width: AppSpace.sm),
+                    _SourceDot(),
+                  ],
                 ),
-              );
-            },
-          );
+              ],
+            ),
+          ),
+          AppIconButton(
+            icon: Icons.search_rounded,
+            filled: true,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SearchPage()),
+            ),
+            tooltip: '搜索',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHero() {
+    return GestureDetector(
+      onTap: _openFm,
+      // 宽屏（横屏 / 平板）下 1.86 的比例会把这张卡撑到接近半屏高，
+      // 一屏只看得见一张卡。改成「宽幅横幅」：宽度照满，高度封顶，
+      // 竖屏仍按原比例，保证两种形态下都是配角而不是主角。
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          final height = width > 560
+              ? (width / 3.2).clamp(200.0, 260.0)
+              : (width / 1.86).clamp(150.0, 320.0);
+          return SizedBox(height: height, child: _buildHeroCard());
         },
       ),
     );
   }
 
-  Widget _buildRecommendPlaylists({
-    PageController? controller,
-    String title = '根据你的口味推荐',
-    List<SongModel>? songs,
-    bool loading = false,
-    VoidCallback? onSlideEnter,
-    String lastPageHint = '继\n续\n滑\n动\n进\n入\n榜\n单',
-  }) {
-    final ctrl = controller ?? _recommendPageController;
-    final source = songs ?? _hotSongs;
-    final list = source.length >= 12 ? source.sublist(0, 12) : source;
-    // 平板形态：多列网格；手机竖屏：保持原横向 PageView
-    final columns = Responsive.homeGridColumns(MediaQuery.sizeOf(context));
-    final pages = <List<SongModel>>[];
-    for (var i = 0; i < list.length; i += 4) {
-      final end = (i + 4 > list.length) ? list.length : i + 4;
-      pages.add(list.sublist(i, end));
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
-          ),
-        ),
-        const SizedBox(height: 6),
-        if (loading)
-          Column(
-            children: List.generate(
-              4,
-              (i) => Container(
-                height: 48,
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 140,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade300,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Container(
-                            width: 80,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade300,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 26),
-                    Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          )
-        else if (pages.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Text(
-              '暂无推荐',
-              style: TextStyle(fontSize: 14, color: Colors.black45),
-            ),
-          )
-        else if (columns > 1)
-          _buildRecommendGrid(list, columns)
-        else ...[
-          Builder(
-            builder: (context) {
-              // 末页需与其他页停靠在相同的靠左位置：padEnds:false 时滚动余量不足，
-              // 末页会靠右停靠、左侧多出空隙。这里加宽 PageView 并整体左移，
-              // 使每页实际宽度仍为 0.95*可用宽、右侧露出 0.05*可用宽不变，
-              // 同时末页可精确停靠靠左（此时 maxScroll 恰为 (页数-1)*页宽）。
-              final availableW =
-                  Responsive.contentWidth(MediaQuery.sizeOf(context)) - 15;
-              final pvWidth = availableW * 1.05;
-              return SizedBox(
-                height: pages[0].length * 58.0,
-                child: OverflowBox(
-                  alignment: Alignment.centerLeft,
-                  minWidth: pvWidth,
-                  maxWidth: pvWidth,
-                  child: Transform.translate(
-                    offset: Offset(-availableW * 0.05, 0),
-                    child: NotificationListener<ScrollNotification>(
-                      onNotification: (notification) {
-                        if (notification is ScrollEndNotification) {
-                          final onLast =
-                              (_safePageOf(ctrl)?.round() ?? 0) ==
-                              pages.length - 1;
-                          if (!onLast) {
-                            // 离开最后一页，重置提示状态
-                            final removed = _hintShownCtrls.remove(ctrl);
-                            _hintArmedCtrls.remove(ctrl);
-                            if (removed) setState(() {});
-                          } else if (_hintShownCtrls.contains(ctrl)) {
-                            // 本次手势结束，下一次 overscroll 才进入榜单
-                            _hintArmedCtrls.add(ctrl);
-                          }
-                          return false;
-                        }
-                        if (notification is OverscrollNotification &&
-                            notification.overscroll > 0 &&
-                            (_safePageOf(ctrl)?.round() ?? 0) ==
-                                pages.length - 1) {
-                          if (_hintShownCtrls.contains(ctrl)) {
-                            if (_hintArmedCtrls.contains(ctrl) &&
-                                onSlideEnter != null) {
-                              setState(() {
-                                _hintShownCtrls.remove(ctrl);
-                                _hintArmedCtrls.remove(ctrl);
-                              });
-                              onSlideEnter();
-                            }
-                            return true;
-                          }
-                          // 第一次在最后一页继续滑动：显示提示（仅限手指主动拖动，
-                          // 到达最后一页时的惯性越界不算）
-                          if (notification.dragDetails != null) {
-                            setState(() => _hintShownCtrls.add(ctrl));
-                          }
-                          return true;
-                        }
-                        return false;
-                      },
-                      child: PageView.builder(
-                        controller: ctrl,
-                        padEnds: true,
-                        itemCount: pages.length,
-                        itemBuilder: (_, pageIndex) {
-                          final chunk = pages[pageIndex];
-                          final isLast = pageIndex == pages.length - 1;
-                          final listColumn = Column(
-                            children: chunk
-                                .map(
-                                  (song) => _buildRecommendItem(
-                                    song,
-                                    iconRightPadding: isLast ? 10 : 18,
-                                  ),
-                                )
-                                .toList(),
-                          );
-                          if (!isLast) return listColumn;
-                          final showHint = _hintShownCtrls.contains(ctrl);
-                          return Row(
-                            children: [
-                              Expanded(child: listColumn),
-                              AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 250),
-                                switchInCurve: Curves.easeOut,
-                                switchOutCurve: Curves.easeIn,
-                                transitionBuilder: (child, animation) {
-                                  // 槽位宽度渐变使列表（播放按钮等）平滑让位，同时淡入淡出
-                                  return SizeTransition(
-                                    axis: Axis.horizontal,
-                                    sizeFactor: animation,
-                                    alignment: Alignment.centerLeft,
-                                    child: FadeTransition(
-                                      opacity: animation,
-                                      child: child,
-                                    ),
-                                  );
-                                },
-                                child: showHint
-                                    ? Row(
-                                        key: const ValueKey('hint'),
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Padding(
-                                            padding: EdgeInsets.zero,
-                                            child: Text(
-                                              lastPageHint,
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.black38,
-                                                height: 1.5,
-                                              ),
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ),
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              right: 8,
-                                            ),
-                                            child: SvgPicture.asset(
-                                              'assets/images/svg/Chevron Right.svg',
-                                              width: 14,
-                                              height: 14,
-                                              colorFilter:
-                                                  const ColorFilter.mode(
-                                                    Colors.black38,
-                                                    BlendMode.srcIn,
-                                                  ),
-                                            ),
-                                          ),
-                                        ],
-                                      )
-                                    : const SizedBox.shrink(
-                                        key: ValueKey('hint-none'),
-                                      ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildRecommendItem(SongModel song, {double iconRightPadding = 18}) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _playSong(song),
-      child: Container(
-        height: 48,
-        margin: const EdgeInsets.only(bottom: 10),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: _SongCoverImage(
-                url: song.coverUrl ?? '',
-                width: 48,
-                height: 48,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    song.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    song.artist,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Colors.black45),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Padding(
-              padding: EdgeInsets.only(right: iconRightPadding),
-              child: SvgPicture.asset(
-                'assets/images/svg/Play.svg',
-                width: 14,
-                height: 14,
-                colorFilter: const ColorFilter.mode(
-                  Colors.black45,
-                  BlendMode.srcIn,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 平板形态：推荐列表按双/三列网格排布（替代横向 PageView）
-  Widget _buildRecommendGrid(List<SongModel> list, int columns) {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      padding: EdgeInsets.zero,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: columns,
-        mainAxisExtent: 58,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 0,
-      ),
-      itemCount: list.length,
-      itemBuilder: (_, index) =>
-          _buildRecommendItem(list[index], iconRightPadding: 8),
-    );
-  }
-
-  Widget _buildCard(
-    double width,
-    double height,
-    String? imageUrl, {
-    bool isCenter = false,
-    CardType cardType = CardType.placeholder,
-  }) {
-    if (cardType == CardType.fm) {
-      return _buildFmCard(width, height, isCenter);
-    }
-    return _buildPlaceholderCard(width, height, isCenter);
-  }
-
-  Widget _buildFmCard(double width, double height, bool isCenter) {
-    final coverUrl = _fmCoverUrl;
+  Widget _buildHeroCard() {
     return Container(
-      width: width,
-      height: height,
       decoration: BoxDecoration(
-        // 无封面时回退到红色渐变
-        gradient: coverUrl == null
-            ? const LinearGradient(
-                colors: [Color(0xFFE53935), Color(0xFFFF6F60)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              )
-            : null,
-        color: coverUrl != null ? const Color(0xFF2A2A35) : null,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppRadius.hero),
+        color: AppColors.ink,
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppRadius.hero),
         child: Stack(
+          fit: StackFit.expand,
           children: [
-            if (coverUrl != null)
-              Positioned.fill(child: _FmCoverBackground(url: coverUrl)),
-            if (coverUrl != null)
-              // 深色遮罩保证白色文字/图标可读
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: [
-                        Colors.black.withValues(alpha: 0.55),
-                        Colors.black.withValues(alpha: 0.30),
-                        Colors.black.withValues(alpha: 0.15),
+            if (_fmCoverUrl != null)
+              _FmCoverBackground(url: _fmCoverUrl!)
+            else
+              const _HeroFallback(),
+            // 下压渐变，保证白色文字在任何封面上都可读
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x33000000),
+                    Color(0x14000000),
+                    Color(0xB3000000),
+                  ],
+                  stops: [0, 0.45, 1],
+                ),
+              ),
+            ),
+            Positioned(
+              left: 18,
+              top: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.24),
+                    width: 0.7,
+                  ),
+                ),
+                child: const Text(
+                  '私人 FM',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.1,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 18,
+              right: 18,
+              bottom: 16,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          '为你挑选',
+                          style: TextStyle(
+                            fontSize: 20,
+                            height: 1.2,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.3,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _fmFirstSong?.name ?? '根据你的口味实时更新',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            height: 1.3,
+                            color: Color(0xCCFFFFFF),
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                ),
-              ),
-            Positioned(
-              left: 12,
-              right: 12,
-              bottom: 10,
-              child: Row(
-                children: [
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '私人FM',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: isCenter ? 14 : 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '听你想听',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: isCenter ? 11 : 9,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  Icon(
-                    Icons.play_arrow_rounded,
-                    color: Colors.white,
-                    size: isCenter ? 28 : 20,
+                  const SizedBox(width: 12),
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      size: 30,
+                      color: AppColors.ink,
+                    ),
                   ),
                 ],
               ),
@@ -1185,268 +503,415 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildPlaceholderCard(double width, double height, bool isCenter) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        color: const Color(0xFFD9E8FF),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Center(
-          child: Text(
-            '敬请期待',
-            style: TextStyle(
-              fontSize: isCenter ? 14 : 11,
-              color: const Color(0xFF2F84FE),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRankingSection() {
+  /// 横向封面轨：标题 + 可选右侧动作 + 一排卡片。
+  Widget _buildSongRail({
+    required String title,
+    String? subtitle,
+    required List<SongModel> songs,
+    bool loading = false,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    final showEmpty = !loading && songs.isEmpty;
+    if (showEmpty && onAction == null && songs.isEmpty) {
+      // 每日推荐为空时保留区块（给重试/入口），其余空轨直接不渲染
+      if (title != '每日推荐') return const SizedBox.shrink();
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          '榜单',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
+        AppSectionHeader(
+          title: title,
+          subtitle: subtitle,
+          actionLabel: actionLabel,
+          onAction: onAction,
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.page,
+            0,
+            AppSpace.page,
+            AppSpace.md,
           ),
         ),
-        const SizedBox(height: 12),
-        if (_loadingRankings)
-          // 骨架高度跟随列宽（正方形封面 + 文字行），不再固定 140：
-          // 宽屏下列宽变大，固定高度会把正方形封面挤到溢出 22px
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: List.generate(
-              4,
-              (i) => Expanded(
-                child: Container(
-                  margin: EdgeInsets.only(right: i == 3 ? 0 : 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 1,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade300,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Container(
-                        width: 56,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+        if (loading)
+          _RailSkeleton()
+        else if (songs.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.page,
+              0,
+              AppSpace.page,
+              AppSpace.xl,
             ),
-          )
-        else if (_rankings.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Text(
-              '暂无榜单数据',
-              style: TextStyle(fontSize: 14, color: Colors.black45),
-            ),
+            child: Text('暂无内容，稍后再试', style: AppType.caption),
           )
         else
           SizedBox(
-            height: 140,
-            child: ListView.builder(
+            height: 176,
+            child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              itemCount: _rankings.length > 4 ? 4 : _rankings.length,
-              itemBuilder: (_, index) {
-                final ranking = _rankings[index];
-                return _buildRankingItem(ranking);
-              },
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+              itemCount: songs.length,
+              separatorBuilder: (_, _) => const SizedBox(width: AppSpace.md),
+              itemBuilder: (_, i) => _SongRailCard(
+                song: songs[i],
+                onTap: () => _playSong(songs[i]),
+              ),
             ),
           ),
+        const SizedBox(height: AppSpace.xxl),
       ],
     );
   }
 
-  Widget _buildRankingItem(PlaylistModel ranking) {
-    return GestureDetector(
-      onTap: () => _openRanking(ranking),
-      child: Container(
-        width: 110,
-        margin: const EdgeInsets.only(right: 12),
+  Widget _buildRankingRail() {
+    if (!_loadingRankings && _rankings.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final list = _rankings.take(8).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppSectionHeader(
+          title: '榜单',
+          padding: EdgeInsets.fromLTRB(
+            AppSpace.page,
+            0,
+            AppSpace.page,
+            AppSpace.md,
+          ),
+        ),
+        if (_loadingRankings)
+          _RailSkeleton()
+        else
+          SizedBox(
+            height: 172,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+              itemCount: list.length,
+              separatorBuilder: (_, _) => const SizedBox(width: AppSpace.md),
+              itemBuilder: (_, i) {
+                final ranking = list[i];
+                return SizedBox(
+                  width: 124,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _openRanking(ranking),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        AspectRatio(
+                          aspectRatio: 1,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(AppRadius.card),
+                            child: _SongCoverImage(
+                              url: ranking.coverUrl ?? '',
+                              width: 124,
+                              height: 124,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: AppSpace.sm),
+                        Text(
+                          ranking.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppType.body.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        const SizedBox(height: AppSpace.xxl),
+      ],
+    );
+  }
+
+  /// 歌单广场：3 列 × 2 行，右上角「换一批」。
+  Widget _buildPlaylistSquare() {
+    if (!_loadingSquare && _squarePlaylists.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final items = _squarePlaylists.take(6).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AppSectionHeader(
+          title: '歌单广场',
+          actionLabel: '换一批',
+          onAction: _loadingSquare ? null : _refreshSquare,
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.page,
+            0,
+            AppSpace.page,
+            AppSpace.md,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // 宽屏多放一列，避免封面被拉成巨幅；行高跟随列宽
+              // （固定行高会在宽屏把正方形封面挤出格子）。
+              final columns = constraints.maxWidth > 560 ? 4 : 3;
+              final cardW =
+                  (constraints.maxWidth - AppSpace.sm * (columns - 1)) /
+                  columns;
+              final count = _loadingSquare ? columns * 2 : items.length;
+              return GridView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: AppSpace.lg,
+                  crossAxisSpacing: AppSpace.sm,
+                  mainAxisExtent: cardW + 48,
+                ),
+                itemCount: count,
+                itemBuilder: (_, i) {
+                  if (_loadingSquare) return _SquareSkeleton(width: cardW);
+                  final playlist = items[i];
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _openSquarePlaylist(playlist),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        AspectRatio(
+                          aspectRatio: 1,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.row + 2,
+                            ),
+                            child: _SongCoverImage(
+                              url: playlist.coverUrl ?? '',
+                              width: cardW,
+                              height: cardW,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: AppSpace.sm),
+                        Text(
+                          playlist.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppType.caption.copyWith(
+                            color: AppColors.ink,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 歌单卡片：封面 + 歌名 + 歌手，横向轨道用。
+class _SongRailCard extends StatelessWidget {
+  const _SongRailCard({required this.song, required this.onTap});
+
+  final SongModel song;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 110,
-              height: 110,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F0F0),
-                borderRadius: BorderRadius.circular(12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              child: _SongCoverImage(
+                url: song.coverUrl ?? '',
+                width: 132,
+                height: 132,
               ),
-              child: ranking.coverUrl != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: _RankingCoverImage(url: ranking.coverUrl!),
-                    )
-                  : const Icon(Icons.music_note, size: 40, color: Colors.grey),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: AppSpace.sm),
             Text(
-              ranking.name,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Colors.black87,
-              ),
+              song.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              style: AppType.body.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              song.artist.isEmpty ? '未知歌手' : song.artist,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppType.caption.copyWith(
+                fontSize: 12,
+                color: AppColors.inkTertiary,
+              ),
             ),
           ],
         ),
       ),
     );
   }
-
-  void _playSong(SongModel song) async {
-    final audioPlayer = AudioPlayerService();
-    // 记录播放来源上下文（首页推荐/热歌→无歌单标签），供本地曲风推断使用
-    PlayContextService().setSource(kind: PlaySourceKind.home);
-    await audioPlayer.playAndAdd(song);
-  }
 }
 
-/// 首页顶栏圆形搜索按钮：白底无墨水效果，按压缩放反馈（按下缩小、松开弹回）
-class _SearchCircleButton extends StatefulWidget {
-  @override
-  State<_SearchCircleButton> createState() => _SearchCircleButtonState();
-}
-
-class _SearchCircleButtonState extends State<_SearchCircleButton> {
-  bool _pressed = false;
-
+class _RailSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => const SearchPage()),
-        );
-      },
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedScale(
-        scale: _pressed ? 0.86 : 1.0,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-        // 无白色圆底，仅显示搜索图标
-        child: const SizedBox(
-          width: 36,
-          height: 36,
-          child: Icon(Icons.search, size: 24, color: Color(0xFF09244B)),
+    return SizedBox(
+      height: 176,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        itemCount: 3,
+        separatorBuilder: (_, _) => const SizedBox(width: AppSpace.md),
+        itemBuilder: (_, _) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const AppSkeleton(width: 132, height: 132, radius: AppRadius.card),
+            const SizedBox(height: AppSpace.sm),
+            const AppSkeleton(width: 96, height: 12, radius: 4),
+            const SizedBox(height: 6),
+            const AppSkeleton(width: 60, height: 10, radius: 4),
+          ],
         ),
       ),
     );
   }
 }
 
-class _RankingCoverImage extends StatefulWidget {
-  final String url;
-  const _RankingCoverImage({required this.url});
+class _SquareSkeleton extends StatelessWidget {
+  const _SquareSkeleton({required this.width});
 
-  @override
-  State<_RankingCoverImage> createState() => _RankingCoverImageState();
-}
-
-class _RankingCoverImageState extends State<_RankingCoverImage> {
-  Uint8List? _imageBytes;
-  bool _loading = true;
-
-  static final Dio _dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 10),
-    ),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    _loadImage();
-  }
-
-  Future<void> _loadImage() async {
-    try {
-      final response = await _dio.get(
-        '${widget.url.split('?').first}?param=300y300',
-        options: Options(
-          responseType: ResponseType.bytes,
-          headers: {
-            'Referer': 'https://music.163.com',
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-        ),
-      );
-      if (response.statusCode == 200 && response.data != null) {
-        if (mounted) {
-          setState(() {
-            _imageBytes = response.data as Uint8List;
-            _loading = false;
-          });
-        }
-      } else {
-        if (mounted) setState(() => _loading = false);
-      }
-    } catch (e) {
-      debugPrint('🎵 封面加载失败: ${widget.url} | 错误: $e');
-      if (mounted) setState(() => _loading = false);
-    }
-  }
+  final double width;
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return Container(width: 110, height: 110, color: Colors.grey.shade300);
-    }
-    if (_imageBytes != null) {
-      return Image.memory(
-        _imageBytes!,
-        width: 110,
-        height: 110,
-        fit: BoxFit.cover,
-      );
-    }
-    return const Icon(Icons.music_note, size: 40, color: Colors.grey);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AspectRatio(
+          aspectRatio: 1,
+          child: AppSkeleton(
+            width: width,
+            height: width,
+            radius: AppRadius.row + 2,
+          ),
+        ),
+        const SizedBox(height: AppSpace.sm),
+        const AppSkeleton(width: 72, height: 10, radius: 4),
+      ],
+    );
+  }
+}
+
+/// 音源标识：小圆点 + 文案，安静地待在标题下方。
+class _SourceDot extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<SongSource>(
+      stream: SourceManager().onSourceChanged,
+      initialData: SourceManager().currentSource,
+      builder: (context, snapshot) {
+        final kind = snapshot.data ?? SongSource.netease;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 5,
+              height: 5,
+              decoration: const BoxDecoration(
+                color: AppColors.brand,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              kind.label,
+              style: AppType.caption.copyWith(color: AppColors.inkTertiary),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 无封面时的主卡底：深色渐变 + 一缕品牌色光晕，不依赖网络。
+class _HeroFallback extends StatelessWidget {
+  const _HeroFallback();
+
+  @override
+  Widget build(BuildContext context) {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1B2130), Color(0xFF0E1016)],
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -40,
+            top: -60,
+            child: _GlowDot(size: 220, color: Color(0x552F5BFF)),
+          ),
+          Positioned(
+            left: -30,
+            bottom: -70,
+            child: _GlowDot(size: 180, color: Color(0x33F1546B)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GlowDot extends StatelessWidget {
+  const _GlowDot({required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
+      ),
+    );
   }
 }
 
 class _SongCoverImage extends StatefulWidget {
-  final String url;
-  final double width;
-  final double height;
   const _SongCoverImage({
     required this.url,
     required this.width,
     required this.height,
   });
+
+  final String url;
+  final double width;
+  final double height;
 
   @override
   State<_SongCoverImage> createState() => _SongCoverImageState();
@@ -1466,13 +931,28 @@ class _SongCoverImageState extends State<_SongCoverImage> {
   @override
   void initState() {
     super.initState();
-    _loadImage();
+    if (widget.url.isEmpty) {
+      _loading = false;
+    } else {
+      _loadImage();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _SongCoverImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _imageBytes = null;
+      _loading = widget.url.isNotEmpty;
+      if (widget.url.isNotEmpty) _loadImage();
+    }
   }
 
   Future<void> _loadImage() async {
+    final url = widget.url;
     try {
       final response = await _dio.get(
-        '${widget.url.split('?').first}?param=150y150',
+        '${url.split('?').first}?param=300y300',
         options: Options(
           responseType: ResponseType.bytes,
           headers: {
@@ -1482,15 +962,14 @@ class _SongCoverImageState extends State<_SongCoverImage> {
           },
         ),
       );
+      if (!mounted || url != widget.url) return;
       if (response.statusCode == 200 && response.data != null) {
-        if (mounted) {
-          setState(() {
-            _imageBytes = response.data as Uint8List;
-            _loading = false;
-          });
-        }
+        setState(() {
+          _imageBytes = response.data as Uint8List;
+          _loading = false;
+        });
       } else {
-        if (mounted) setState(() => _loading = false);
+        setState(() => _loading = false);
       }
     } catch (e) {
       if (mounted) setState(() => _loading = false);
@@ -1500,10 +979,10 @@ class _SongCoverImageState extends State<_SongCoverImage> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Container(
+      return SizedBox(
         width: widget.width,
         height: widget.height,
-        color: Colors.grey.shade300,
+        child: const ColoredBox(color: Color(0xFFEDEDE9)),
       );
     }
     if (_imageBytes != null) {
@@ -1512,25 +991,27 @@ class _SongCoverImageState extends State<_SongCoverImage> {
         width: widget.width,
         height: widget.height,
         fit: BoxFit.cover,
+        gaplessPlayback: true,
       );
     }
     return Container(
       width: widget.width,
       height: widget.height,
-      color: Colors.grey[300],
+      color: const Color(0xFFEDEDE9),
       child: Icon(
-        Icons.music_note,
-        color: Colors.grey,
-        size: widget.width * 0.5,
+        Icons.music_note_rounded,
+        color: AppColors.inkTertiary,
+        size: widget.width * 0.3,
       ),
     );
   }
 }
 
-/// 私人FM卡片背景封面（宽幅裁剪，深色遮罩由外层负责）
+/// 私人FM主卡背景封面（宽幅裁剪，深色遮罩由外层负责）
 class _FmCoverBackground extends StatefulWidget {
-  final String url;
   const _FmCoverBackground({required this.url});
+
+  final String url;
 
   @override
   State<_FmCoverBackground> createState() => _FmCoverBackgroundState();
@@ -1565,7 +1046,7 @@ class _FmCoverBackgroundState extends State<_FmCoverBackground> {
     final url = widget.url;
     try {
       final response = await _dio.get(
-        '${url.split('?').first}?param=600y200',
+        '${url.split('?').first}?param=800y400',
         options: Options(
           responseType: ResponseType.bytes,
           headers: {

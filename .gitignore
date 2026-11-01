@@ -61,3 +61,8 @@ android/keystore/
 *.keystore
 *.p12
 android/build/
+
+# 本地凭据（发布 token 等），绝不入库
+.env
+.env.*
+!.env.example

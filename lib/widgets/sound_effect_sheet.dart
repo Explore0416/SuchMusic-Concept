@@ -266,7 +266,7 @@ class _SoundEffectBodyState extends State<_SoundEffectBody> {
           const Text(
             '基于系统 DynamicsProcessing 绑定当前播放会话处理，开始播放后自动生效',
             textAlign: TextAlign.center,
-            style: TextStyle(color: SoundEffectSheet._sub, fontSize: 11),
+            style: TextStyle(color: SoundEffectSheet._sub, fontSize: 12),
           ),
         ],
       ),

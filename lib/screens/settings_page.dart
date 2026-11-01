@@ -15,7 +15,9 @@ import '../services/settings_backup_service.dart';
 import '../services/play_history_service.dart';
 import '../services/sources/source_manager.dart';
 import '../utils/app_constants.dart';
+import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../widgets/app_ui.dart';
 import '../services/karaoke_service.dart';
 import '../widgets/design_dialog.dart';
 import 'about_page.dart';
@@ -87,8 +89,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         : const Color(0xFFC4C4C4),
                   ),
                   const SizedBox(width: 12),
-                  Text(kind.label,
-                      style: const TextStyle(fontSize: 15, color: Colors.black)),
+                  Text(
+                    kind.label,
+                    style: const TextStyle(fontSize: 15, color: Colors.black),
+                  ),
                 ],
               ),
             ),
@@ -204,7 +208,7 @@ class _SettingsPageState extends State<SettingsPage> {
           child: SingleChildScrollView(
             child: SelectableText(
               content,
-              style: const TextStyle(fontSize: 11, height: 1.4),
+              style: const TextStyle(fontSize: 12, height: 1.4),
             ),
           ),
         ),
@@ -277,9 +281,7 @@ class _SettingsPageState extends State<SettingsPage> {
         content: TextField(
           controller: controller,
           maxLines: 6,
-          decoration: const InputDecoration(
-            hintText: '粘贴此前导出的配置 JSON 内容',
-          ),
+          decoration: const InputDecoration(hintText: '粘贴此前导出的配置 JSON 内容'),
         ),
         actions: [
           TextButton(
@@ -345,7 +347,8 @@ class _SettingsPageState extends State<SettingsPage> {
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
       setState(() {
-        _notifyLyric = prefs.getBool(AppConstants.notifyLyricEnabled) ??
+        _notifyLyric =
+            prefs.getBool(AppConstants.notifyLyricEnabled) ??
             AppConstants.defaultNotifyLyricEnabled;
       });
     } catch (_) {}
@@ -365,571 +368,308 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (_) {}
     await AudioPlayerService.applyMixWithOthers(value);
   }
+  // ─────────────────────────── 页面骨架 ───────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final s = Responsive.uiScale(size); // 设计稿等比缩放系数（夹取 [0.7,1.15]）
-    final topPadding = MediaQuery.of(context).padding.top;
-
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F2F4),
-      body: Column(
-        children: [
-          // 白色导航栏：返回 + 居中标题
-          Container(
-            padding: EdgeInsets.only(top: topPadding),
-            color: Colors.white,
-            child: SizedBox(
-              height: 44 * s,
-              child: Stack(
-                children: [
-                  Positioned(
-                    left: 12 * s,
-                    top: 0,
-                    bottom: 0,
-                    child: GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      behavior: HitTestBehavior.opaque,
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.arrow_back_ios_new,
-                            size: 20,
-                            color: Colors.black,
+      backgroundColor: AppColors.canvas,
+      body: SafeArea(
+        bottom: false,
+        child: ResponsiveContent(
+          child: Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.only(bottom: AppSpace.xxxl),
+                  children: [
+                    _buildGroupLabel('播放', first: true),
+                    _buildGroup(
+                      children: [
+                        _switchRow(
+                          icon: Icons.graphic_eq_rounded,
+                          title: '与其他应用同时播放',
+                          subtitle: '音乐可和视频、游戏的声音共存',
+                          value: _allowMixWithOthers,
+                          onChanged: _toggleMix,
+                        ),
+                        _switchRow(
+                          icon: Icons.notifications_active_outlined,
+                          title: '通知栏 / 灵动岛显示歌词',
+                          subtitle: '需系统通知权限，关闭后只显示歌名与歌手',
+                          value: _notifyLyric,
+                          onChanged: _toggleNotifyLyric,
+                        ),
+                      ],
+                    ),
+                    _buildGroupLabel('音源'),
+                    _buildGroup(
+                      children: [
+                        AppListTile(
+                          icon: Icons.swap_horiz_rounded,
+                          iconBackground: AppColors.brandSoft,
+                          iconColor: AppColors.brand,
+                          title: '当前音源',
+                          subtitle: '搜索与播放都走这个源',
+                          trailing: AppTag(
+                            text: _source.label,
+                            color: AppColors.brand,
+                            background: AppColors.brandSoft,
                           ),
-                          SizedBox(width: 8 * s - 3), // 返回文字左移 3px
-                          Text(
-                            '返回',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontSize: 14 * s, // 12 + 2
-                            ),
+                          onTap: _selectSource,
+                        ),
+                        _switchRow(
+                          icon: Icons.cloud_sync_outlined,
+                          title: '失败自动回退网易云',
+                          subtitle: '酷狗请求失败时自动改用网易云取源',
+                          value: _fallback,
+                          onChanged: _toggleFallback,
+                        ),
+                        AppListTile(
+                          icon: Icons.person_outline_rounded,
+                          title: '酷狗账号',
+                          subtitle: '扫码登录，也可粘贴凭证兜底',
+                          trailing: AppTag(
+                            text: _kugouConfigured ? '已配置' : '未配置',
+                            color: _kugouConfigured
+                                ? AppColors.success
+                                : AppColors.inkTertiary,
+                            background: _kugouConfigured
+                                ? AppColors.successSoft
+                                : AppColors.surfaceMuted,
+                          ),
+                          onTap: _openKugouAccountPicker,
+                        ),
+                        AppListTile(
+                          icon: Icons.equalizer_rounded,
+                          title: '音效',
+                          subtitle: '均衡器预设：流行 / 人声 / 重低音 / 环绕',
+                          onTap: _openSoundEffect,
+                        ),
+                        AppListTile(
+                          icon: Icons.watch_outlined,
+                          title: '手环',
+                          subtitle: '小米手环：绑定与音乐控制（仅本机链路）',
+                          onTap: _openBand,
+                        ),
+                      ],
+                    ),
+                    _buildGroupLabel('数据'),
+                    _buildGroup(
+                      children: [
+                        AppListTile(
+                          icon: Icons.save_alt_rounded,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          title: '配置备份',
+                          subtitle: '导出个性化设置，清除数据后可导入恢复',
+                          onTap: _openBackupDialog,
+                        ),
+                        AppListTile(
+                          icon: Icons.cleaning_services_outlined,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          title: '清理数据',
+                          subtitle: '缓存、播放历史与推荐数据（均只存本机）',
+                          onTap: _showStorageCleanupSheet,
+                        ),
+                        AppListTile(
+                          icon: Icons.bug_report_outlined,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          title: '错误日志',
+                          subtitle: '查看最近异常记录（仅本机，不上传）',
+                          onTap: _openErrorLog,
+                        ),
+                      ],
+                    ),
+                    _buildGroupLabel('关于'),
+                    _buildGroup(
+                      children: [
+                        AppListTile(
+                          icon: Icons.info_outline_rounded,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          title: '关于 SuchMusic 概念版',
+                          subtitle: '开源协议、致谢与版本信息',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const AboutPage(),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    if (widget.onLogout != null) ...[
+                      const SizedBox(height: AppSpace.xxl),
+                      _buildGroup(
+                        children: [
+                          AppListTile(
+                            title: '退出登录',
+                            icon: Icons.logout_rounded,
+                            iconBackground: AppColors.dangerSoft,
+                            iconColor: AppColors.danger,
+                            showChevron: false,
+                            onTap: _showLogoutDialog,
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                  Center(
-                    child: Text(
-                      '设置',
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 17.5 * s,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              // 卡片左右距屏幕各 15px
-              padding: const EdgeInsets.symmetric(horizontal: 15),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 严格按设计稿纵向坐标（430x932）：导航栏底 49 → 标题 66 间距 17
-                  SizedBox(height: 17 * s),
-                  _buildSectionHeader('播放设置', s),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: () => _toggleMix(!_allowMixWithOthers),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '与其他应用同时播放',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontSize: 16 * s,
-                            ),
-                          ),
-                        ),
-                        _buildSwitch(s, _allowMixWithOthers,
-                            () => _toggleMix(!_allowMixWithOthers)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: () => _toggleNotifyLyric(!_notifyLyric),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                '通知栏 / 灵动岛显示歌词',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 16 * s,
-                                ),
-                              ),
-                              SizedBox(height: 2 * s),
-                              Text(
-                                '需系统通知权限；关闭后仅显示歌名/歌手',
-                                style: TextStyle(
-                                  color: const Color(0xFF838383),
-                                  fontSize: 11 * s,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        _buildSwitch(s, _notifyLyric,
-                            () => _toggleNotifyLyric(!_notifyLyric)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildSectionHeader('音源', s),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _selectSource,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '当前音源',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontSize: 16 * s,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          _source.label,
-                          style: TextStyle(
-                            color: const Color(0xFF2F84FE),
-                            fontSize: 15 * s,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: () => _toggleFallback(!_fallback),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                '失败自动回退网易云',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 16 * s,
-                                ),
-                              ),
-                              SizedBox(height: 2 * s),
-                              Text(
-                                '酷狗请求失败时自动改用网易云取源',
-                                style: TextStyle(
-                                  color: const Color(0xFF838383),
-                                  fontSize: 11 * s,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        _buildSwitch(s, _fallback,
-                            () => _toggleFallback(!_fallback)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _openKugouAccountPicker,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '酷狗账号',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 16 * s,
-                                ),
-                              ),
-                              SizedBox(height: 2 * s),
-                              Text(
-                                '扫码登录（与网易云一致），可粘贴凭证兜底',
-                                style: TextStyle(
-                                  color: const Color(0xFF838383),
-                                  fontSize: 11 * s,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Text(
-                          _kugouConfigured ? '已配置' : '未配置',
-                          style: TextStyle(
-                            color: _kugouConfigured
-                                ? const Color(0xFF2F84FE)
-                                : const Color(0xFF838383),
-                            fontSize: 14 * s,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _openSoundEffect,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('音效',
-                                  style: TextStyle(
-                                      color: Colors.black, fontSize: 16 * s)),
-                              SizedBox(height: 2 * s),
-                              Text('均衡器预设：流行 / 人声 / 重低音 / 环绕',
-                                  style: TextStyle(
-                                      color: const Color(0xFF838383),
-                                      fontSize: 11 * s)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _openBand,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('手环',
-                                  style: TextStyle(
-                                      color: Colors.black, fontSize: 16 * s)),
-                              SizedBox(height: 2 * s),
-                              Text('小米手环：绑定与音乐控制（仅本机链路）',
-                                  style: TextStyle(
-                                      color: const Color(0xFF838383),
-                                      fontSize: 11 * s)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _openBackupDialog,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('配置备份',
-                                  style: TextStyle(
-                                      color: Colors.black, fontSize: 16 * s)),
-                              SizedBox(height: 2 * s),
-                              Text('导出个性化设置，清除数据后可导入恢复',
-                                  style: TextStyle(
-                                      color: const Color(0xFF838383),
-                                      fontSize: 11 * s)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildSectionHeader('其他', s),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: () => _showStorageCleanupSheet(s),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '清理数据',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 16 * s,
-                                ),
-                              ),
-                              SizedBox(height: 2 * s),
-                              Text(
-                                '缓存 / 播放历史与推荐数据（均仅存本机）',
-                                style: TextStyle(
-                                  color: const Color(0xFF838383),
-                                  fontSize: 11 * s,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (context) => const AboutPage()),
-                      );
-                    },
-                    child: Text(
-                      '关于 SuchMusic概念版',
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 16 * s,
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _buildCard(
-                    s: s,
-                    onTap: _openErrorLog,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '错误日志',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 16 * s,
-                                ),
-                              ),
-                              SizedBox(height: 2 * s),
-                              Text(
-                                '查看最近异常记录（仅本机，不上传）',
-                                style: TextStyle(
-                                  color: const Color(0xFF838383),
-                                  fontSize: 11 * s,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFFCCCCCC)),
-                      ],
-                    ),
-                  ),
-                  // 退出登录（仅登录状态显示）
-                  if (widget.onLogout != null) ...[
-                    SizedBox(height: 26 * s),
-                    _buildCard(
-                      s: s,
-                      onTap: _showLogoutDialog,
-                      child: const Center(
-                        child: Text(
-                          '退出登录',
-                          style: TextStyle(
-                            color: Color(0xFFE53935),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ),
+                    ],
                   ],
-                  SizedBox(height: 40),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// 顶部条：返回 + 大标题（二级页不用居中导航栏，标题左对齐更好扫读）
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.sm,
+        AppSpace.sm,
+        AppSpace.page,
+        AppSpace.xs,
+      ),
+      child: Row(
+        children: [
+          AppIconButton(
+            icon: Icons.arrow_back_ios_new_rounded,
+            iconSize: 18,
+            tooltip: '返回',
+            onTap: () => Navigator.maybePop(context),
+          ),
+          const SizedBox(width: AppSpace.xs),
+          const Text('设置', style: AppType.display),
         ],
       ),
     );
   }
 
-  /// 分组标题：设计稿中为 20 高的文本块（如 66→86）
-  Widget _buildSectionHeader(String title, double s) {
-    return SizedBox(
-      height: 20 * s,
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          title,
-          style: TextStyle(
-            color: const Color(0xFF838383),
-            fontSize: 15.5 * s,
-          ),
+  Widget _buildGroupLabel(String text, {bool first = false}) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        AppSpace.page + 4,
+        first ? AppSpace.sm : AppSpace.xxl,
+        AppSpace.page,
+        AppSpace.sm,
+      ),
+      child: Text(
+        text,
+        style: AppType.captionStrong.copyWith(
+          color: AppColors.inkTertiary,
+          letterSpacing: 0.6,
         ),
       ),
     );
   }
 
-  /// 白色圆角条目卡片（设计稿 388x44 圆角 10，卡片高度 52px）
-  Widget _buildCard({
-    required double s,
-    required Widget child,
-    VoidCallback? onTap,
+  /// 一张卡装一整组：行与行之间用发丝线分隔，不再是一行一张卡的碎片感
+  Widget _buildGroup({required List<Widget> children}) {
+    final rows = <Widget>[];
+    for (var i = 0; i < children.length; i++) {
+      if (i > 0) {
+        rows.add(
+          const AppHairline(indent: AppSpace.lg, endIndent: AppSpace.lg),
+        );
+      }
+      rows.add(children[i]);
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+      child: AppCard(
+        padding: EdgeInsets.zero,
+        child: Column(mainAxisSize: MainAxisSize.min, children: rows),
+      ),
+    );
+  }
+
+  /// 开关行：整行可点，开关本体也可点，两条路径都能切换
+  Widget _switchRow({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        height: 52,
-        padding: EdgeInsets.symmetric(horizontal: 9 * s),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10 * s),
-        ),
-        alignment: Alignment.centerLeft,
-        child: child,
+    return AppListTile(
+      icon: icon,
+      title: title,
+      subtitle: subtitle,
+      showChevron: false,
+      onTap: () => onChanged(!value),
+      trailing: Switch(
+        value: value,
+        onChanged: onChanged,
+        activeThumbColor: Colors.white,
       ),
     );
   }
 
-  /// 设计稿样式开关：灰色轨道白色圆钮（关）/ 主题蓝轨道右侧圆钮（开）
-  Widget _buildSwitch(double s, bool value, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-        width: 53 * s + 6, // 整体缩小 2px：59x31
-        height: 25 * s + 6,
-        padding: EdgeInsets.all(4 * s), // 内边距 1 + 1 + 2
-        decoration: BoxDecoration(
-          color: value ? const Color(0xFF2F84FE) : const Color(0xFFC4C4C4),
-          borderRadius: BorderRadius.circular(84),
-        ),
-        child: AnimatedAlign(
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOut,
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            width: 23 * s, // 圆钮随轨道缩小 2px
-            height: 23 * s,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 统一清理入口：把原先并列的「清理缓存」「清除本地推荐数据」两张卡片合并为一项，
+  /// 统一清理入口：把原先并列的「清理缓存」「清除本地推荐数据」合并为一项，
   /// 避免同一分组里出现两个语义相近的清除操作。面板内再分两条，各自沿用原有确认流程。
-  void _showStorageCleanupSheet(double s) {
+  void _showStorageCleanupSheet() {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      backgroundColor: AppColors.surface,
+      showDragHandle: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36 * s,
-              height: 4 * s,
-              margin: EdgeInsets.only(top: 10 * s, bottom: 12 * s),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE5E5E5),
-                borderRadius: BorderRadius.circular(2 * s),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: AppSpace.sm),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(
+                  AppSpace.page,
+                  0,
+                  AppSpace.page,
+                  AppSpace.xs,
+                ),
+                child: Text('清理数据', style: AppType.title),
               ),
-            ),
-            Text('清理数据',
-                style: TextStyle(
-                    fontSize: 17 * s, fontWeight: FontWeight.w600)),
-            SizedBox(height: 4 * s),
-            Text('以下数据均仅保存在本机，清理后不可恢复',
-                style: TextStyle(
-                    fontSize: 11 * s, color: const Color(0xFF838383))),
-            SizedBox(height: 8 * s),
-            _cleanupRow(s, '清理缓存', '封面等临时文件，不影响使用记录', () {
-              Navigator.pop(ctx);
-              _showClearCacheDialog();
-            }),
-            _cleanupRow(s, '清除本地推荐数据', '播放历史、时段分布、曲风推断结果', () {
-              Navigator.pop(ctx);
-              _showClearRecommendationDialog();
-            }),
-            SizedBox(height: 12 * s),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _cleanupRow(
-      double s, String title, String subtitle, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 20 * s, vertical: 12 * s),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      style: TextStyle(fontSize: 15 * s, color: Colors.black)),
-                  SizedBox(height: 2 * s),
-                  Text(subtitle,
-                      style: TextStyle(
-                          fontSize: 11 * s, color: const Color(0xFF838383))),
-                ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.page,
+                  0,
+                  AppSpace.page,
+                  AppSpace.md,
+                ),
+                child: Text('以下数据都只存在本机，清理后不可恢复', style: AppType.caption),
               ),
-            ),
-            const Icon(Icons.chevron_right,
-                size: 18, color: Color(0xFFCCCCCC)),
-          ],
+              AppListTile(
+                icon: Icons.image_outlined,
+                iconBackground: AppColors.surfaceMuted,
+                iconColor: AppColors.inkSecondary,
+                title: '清理缓存',
+                subtitle: '封面等临时文件，不影响使用记录',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showClearCacheDialog();
+                },
+              ),
+              const AppHairline(indent: AppSpace.lg, endIndent: AppSpace.lg),
+              AppListTile(
+                icon: Icons.insights_outlined,
+                iconBackground: AppColors.surfaceMuted,
+                iconColor: AppColors.inkSecondary,
+                title: '清除本地推荐数据',
+                subtitle: '播放历史、时段分布、曲风推断结果',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showClearRecommendationDialog();
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -963,7 +703,8 @@ class _SettingsPageState extends State<SettingsPage> {
     DesignDialog.showConfirm(
       context,
       titleText: '确认清除',
-      contentText: '确定要清除本地推荐数据吗？\n（含播放历史、时段分布、完成度/跳过、曲风推断结果，'
+      contentText:
+          '确定要清除本地推荐数据吗？\n（含播放历史、时段分布、完成度/跳过、曲风推断结果，'
           '仅保存在本机，清除后不可恢复）',
       onConfirm: () async {
         await PlayHistoryService().clear();

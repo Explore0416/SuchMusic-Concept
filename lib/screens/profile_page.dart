@@ -1,20 +1,17 @@
-import 'dart:async';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:netease_music_api/netease_music_api.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 
 import '../services/music_api_service.dart';
 import '../services/app_init.dart';
 import '../services/kugou_credential_service.dart';
-import '../utils/responsive.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 import '../widgets/fade_slide_in.dart';
-import '../widgets/kugou_account_sheet.dart';
-import 'library_page.dart';
+import '../widgets/login_sheet.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
 
@@ -94,8 +91,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadPlaylists() async {
-    final userId = _cachedUserId ??
-        _userInfo?.profile?.userId.toString();
+    final userId = _cachedUserId ?? _userInfo?.profile?.userId.toString();
     if (userId == null || userId.isEmpty) return;
     setState(() => _loadingPlaylists = true);
     final playlists = await _apiService.userPlaylist(userId);
@@ -110,467 +106,370 @@ class _ProfilePageState extends State<ProfilePage> {
     });
   }
 
-  void _showQrCodeLoginDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 25),
-        child: _QrCodeLoginSheet(
-          apiService: _apiService,
-          onLoginSuccess: (info) {
-            Navigator.pop(context);
-            setState(() {
-              _isLoggedIn = true;
-              _userInfo = info;
-              _cachedNickname = _apiService.cachedNickname;
-              _cachedAvatarUrl = _apiService.cachedAvatarUrl;
-              _cachedUserId = _apiService.cachedUserId;
-            });
-            _loadPlaylists();
-          },
-        ),
-      ),
+  /// 打开统一登录弹层：一个入口登录全部音源，页面里不再重复挂账号入口。
+  Future<void> _openLogin({LoginSource initial = LoginSource.netease}) async {
+    await showLoginSheet(
+      context,
+      apiService: _apiService,
+      initial: initial,
+      onNeteaseLoggedIn: (info) {
+        Navigator.maybePop(context);
+        setState(() {
+          _isLoggedIn = true;
+          _userInfo = info;
+          _cachedNickname = _apiService.cachedNickname;
+          _cachedAvatarUrl = _apiService.cachedAvatarUrl;
+          _cachedUserId = _apiService.cachedUserId;
+        });
+        _loadPlaylists();
+      },
     );
+    if (!mounted) return;
+    // 酷狗是在弹层里二级授权的，回来要刷新一次状态
+    setState(() {});
+  }
+
+  /// 已连接的音源名称，用于身份卡副标题。
+  String _connectedSources() {
+    final cred = KugouCredentialService.instance;
+    final kugou =
+        cred.hasCredentialsFor(KugouPlatform.lite) ||
+        cred.hasCredentialsFor(KugouPlatform.standard);
+    final names = <String>[if (_isLoggedIn) '网易云', if (kugou) '酷狗'];
+    if (names.isEmpty) return '账号已失效，点这里重新登录';
+    return '已连接 ${names.join(' · ')}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final page = !_isLoggedIn ? _buildUnloggedPage() : _buildLoggedPage();
-    // 大屏内容居中留白（内容上限 960dp）；手机竖屏下与改造前一致
-    return Center(
-      child: ConstrainedBox(
-        constraints:
-            const BoxConstraints(maxWidth: Responsive.contentMaxWidth),
-        child: SizedBox.expand(
-          // 登录态切换时淡入淡出，避免页面「跳变」
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 260),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            child: KeyedSubtree(
-              key: ValueKey(_isLoggedIn),
-              child: page,
-            ),
-          ),
+    return SafeArea(
+      bottom: false,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 240),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        child: KeyedSubtree(
+          key: ValueKey(_isLoggedIn),
+          child: _isLoggedIn ? _buildLoggedPage() : _buildUnloggedPage(),
         ),
       ),
     );
   }
 
+  Widget _pageShell(List<Widget> children) {
+    return ListView(
+      padding: const EdgeInsets.only(bottom: AppLayout.bottomInsetWithPlayer),
+      children: [
+        // 设置只在「通用」分组里保留一个入口：右上角再来个齿轮属于重复。
+        const AppPageHeader(title: '我的'),
+        ...children,
+        const SizedBox(height: AppSpace.xxxl),
+      ],
+    );
+  }
+
   Widget _buildLoggedPage() {
-    final topPadding = MediaQuery.of(context).padding.top;
     final profile = _userInfo?.profile;
     final nickname = profile?.nickname ?? _cachedNickname ?? '未知用户';
     final avatarUrl = profile?.avatarUrl ?? _cachedAvatarUrl ?? '';
-    final vipType = _userInfo?.profile?.vipType ?? _userInfo?.account?.vipType ?? 0;
+    final vipType =
+        _userInfo?.profile?.vipType ?? _userInfo?.account?.vipType ?? 0;
 
-    return Stack(
-      children: [
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 0,
-          height: Responsive.gradientHeight(MediaQuery.of(context).size),
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0x264D8CFF),
-                  Color(0x00C4C4C4),
-                ],
+    return _pageShell([
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        child: _buildIdentityCard(
+          nickname: nickname,
+          avatarUrl: avatarUrl,
+          vipType: vipType,
+          loggedIn: true,
+        ),
+      ),
+      const SizedBox(height: AppSpace.xxl),
+      AppSectionHeader(
+        title: '我的歌单',
+        actionLabel: _playlists.isEmpty ? null : '刷新',
+        onAction: _playlists.isEmpty ? null : _loadPlaylists,
+      ),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        child: _buildPlaylistList(),
+      ),
+      const SizedBox(height: AppSpace.xxl),
+      const AppSectionHeader(title: '通用'),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        child: _buildSettingsCard(),
+      ),
+    ]);
+  }
+
+  Widget _buildUnloggedPage() {
+    return _pageShell([
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        child: _buildIdentityCard(
+          nickname: '未登录',
+          avatarUrl: '',
+          vipType: 0,
+          loggedIn: false,
+        ),
+      ),
+      const SizedBox(height: AppSpace.xxl),
+      // 未登录时页面会显得空，这里把「登录能得到什么」讲清楚，
+      // 而不是留一大片白让人不知道自己错过了什么。
+      const AppSectionHeader(title: '登录后可以'),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        child: AppCard(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.lg,
+            vertical: AppSpace.xs,
+          ),
+          child: Column(
+            children: const [
+              _FeatureLine(
+                icon: Icons.queue_music_rounded,
+                title: '云端歌单',
+                desc: '这里会列出你在网易云、酷狗收藏的歌单',
               ),
-            ),
-          ),
-        ),
-        Positioned(
-          right: 25,
-          top: topPadding + 15,
-          child: GestureDetector(
-            onTap: _openSettings,
-            child: SvgPicture.asset(
-              'assets/images/svg/settings_fill.svg',
-              width: 24,
-              height: 24,
-              colorFilter: const ColorFilter.mode(
-                Color(0xFF333333),
-                BlendMode.srcIn,
+              AppHairline(indent: 44),
+              _FeatureLine(
+                icon: Icons.insights_rounded,
+                title: '每日推荐与私人 FM',
+                desc: '按你实际听的口味每天换一批，不用再猜',
               ),
-            ),
-          ),
-        ),
-        Positioned(
-          right: 67,
-          top: topPadding + 15,
-          child: SvgPicture.asset(
-            'assets/images/svg/moon.svg',
-            width: 24,
-            height: 24,
-            colorFilter: const ColorFilter.mode(
-              Color(0xFF333333),
-              BlendMode.srcIn,
-            ),
-          ),
-        ),
-        // Positioned(
-        //   right: 67,
-        //   top: topPadding + 12,
-        //   child: GestureDetector(
-        //     onTap: _clearCookie,
-        //     child: const Icon(Icons.logout, size: 22, color: Color(0xFF333333)),
-        //   ),
-        // ),
-        Positioned(
-          left: 25,
-          top: topPadding + 72,
-          child: ClipOval(
-            child: Container(
-              width: 52,
-              height: 52,
-              color: const Color(0xFFE8E8E8),
-              child: avatarUrl.isNotEmpty
-                  ? _AvatarImage(url: avatarUrl)
-                  : const Icon(Icons.person, size: 30, color: Colors.grey),
-            ),
-          ),
-        ),
-        Positioned(
-          left: 89,
-          top: topPadding + 79,
-          child: Text(
-            nickname,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: Colors.black,
-            ),
-          ),
-        ),
-        if (vipType != 0)
-          Positioned(
-            left: 89,
-            top: topPadding + 104,
-            child: Container(
-              width: 40,
-              height: 13,
-              decoration: BoxDecoration(
-                color: const Color(0x1A3080FF),
-                borderRadius: BorderRadius.circular(3),
+              AppHairline(indent: 44),
+              _FeatureLine(
+                icon: Icons.swap_horiz_rounded,
+                title: '两个音源一起用',
+                desc: '网易云与酷狗分别登录，缺歌时自动换源',
               ),
-              alignment: Alignment.center,
-              child: const Text(
-                'VIP',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w400,
-                  color: Color(0xFF3080FF),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: AppSpace.xxl),
+      const AppSectionHeader(title: '通用'),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+        child: _buildSettingsCard(),
+      ),
+    ]);
+  }
+
+  /// 身份卡：登录前后共用同一骨架，只换头像、文案与右侧动作。
+  Widget _buildIdentityCard({
+    required String nickname,
+    required String avatarUrl,
+    required int vipType,
+    required bool loggedIn,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        // 已登录时点卡片同样是进登录弹层：切换音源 / 重新授权都在里面
+        onTap: _openLogin,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Container(
+          padding: const EdgeInsets.all(AppSpace.lg),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFF0F3FF), Color(0xFFFFFFFF)],
+            ),
+            border: Border.all(color: AppColors.hairline, width: 0.7),
+          ),
+          child: Row(
+            children: [
+              ClipOval(
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  color: AppColors.surfaceMuted,
+                  child: avatarUrl.isNotEmpty
+                      ? _AvatarImage(url: avatarUrl)
+                      : const Icon(
+                          Icons.person_rounded,
+                          size: 28,
+                          color: AppColors.inkTertiary,
+                        ),
                 ),
               ),
-            ),
-          ),
-        Positioned(
-          left: 25,
-          top: topPadding + 175,
-          child: const Text(
-            '我的歌单',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: Colors.black,
-            ),
+              const SizedBox(width: AppSpace.lg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            nickname,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              height: 1.25,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
+                              color: AppColors.ink,
+                            ),
+                          ),
+                        ),
+                        if (vipType != 0) ...[
+                          const SizedBox(width: AppSpace.sm),
+                          const AppTag(
+                            text: 'VIP',
+                            color: AppColors.brand,
+                            background: AppColors.brandSoft,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      loggedIn ? _connectedSources() : '登录后同步歌单与每日推荐',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.caption,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpace.md),
+              if (!loggedIn)
+                FilledButton(
+                  onPressed: () => _openLogin(),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 44),
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                  ),
+                  child: const Text('登录'),
+                )
+              else
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  size: 20,
+                  color: AppColors.inkDisabled,
+                ),
+            ],
           ),
         ),
-        Positioned(
-          left: 25,
-          right: 25,
-          top: topPadding + 217,
-          bottom: 0,
-          child: _buildPlaylistList(),
-        ),
-      ],
+      ),
     );
   }
 
   Widget _buildPlaylistList() {
     if (_loadingPlaylists) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_playlists.isEmpty) {
-      return const Center(
-        child: Text(
-          '暂无歌单',
-          style: TextStyle(fontSize: 14, color: Colors.black45),
+      return const AppCard(
+        child: Padding(
+          padding: EdgeInsets.all(AppSpace.xl),
+          child: Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
         ),
       );
     }
-    return ListView.builder(
-      padding: EdgeInsets.zero,
-      itemCount: _playlists.length,
-      itemBuilder: (_, index) {
-        final playlist = _playlists[index];
-        return Padding(
-          padding: EdgeInsets.only(bottom: index < _playlists.length - 1 ? 8 : 0),
-          child: _buildPlaylistItem(playlist),
-        );
-      },
+    if (_playlists.isEmpty) {
+      return AppCard(
+        child: AppEmptyState(
+          icon: Icons.queue_music_rounded,
+          title: '暂无歌单',
+          message: '在网易云创建歌单后会显示在这里',
+          compact: true,
+        ),
+      );
+    }
+    return AppCard(
+      child: Column(
+        children: [
+          for (var i = 0; i < _playlists.length; i++) ...[
+            if (i > 0) const AppHairline(indent: 76),
+            _buildPlaylistItem(_playlists[i]),
+          ],
+        ],
+      ),
     );
   }
 
   Widget _buildPlaylistItem(PlaylistModel playlist) {
-    return GestureDetector(
-      onTap: () => _openPlaylistDetail(playlist),
-      child: SizedBox(
-        height: 52,
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F0F0),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: playlist.coverUrl != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
-                      child: _PlaylistCoverImage(url: playlist.coverUrl!),
-                    )
-                  : const Icon(Icons.music_note, color: Colors.grey, size: 24),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    playlist.name,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.black,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${playlist.trackCount ?? 0}首',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w400,
-                      color: Color(0x80000000),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUnloggedPage() {
-    final topPadding = MediaQuery.of(context).padding.top;
-    return Stack(
-      children: [
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 0,
-          height: Responsive.gradientHeight(MediaQuery.of(context).size),
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0x264D8CFF),
-                  Color(0x00C4C4C4),
-                ],
-              ),
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openPlaylistDetail(playlist),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.lg,
+            vertical: 10,
           ),
-        ),
-        Positioned(
-          right: 25,
-          top: topPadding + 15,
-          child: GestureDetector(
-            onTap: _openSettings,
-            child: SvgPicture.asset(
-              'assets/images/svg/settings_fill.svg',
-              width: 24,
-              height: 24,
-              colorFilter: const ColorFilter.mode(
-                Color(0xFF333333),
-                BlendMode.srcIn,
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          left: 25,
-          right: 25,
-          top: topPadding + 115,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
             children: [
-              _buildAccountCard(),
-              const SizedBox(height: 12),
-              _buildKugouPlaylistEntry(),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  color: AppColors.surfaceMuted,
+                  child: playlist.coverUrl != null
+                      ? _PlaylistCoverImage(url: playlist.coverUrl!)
+                      : const Icon(
+                          Icons.music_note_rounded,
+                          size: 20,
+                          color: AppColors.inkTertiary,
+                        ),
+                ),
+              ),
+              const SizedBox(width: AppSpace.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      playlist.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.body,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${playlist.trackCount ?? 0} 首',
+                      style: AppType.caption.copyWith(
+                        color: AppColors.inkTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: AppColors.inkDisabled,
+              ),
             ],
           ),
         ),
-      ],
-    );
-  }
-
-  /// 歌单入口：我喜欢的音乐 / 自建歌单 / 酷狗歌单。
-  Widget _buildKugouPlaylistEntry() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: _buildAccountRow(
-        icon: Icons.queue_music,
-        title: '歌单',
-        subtitle: '我喜欢的、自建歌单与酷狗歌单',
-        actionText: '进入',
-        onTap: _openLibrary,
       ),
     );
   }
 
-  Future<void> _openLibrary() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const LibraryPage()),
-    );
-    if (!mounted) return;
-    setState(() {});
-  }
-
-  /// 音源账号卡片：网易云一家、酷狗一家，共两行。
-  ///
-  /// 酷狗概念版与原版本质是同一个账号体系的两个 appid，原先并排占两行，
-  /// 看起来像「要登录两个账号」。现在收进一个入口，点开后分别授权。
-  Widget _buildAccountCard() {
-    final cred = KugouCredentialService.instance;
-    final liteLogged = cred.hasCredentialsFor(KugouPlatform.lite);
-    final stdLogged = cred.hasCredentialsFor(KugouPlatform.standard);
-    final anyKugou = liteLogged || stdLogged;
-
-    final subtitle = switch ((liteLogged, stdLogged)) {
-      (true, true) => '已登录 · 概念版 / 原版',
-      (true, false) => '已登录 · 概念版',
-      (false, true) => '已登录 · 原版',
-      _ => '扫码登录后可使用酷狗音源',
-    };
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          _buildAccountRow(
-            icon: Icons.music_note,
-            title: '网易云音乐',
-            subtitle: '扫码登录后可使用网易云音源',
-            actionText: '扫码登录',
-            onTap: _showQrCodeLoginDialog,
-          ),
-          const Divider(height: 1, indent: 56, endIndent: 16),
-          _buildAccountRow(
-            icon: Icons.library_music_outlined,
-            title: '酷狗音乐',
-            subtitle: subtitle,
-            actionText: anyKugou ? '管理' : '扫码登录',
-            onTap: () => showKugouAccountSheet(context),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAccountRow({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required String actionText,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            Icon(icon, size: 22, color: const Color(0xFF3080FF)),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF999999),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: const Color(0xFF3080FF),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                actionText,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-        ),
+  Widget _buildSettingsCard() {
+    return AppCard(
+      child: AppListTile(
+        icon: Icons.settings_outlined,
+        iconColor: AppColors.inkSecondary,
+        iconBackground: AppColors.surfaceMuted,
+        title: '设置',
+        subtitle: '音效、下载、关于与更新',
+        onTap: _openSettings,
       ),
     );
   }
@@ -586,253 +485,8 @@ class _ProfilePageState extends State<ProfilePage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => SettingsPage(
-          onLogout: _isLoggedIn ? _clearCookie : null,
-        ),
-      ),
-    );
-  }
-}
-
-class _QrCodeLoginSheet extends StatefulWidget {
-  final MusicApiService apiService;
-  final void Function(NeteaseAccountInfoWrap) onLoginSuccess;
-
-  const _QrCodeLoginSheet({
-    required this.apiService,
-    required this.onLoginSuccess,
-  });
-
-  @override
-  State<_QrCodeLoginSheet> createState() => _QrCodeLoginSheetState();
-}
-
-class _QrCodeLoginSheetState extends State<_QrCodeLoginSheet> {
-  String? _qrKey;
-  String? _qrUrl;
-  String _statusText = '正在获取二维码...';
-  bool _isLoading = true;
-  bool _isExpired = false;
-  Timer? _pollTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetchQrCode();
-  }
-
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _fetchQrCode() async {
-    setState(() {
-      _isLoading = true;
-      _statusText = '正在获取二维码...';
-      _isExpired = false;
-    });
-
-    final result = await widget.apiService.getQrCodeKey();
-    if (!mounted) return;
-
-    if (result is QrCodeError) {
-      setState(() {
-        _isLoading = false;
-        _statusText = result.message;
-        _isExpired = true;
-      });
-      return;
-    }
-
-    final key = result as String;
-    final url = widget.apiService.getQrCodeUrl(key);
-    setState(() {
-      _qrKey = key;
-      _qrUrl = url;
-      _isLoading = false;
-      _statusText = '请使用网易云音乐 APP 扫码登录';
-    });
-
-    _startPolling();
-  }
-
-  void _startPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (_qrKey == null) return;
-
-      final code = await widget.apiService.checkQrCodeStatus(_qrKey!);
-      if (!mounted) return;
-
-      switch (code) {
-        case 800:
-          _pollTimer?.cancel();
-          setState(() {
-            _statusText = '二维码已过期，请点击刷新';
-            _isExpired = true;
-          });
-          break;
-        case 801:
-          setState(() {
-            _statusText = '等待扫码...';
-          });
-          break;
-        case 802:
-          setState(() {
-            _statusText = '已扫码，请在手机上确认登录';
-          });
-          break;
-        case 803:
-          _pollTimer?.cancel();
-          setState(() {
-            _statusText = '登录成功！正在获取用户信息...';
-          });
-          try {
-            final info =
-                await widget.apiService.handleQrCodeLoginSuccess();
-            if (!mounted) return;
-            if (info != null) {
-              widget.onLoginSuccess(info);
-            } else {
-              setState(() {
-                _statusText = '登录成功但获取用户信息失败，请重试';
-              });
-            }
-          } catch (e) {
-            if (!mounted) return;
-            setState(() {
-              _statusText = '登录处理异常: $e';
-            });
-          }
-          break;
-        default:
-          debugPrint('⚠️ 未知二维码状态码: $code');
-          if (code == -462 || code == 8821) {
-            _pollTimer?.cancel();
-            setState(() {
-              _statusText = '服务器拒绝扫码登录，请使用手动输入 MUSIC_U';
-              _isExpired = true;
-            });
-          }
-          break;
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text(
-            '扫码登录',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 24),
-          if (_isLoading)
-            const SizedBox(
-              width: 200,
-              height: 200,
-              child: Center(
-                child: CircularProgressIndicator(color: Color(0xFF2F84FE)),
-              ),
-            )
-          else if (_qrUrl != null)
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: 200,
-                  height: 200,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFEEEEEE)),
-                  ),
-                  child: QrImageView(
-                    data: _qrUrl!,
-                    version: QrVersions.auto,
-                    size: 176,
-                    eyeStyle: const QrEyeStyle(
-                      eyeShape: QrEyeShape.square,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                    dataModuleStyle: const QrDataModuleStyle(
-                      dataModuleShape: QrDataModuleShape.square,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                  ),
-                ),
-                if (_isExpired)
-                  Container(
-                    width: 200,
-                    height: 200,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.refresh,
-                            size: 40,
-                            color: Color(0xFF2F84FE),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '二维码已过期',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          const SizedBox(height: 16),
-          Text(
-            _statusText,
-            style: TextStyle(
-              fontSize: 14,
-              color: _isExpired ? Colors.red : Colors.black54,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (_isExpired)
-            SizedBox(
-              width: double.infinity,
-              height: 44,
-              child: ElevatedButton(
-                onPressed: _fetchQrCode,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2F84FE),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text('刷新二维码', style: TextStyle(fontSize: 15)),
-              ),
-            ),
-        ],
+        builder: (_) =>
+            SettingsPage(onLogout: _isLoggedIn ? _clearCookie : null),
       ),
     );
   }
@@ -919,10 +573,12 @@ class _PlaylistCoverImageState extends State<_PlaylistCoverImage> {
   Uint8List? _imageBytes;
   bool _loading = true;
 
-  static final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   @override
   void initState() {
@@ -979,5 +635,53 @@ class _PlaylistCoverImageState extends State<_PlaylistCoverImage> {
       );
     }
     return const Icon(Icons.music_note, color: Colors.grey);
+  }
+}
+
+/// 未登录页的能力说明行：图标 + 标题 + 一句白话
+class _FeatureLine extends StatelessWidget {
+  const _FeatureLine({
+    required this.icon,
+    required this.title,
+    required this.desc,
+  });
+
+  final IconData icon;
+  final String title;
+  final String desc;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpace.md),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceMuted,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: AppColors.inkSecondary),
+          ),
+          const SizedBox(width: AppSpace.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title, style: AppType.body),
+                const SizedBox(height: 2),
+                Text(
+                  desc,
+                  style: AppType.caption.copyWith(color: AppColors.inkTertiary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

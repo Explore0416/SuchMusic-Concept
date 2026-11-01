@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
+
 import '../services/band/band_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/design_dialog.dart';
@@ -75,220 +78,233 @@ class _BandPageState extends State<BandPage> {
       DesignToast.show(context, '手环 SDK 未就绪，请先按指引放置 AAR 后重新构建');
     }
   }
+
   String get _stateText => switch (_band.state) {
-        BandConnectionState.ready => '已连接',
-        BandConnectionState.connecting => '连接中…',
-        BandConnectionState.disconnected => '未连接',
-        BandConnectionState.unavailable => '不可用',
-      };
+    BandConnectionState.ready => '已连接',
+    BandConnectionState.connecting => '连接中…',
+    BandConnectionState.disconnected => '未连接',
+    BandConnectionState.unavailable => '不可用',
+  };
 
   Color get _stateColor => switch (_band.state) {
-        BandConnectionState.ready => const Color(0xFF2F84FE),
-        BandConnectionState.connecting => const Color(0xFFFF9800),
-        _ => const Color(0xFF838383),
-      };
+    BandConnectionState.ready => const Color(0xFF2F84FE),
+    BandConnectionState.connecting => const Color(0xFFFF9800),
+    _ => const Color(0xFF838383),
+  };
 
   String get _wearAppText => switch (_band.wearAppInstallState) {
-        'installed' => '已安装',
-        'not_installed' => '未安装',
-        _ => '未知',
-      };
+    'installed' => '已安装',
+    'not_installed' => '未安装',
+    _ => '未知',
+  };
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final s = Responsive.uiScale(size);
-    final topPadding = MediaQuery.of(context).padding.top;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F2F4),
-      body: Column(
-        children: [
-          // 白色导航栏：返回 + 居中标题（与设置页一致）
-          Container(
-            padding: EdgeInsets.only(top: topPadding),
-            color: Colors.white,
-            child: SizedBox(
-              height: 44 * s,
-              child: Stack(
+      backgroundColor: AppColors.canvas,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.sm,
+                AppSpace.sm,
+                AppSpace.page,
+                AppSpace.sm,
+              ),
+              child: Row(
                 children: [
-                  Positioned(
-                    left: 12 * s,
-                    top: 0,
-                    bottom: 0,
-                    child: GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      behavior: HitTestBehavior.opaque,
-                      child: Row(
-                        children: [
-                          const Icon(Icons.arrow_back_ios_new,
-                              size: 20, color: Colors.black),
-                          SizedBox(width: 8 * s - 3),
-                          Text('返回',
-                              style: TextStyle(
-                                  color: Colors.black, fontSize: 14 * s)),
-                        ],
-                      ),
-                    ),
+                  AppIconButton(
+                    icon: Icons.arrow_back_ios_new_rounded,
+                    iconSize: 18,
+                    tooltip: '返回',
+                    onTap: () => Navigator.maybePop(context),
                   ),
-                  Center(
-                    child: Text(
-                      '手环',
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontSize: 17.5 * s,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
+                  const SizedBox(width: AppSpace.xs),
+                  const Text('手环', style: AppType.display),
                 ],
               ),
             ),
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 15),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(height: 17 * s),
-                  _sectionHeader('状态', s),
-                  SizedBox(height: 10 * s),
-                  _card(
-                    s: s,
-                    child: Column(
-                      children: [
-                        _statusRow('连接状态', _stateText, s,
-                            valueColor: _stateColor),
-                        _divider(s),
-                        _statusRow('手环 SDK', _band.sdkReady ? '已就绪' : '未就绪', s,
-                            valueColor: _band.sdkReady
-                                ? const Color(0xFF2F84FE)
-                                : const Color(0xFF838383)),
-                        _divider(s),
-                        _statusRow('手环端快应用', _wearAppText, s),
-                        _divider(s),
-                        _statusRow(
-                          '已启用手环控制',
-                          _band.enabled ? '是' : '否',
-                          s,
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (!_band.sdkReady) ...[
-                    SizedBox(height: 10 * s),
-                    _hintCard(
-                      s: s,
-                      text: '检测到本机未加载小米手环官方 SDK（xms-wearable-lib）。'
-                          '这不会影响 App 其它功能；按下方指引放置 AAR 后重新构建即可启用真机通信。'
-                          '当前显示为「不可用 / 未知」属正常现象。',
-                    ),
-                  ],
-                  // 连接失败定位：直接展示原生适配器诊断（无需连电脑看 logcat）
-                  if (_band.sdkReady) ...[
-                    SizedBox(height: 10 * s),
-                    _sectionHeader('诊断', s),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 15),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(height: 17 * s),
+                    _sectionHeader('状态', s),
                     SizedBox(height: 10 * s),
                     _card(
                       s: s,
                       child: Column(
                         children: [
-                          _statusRow('适配器', '${_diag?['adapter'] ?? '—'}', s),
-                          _divider(s),
-                          _statusRow('节点', '${_diag?['nodeId'] ?? '未发现'}', s),
-                          _divider(s),
                           _statusRow(
-                            '设备管理权限',
-                            (_diag?['permissionGranted'] == true) ? '已授予' : '未授予',
+                            '连接状态',
+                            _stateText,
                             s,
-                            valueColor: (_diag?['permissionGranted'] == true)
-                                ? const Color(0xFF2F84FE)
-                                : const Color(0xFFFF9800),
+                            valueColor: _stateColor,
                           ),
                           _divider(s),
-                          _statusRow('最近错误', '${_diag?['lastError'] ?? '无'}', s),
+                          _statusRow(
+                            '手环 SDK',
+                            _band.sdkReady ? '已就绪' : '未就绪',
+                            s,
+                            valueColor: _band.sdkReady
+                                ? const Color(0xFF2F84FE)
+                                : const Color(0xFF838383),
+                          ),
+                          _divider(s),
+                          _statusRow('手环端快应用', _wearAppText, s),
+                          _divider(s),
+                          _statusRow('已启用手环控制', _band.enabled ? '是' : '否', s),
                         ],
                       ),
                     ),
-                  ],
-                  SizedBox(height: 10 * s),
-                  _sectionHeader('控制', s),
-                  SizedBox(height: 10 * s),
-                  _tappableCard(
-                    s: s,
-                    onTap: _busy ? null : () => _toggleEnabled(!_band.enabled),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text('启用手环控制',
+                    if (!_band.sdkReady) ...[
+                      SizedBox(height: 10 * s),
+                      _hintCard(
+                        s: s,
+                        text:
+                            '检测到本机未加载小米手环官方 SDK（xms-wearable-lib）。'
+                            '这不会影响 App 其它功能；按下方指引放置 AAR 后重新构建即可启用真机通信。'
+                            '当前显示为「不可用 / 未知」属正常现象。',
+                      ),
+                    ],
+                    // 连接失败定位：直接展示原生适配器诊断（无需连电脑看 logcat）
+                    if (_band.sdkReady) ...[
+                      SizedBox(height: 10 * s),
+                      _sectionHeader('诊断', s),
+                      SizedBox(height: 10 * s),
+                      _card(
+                        s: s,
+                        child: Column(
+                          children: [
+                            _statusRow('适配器', '${_diag?['adapter'] ?? '—'}', s),
+                            _divider(s),
+                            _statusRow('节点', '${_diag?['nodeId'] ?? '未发现'}', s),
+                            _divider(s),
+                            _statusRow(
+                              '设备管理权限',
+                              (_diag?['permissionGranted'] == true)
+                                  ? '已授予'
+                                  : '未授予',
+                              s,
+                              valueColor: (_diag?['permissionGranted'] == true)
+                                  ? const Color(0xFF2F84FE)
+                                  : const Color(0xFFFF9800),
+                            ),
+                            _divider(s),
+                            _statusRow(
+                              '最近错误',
+                              '${_diag?['lastError'] ?? '无'}',
+                              s,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: 10 * s),
+                    _sectionHeader('控制', s),
+                    SizedBox(height: 10 * s),
+                    _tappableCard(
+                      s: s,
+                      onTap: _busy
+                          ? null
+                          : () => _toggleEnabled(!_band.enabled),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  '启用手环控制',
                                   style: TextStyle(
-                                      color: Colors.black, fontSize: 16 * s)),
-                              SizedBox(height: 2 * s),
-                              Text('允许手环控制播放 / 暂停 / 切歌 / 进度',
+                                    color: Colors.black,
+                                    fontSize: 16 * s,
+                                  ),
+                                ),
+                                SizedBox(height: 2 * s),
+                                Text(
+                                  '允许手环控制播放 / 暂停 / 切歌 / 进度',
                                   style: TextStyle(
-                                      color: const Color(0xFF838383),
-                                      fontSize: 11 * s)),
-                            ],
+                                    color: const Color(0xFF838383),
+                                    fontSize: 12 * s,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                        _switch(s, _band.enabled,
-                            _busy ? null : () => _toggleEnabled(!_band.enabled)),
-                      ],
+                          _switch(
+                            s,
+                            _band.enabled,
+                            _busy ? null : () => _toggleEnabled(!_band.enabled),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _tappableCard(
-                    s: s,
-                    onTap: _busy ? null : _refresh,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text('刷新连接状态',
+                    SizedBox(height: 10 * s),
+                    _tappableCard(
+                      s: s,
+                      onTap: _busy ? null : _refresh,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '刷新连接状态',
                               style: TextStyle(
-                                  color: Colors.black, fontSize: 16 * s)),
-                        ),
-                        if (_busy)
-                          const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        else
-                          const Icon(Icons.refresh,
-                              size: 20, color: Color(0xFF2F84FE)),
-                      ],
+                                color: Colors.black,
+                                fontSize: 16 * s,
+                              ),
+                            ),
+                          ),
+                          if (_busy)
+                            const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          else
+                            const Icon(
+                              Icons.refresh,
+                              size: 20,
+                              color: Color(0xFF2F84FE),
+                            ),
+                        ],
+                      ),
                     ),
-                  ),
-                  SizedBox(height: 10 * s),
-                  _sectionHeader('绑定指引', s),
-                  SizedBox(height: 10 * s),
-                  _card(s: s, child: _guide(s)),
-                  SizedBox(height: 10 * s),
-                  _sectionHeader('隐私', s),
-                  SizedBox(height: 10 * s),
-                  _hintCard(
-                    s: s,
-                    text: '手环与手机仅通过系统提供的本机配对链路（蓝牙 / 系统互联通道）通信；'
-                        '播放控制命令与播放状态仅在该本机链路内传输，不经过任何服务器、不上传。'
-                        '手环端不保存账号凭证、歌词全文与歌单。',
-                  ),
-                  SizedBox(height: 40),
-                ],
+                    SizedBox(height: 10 * s),
+                    _sectionHeader('绑定指引', s),
+                    SizedBox(height: 10 * s),
+                    _card(s: s, child: _guide(s)),
+                    SizedBox(height: 10 * s),
+                    _sectionHeader('隐私', s),
+                    SizedBox(height: 10 * s),
+                    _hintCard(
+                      s: s,
+                      text:
+                          '手环与手机仅通过系统提供的本机配对链路（蓝牙 / 系统互联通道）通信；'
+                          '播放控制命令与播放状态仅在该本机链路内传输，不经过任何服务器、不上传。'
+                          '手环端不保存账号凭证、歌词全文与歌单。',
+                    ),
+                    SizedBox(height: 40),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
   // ── 构建件 ────────────────────────────────────────────────
-/// 可复制的一行（label + 值 + 可选尾部件 + 复制按钮）。
+  /// 可复制的一行（label + 值 + 可选尾部件 + 复制按钮）。
   // ignore: unused_element
   Widget _copyRow({
     required double s,
@@ -302,7 +318,10 @@ class _BandPageState extends State<BandPage> {
       height: 48 * s,
       child: Row(
         children: [
-          Text(label, style: TextStyle(color: Colors.black, fontSize: 15 * s)),
+          Text(
+            label,
+            style: TextStyle(color: Colors.black, fontSize: 15 * s),
+          ),
           const Spacer(),
           Flexible(
             child: Text(
@@ -310,22 +329,24 @@ class _BandPageState extends State<BandPage> {
               textAlign: TextAlign.right,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  color: valueColor,
-                  fontSize: 13.5 * s,
-                  fontWeight: FontWeight.w500),
+                color: valueColor,
+                fontSize: 13.5 * s,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
-          if (trailing != null) ...[
-            SizedBox(width: 8 * s),
-            trailing,
-          ],
+          if (trailing != null) ...[SizedBox(width: 8 * s), trailing],
           if (onCopy != null)
             GestureDetector(
               onTap: onCopy,
               behavior: HitTestBehavior.opaque,
               child: Padding(
                 padding: EdgeInsets.only(left: 8 * s),
-                child: const Icon(Icons.copy, size: 17, color: Color(0xFF2F84FE)),
+                child: const Icon(
+                  Icons.copy,
+                  size: 17,
+                  color: Color(0xFF2F84FE),
+                ),
               ),
             ),
         ],
@@ -333,81 +354,89 @@ class _BandPageState extends State<BandPage> {
     );
   }
 
-  Widget _sectionHeader(String title, double s) => SizedBox(
-        height: 20 * s,
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(title,
-              style: TextStyle(
-                  color: const Color(0xFF838383), fontSize: 15.5 * s)),
+  Widget _sectionHeader(String title, double s) => Padding(
+    padding: const EdgeInsets.fromLTRB(4, 0, 0, AppSpace.sm),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        title,
+        style: AppType.captionStrong.copyWith(
+          color: AppColors.inkTertiary,
+          letterSpacing: 0.6,
         ),
-      );
+      ),
+    ),
+  );
 
   Widget _card({required double s, required Widget child}) => Container(
-        width: double.infinity,
-        padding: EdgeInsets.symmetric(horizontal: 12 * s, vertical: 4 * s),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10 * s),
-        ),
-        child: child,
-      );
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(
+      horizontal: AppSpace.lg,
+      vertical: AppSpace.xs,
+    ),
+    decoration: BoxDecoration(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      border: Border.all(color: AppColors.hairline, width: 0.7),
+    ),
+    child: child,
+  );
 
   Widget _tappableCard({
     required double s,
     required Widget child,
     VoidCallback? onTap,
-  }) =>
-      GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: double.infinity,
-          height: 52,
-          padding: EdgeInsets.symmetric(horizontal: 9 * s),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10 * s),
-          ),
-          alignment: Alignment.centerLeft,
-          child: child,
-        ),
-      );
+  }) => GestureDetector(
+    onTap: onTap,
+    behavior: HitTestBehavior.opaque,
+    child: Container(
+      width: double.infinity,
+      height: 52,
+      padding: EdgeInsets.symmetric(horizontal: 9 * s),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.hairline, width: 0.7),
+      ),
+      alignment: Alignment.centerLeft,
+      child: child,
+    ),
+  );
 
   Widget _hintCard({required double s, required String text}) => Container(
-        width: double.infinity,
-        padding: EdgeInsets.fromLTRB(12 * s, 10 * s, 12 * s, 10 * s),
-        decoration: BoxDecoration(
-          color: const Color(0xFFEAF2FF),
-          borderRadius: BorderRadius.circular(10 * s),
-        ),
-        child: Text(text,
-            style: TextStyle(
-                color: const Color(0xFF4A5568), fontSize: 11.5 * s, height: 1.6)),
-      );
+    width: double.infinity,
+    padding: EdgeInsets.fromLTRB(12 * s, 10 * s, 12 * s, 10 * s),
+    decoration: BoxDecoration(
+      color: AppColors.brandSoft,
+      borderRadius: BorderRadius.circular(AppRadius.row),
+    ),
+    child: Text(
+      text,
+      style: AppType.caption.copyWith(
+        color: AppColors.inkSecondary,
+        height: 1.6,
+      ),
+    ),
+  );
 
-  Widget _statusRow(String label, String value, double s,
-      {Color valueColor = const Color(0xFF333333)}) {
+  Widget _statusRow(
+    String label,
+    String value,
+    double s, {
+    Color valueColor = AppColors.ink,
+  }) {
     return SizedBox(
-      height: 44 * s,
+      height: 46,
       child: Row(
         children: [
-          Expanded(
-            child: Text(label,
-                style: TextStyle(color: Colors.black, fontSize: 15 * s)),
-          ),
-          Text(value,
-              style: TextStyle(
-                  color: valueColor,
-                  fontSize: 14 * s,
-                  fontWeight: FontWeight.w500)),
+          Expanded(child: Text(label, style: AppType.body)),
+          Text(value, style: AppType.captionStrong.copyWith(color: valueColor)),
         ],
       ),
     );
   }
 
-  Widget _divider(double s) =>
-      Container(height: 1, color: const Color(0xFFEEEEEE));
+  Widget _divider(double s) => const AppHairline();
 
   Widget _guide(double s) {
     const steps = <String>[
@@ -430,26 +459,33 @@ class _BandPageState extends State<BandPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 18 * s,
-                  height: 18 * s,
+                  width: 20,
+                  height: 20,
+                  margin: const EdgeInsets.only(top: 1),
                   alignment: Alignment.center,
                   decoration: const BoxDecoration(
-                    color: Color(0xFF2F84FE),
+                    color: AppColors.brand,
                     shape: BoxShape.circle,
                   ),
-                  child: Text('${i + 1}',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 11 * s,
-                          fontWeight: FontWeight.w600)),
+                  child: Text(
+                    '${i + 1}',
+                    style: AppType.caption.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      height: 1.1,
+                    ),
+                  ),
                 ),
-                SizedBox(width: 8 * s),
+                const SizedBox(width: AppSpace.md),
                 Expanded(
-                  child: Text(steps[i],
-                      style: TextStyle(
-                          color: const Color(0xFF333333),
-                          fontSize: 12.5 * s,
-                          height: 1.55)),
+                  child: Text(
+                    steps[i],
+                    style: AppType.body.copyWith(
+                      height: 1.6,
+                      fontWeight: FontWeight.w400,
+                      color: AppColors.inkSecondary,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -469,7 +505,7 @@ class _BandPageState extends State<BandPage> {
         height: 25 * s + 6,
         padding: EdgeInsets.all(4 * s),
         decoration: BoxDecoration(
-          color: value ? const Color(0xFF2F84FE) : const Color(0xFFC4C4C4),
+          color: value ? AppColors.ink : AppColors.surfaceMuted,
           borderRadius: BorderRadius.circular(84),
         ),
         child: AnimatedAlign(

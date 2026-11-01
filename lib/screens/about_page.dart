@@ -1,6 +1,9 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -41,18 +44,12 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
     super.initState();
     // 三个光斑的漂移周期错开（对应 jsx 中的 20s/23s/25s）
     _blobCtrls = [
-      AnimationController(
-        vsync: this,
-        duration: const Duration(seconds: 20),
-      )..repeat(reverse: true),
-      AnimationController(
-        vsync: this,
-        duration: const Duration(seconds: 23),
-      )..repeat(reverse: true),
-      AnimationController(
-        vsync: this,
-        duration: const Duration(seconds: 25),
-      )..repeat(reverse: true),
+      AnimationController(vsync: this, duration: const Duration(seconds: 20))
+        ..repeat(reverse: true),
+      AnimationController(vsync: this, duration: const Duration(seconds: 23))
+        ..repeat(reverse: true),
+      AnimationController(vsync: this, duration: const Duration(seconds: 25))
+        ..repeat(reverse: true),
     ];
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _appVersion = info.version);
@@ -75,9 +72,7 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
     return Positioned.fill(
       child: Stack(
         children: [
-          const Positioned.fill(
-            child: ColoredBox(color: Color(0xFFF2F4F8)),
-          ),
+          const Positioned.fill(child: ColoredBox(color: AppColors.canvas)),
           _blob(
             _blobCtrls[0],
             color: const Color(0x402F84FE), // 主题蓝
@@ -129,9 +124,7 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
         width: diameter,
         height: diameter,
         decoration: BoxDecoration(
-          gradient: RadialGradient(
-            colors: [color, color.withValues(alpha: 0)],
-          ),
+          gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
         ),
       ),
     );
@@ -162,10 +155,10 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                       Text(
                         'SUCHMUSIC',
                         style: TextStyle(
-                          fontSize: 10,
-                          letterSpacing: 6,
-                          fontWeight: FontWeight.w600,
-                          color: _themeBlue.withValues(alpha: 0.7),
+                          fontSize: 12,
+                          letterSpacing: 5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.brand.withValues(alpha: 0.7),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -182,25 +175,15 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                         children: [
                           Text(
                             'v $_appVersion',
-                            style: const TextStyle(
-                                fontSize: 14, color: Color(0xFF7C7C7C)),
+                            style: AppType.caption.copyWith(
+                              color: AppColors.inkSecondary,
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 9, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _themeBlue.withValues(alpha: 0.10),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              '概念版',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: _themeBlue,
-                              ),
-                            ),
+                          const SizedBox(width: AppSpace.sm),
+                          const AppTag(
+                            text: '概念版',
+                            color: AppColors.brand,
+                            background: AppColors.brandSoft,
                           ),
                         ],
                       ),
@@ -208,17 +191,20 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                       Container(
                         margin: EdgeInsets.symmetric(horizontal: cardMargin),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 8),
+                          horizontal: 18,
+                          vertical: 8,
+                        ),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(17),
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(AppRadius.card),
+                          border: Border.all(
+                            color: AppColors.hairline,
+                            width: 0.7,
+                          ),
                         ),
                         child: Column(
                           children: [
-                            _buildMenuRow(
-                              '检查更新',
-                              onTap: _checkUpdate,
-                            ),
+                            _buildMenuRow('检查更新', onTap: _checkUpdate),
                             ..._menuItems.map(
                               (title) => _buildMenuRow(
                                 title,
@@ -239,9 +225,8 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                       // 概念版定位说明：一行小字，与流光背景同灰阶，不抢卡片注意力
                       Text(
                         '独立开发 · 与官方版无隶属或合作关系',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: const Color(0xFF9A9AA0).withValues(alpha: 0.9),
+                        style: AppType.caption.copyWith(
+                          color: AppColors.inkTertiary,
                         ),
                       ),
                       SizedBox(height: size.height * 0.19),
@@ -301,18 +286,15 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
       onTap: onTap, // 空 onTap 为占位：后续可跳转对应页面
       behavior: HitTestBehavior.opaque,
       child: SizedBox(
-        height: 44,
+        height: 48,
         child: Row(
           children: [
-            Text(
-              title,
-              style: const TextStyle(fontSize: 15, color: Colors.black),
-            ),
+            Text(title, style: AppType.body),
             const Spacer(),
             const Icon(
-              Icons.chevron_right,
+              Icons.chevron_right_rounded,
               size: 20,
-              color: Color(0xFFCCCCCC),
+              color: AppColors.inkDisabled,
             ),
           ],
         ),
@@ -334,7 +316,7 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('免责声明'),
-        content: const SingleChildScrollView(
+        content: SingleChildScrollView(
           child: Text(
             '1. 本应用为个人学习与技术研究用途的非官方客户端，与任何音乐平台均无关联。\n\n'
             '2. 「酷狗概念版」音源相关接口为第三方逆向接口，可能随时变更或失效，'
@@ -342,7 +324,7 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
             '3. 本应用仅透传用户自行提供的合法账号凭证，不破解、不绕过任何版权限制，'
             '不提供任何付费内容。\n\n'
             '4. 请使用者在合法合规范围内使用，由此产生的任何法律责任由使用者自行承担。',
-            style: TextStyle(fontSize: 14, height: 1.6),
+            style: AppType.body.copyWith(height: 1.7),
           ),
         ),
         actions: [
@@ -360,14 +342,16 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
     final now = _danmakuElapsed.inMicroseconds / 1e6;
     final wave = _danmakuWaves++;
     for (var i = 0; i < _developers.length; i++) {
-      _danmakuItems.add(_DanmakuItem(
-        devIndex: i,
-        startSeconds: now + i * 0.9, // 同一轮内依次错开进入
-        period: 9.0 + ((i + wave) % 4) * 2.5,
-        // 纵向位置每条随机（屏高 8%~80%），多轮之间再错开一点
-        topFraction: 0.08 + _random.nextDouble() * 0.72,
-        trackOffset: (wave % 4) * 12.0,
-      ));
+      _danmakuItems.add(
+        _DanmakuItem(
+          devIndex: i,
+          startSeconds: now + i * 0.9, // 同一轮内依次错开进入
+          period: 9.0 + ((i + wave) % 4) * 2.5,
+          // 纵向位置每条随机（屏高 8%~80%），多轮之间再错开一点
+          topFraction: 0.08 + _random.nextDouble() * 0.72,
+          trackOffset: (wave % 4) * 12.0,
+        ),
+      );
     }
     _danmakuTicker ??= createTicker((elapsed) {
       _danmakuElapsed = elapsed;
@@ -383,8 +367,10 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
   Widget _buildDanmaku(Size size, _DanmakuItem item, double seconds) {
     final dev = _developers[item.devIndex];
     final i = item.devIndex;
-    final progress =
-        ((seconds - item.startSeconds) / item.period).clamp(0.0, 1.0);
+    final progress = ((seconds - item.startSeconds) / item.period).clamp(
+      0.0,
+      1.0,
+    );
     // 起点在右侧屏外（x = 屏宽），终点在左侧屏外（x = -屏宽），保证完全飘出
     final x = size.width - progress * size.width * 2;
     // 纵向位置：出生时随机决定
@@ -495,12 +481,14 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
               GestureDetector(
                 onTap: () => Navigator.of(ctx).pop(),
                 behavior: HitTestBehavior.opaque,
-                child: const SizedBox(
+                child: SizedBox(
                   height: 48,
                   child: Center(
                     child: Text(
                       '取消',
-                      style: TextStyle(fontSize: 14, color: Color(0xFF999999)),
+                      style: AppType.body.copyWith(
+                        color: AppColors.inkTertiary,
+                      ),
                     ),
                   ),
                 ),
@@ -536,28 +524,20 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF333333),
-                    ),
+                    style: AppType.body.copyWith(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 3),
                   Text(
                     subtitle,
                     style: const TextStyle(
-                      fontSize: 11.5,
+                      fontSize: 12,
                       color: Color(0xFF999999),
                     ),
                   ),
                 ],
               ),
             ),
-            const Icon(
-              Icons.chevron_right,
-              size: 20,
-              color: Color(0xFFCCCCCC),
-            ),
+            const Icon(Icons.chevron_right, size: 20, color: Color(0xFFCCCCCC)),
           ],
         ),
       ),
@@ -609,9 +589,9 @@ class _AboutPageState extends State<AboutPage> with TickerProviderStateMixin {
             onPressed: () {
               Clipboard.setData(const ClipboardData(text: kQQGroupNumber));
               Navigator.of(ctx).pop();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已复制QQ群号')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('已复制QQ群号')));
             },
             child: const Text(
               '复制群号',

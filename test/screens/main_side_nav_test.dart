@@ -1,16 +1,14 @@
 // 宽屏左侧导航（MainSideNav）布局与交互测试 + golden 截图。
 //
-// 覆盖本轮需求：
-//  - 横屏底部不再有悬浮播放「岛」，播放入口落在侧栏底部的当前播放卡；
-//  - 首页 / 本地 / 歌单 三项在侧栏里，点击回调携带正确的标签值；
-//  - 极矮窗口（360dp 高）下不溢出。
+// 一级入口与窄屏底部导航坞一致：首页 / 本地 / 歌单 / 我的；
+// 底部是当前播放卡（宽屏没有底部导航坞，这里是回到播放页的入口）。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:such_music/models/song_model.dart';
-import 'package:such_music/utils/home_tab.dart';
+import 'package:such_music/theme/app_theme.dart';
 import 'package:such_music/widgets/main_side_nav.dart';
 
 const _song = SongModel(
@@ -46,60 +44,61 @@ Future<void> _loadFonts() async {
 }
 
 Widget _host(Widget child) => MaterialApp(
-      theme: ThemeData(fontFamily: 'MiSans', useMaterial3: true),
-      home: Scaffold(backgroundColor: const Color(0xFFF1F2F4), body: child),
+      theme: AppTheme.light(),
+      home: Scaffold(backgroundColor: AppColors.canvas, body: child),
     );
 
 MainSideNav _nav({
-  int tab = HomeTab.home,
-  bool profileSelected = false,
+  int index = 0,
   SongModel? song = _song,
   bool isPlaying = true,
-  ValueChanged<int>? onSelectTab,
-  VoidCallback? onSelectProfile,
+  ValueChanged<int>? onSelect,
   VoidCallback? onTogglePlay,
   VoidCallback? onOpenPlayer,
 }) =>
     MainSideNav(
-      tab: tab,
-      profileSelected: profileSelected,
+      index: index,
       song: song,
       isPlaying: isPlaying,
-      onSelectTab: onSelectTab ?? (_) {},
-      onSelectProfile: onSelectProfile ?? () {},
+      onSelect: onSelect ?? (_) {},
       onTogglePlay: onTogglePlay ?? () {},
       onOpenPlayer: onOpenPlayer ?? () {},
       cover: song == null
           ? null
-          : Container(color: const Color(0xFFCAD9F2), child: const Icon(Icons.music_note, size: 18)),
+          : Container(
+              color: const Color(0xFFCAD9F2),
+              child: const Icon(Icons.music_note, size: 18),
+            ),
     );
 
 void main() {
   setUpAll(_loadFonts);
 
-  testWidgets('侧栏含四个入口 + 底部当前播放卡，点击回调带正确标签', (tester) async {
+  testWidgets('侧栏含四个入口 + 底部当前播放卡，点击回调带正确下标', (tester) async {
     tester.view.physicalSize = const Size(900, 500);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     final picked = <int>[];
-    var profile = 0;
     var toggled = 0;
     var opened = 0;
 
-    await tester.pumpWidget(_host(_nav(
-      onSelectTab: picked.add,
-      onSelectProfile: () => profile++,
-      onTogglePlay: () => toggled++,
-      onOpenPlayer: () => opened++,
-    )));
+    await tester.pumpWidget(
+      _host(
+        _nav(
+          onSelect: picked.add,
+          onTogglePlay: () => toggled++,
+          onOpenPlayer: () => opened++,
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
     for (final label in ['首页', '本地', '歌单', '我的']) {
       expect(find.text(label), findsOneWidget, reason: '侧栏应有「$label」入口');
     }
-    // 当前播放卡（横屏没有底部胶囊，播放入口在这里）
+    // 当前播放卡（横屏没有底部导航坞，播放入口在这里）
     expect(find.text('东风破'), findsOneWidget);
     expect(find.text('周杰伦'), findsOneWidget);
 
@@ -109,26 +108,24 @@ void main() {
     await tester.tap(find.byIcon(Icons.pause_rounded));
     await tester.tap(find.text('东风破'));
 
-    expect(picked, [HomeTab.local, HomeTab.playlists]);
-    expect(profile, 1);
+    expect(picked, [1, 2, 3]);
     expect(toggled, 1);
     expect(opened, 1);
   });
 
-  testWidgets('无歌曲时播放卡为占位且不可点开播放页', (tester) async {
+  testWidgets('无歌曲时不渲染空的播放卡', (tester) async {
     tester.view.physicalSize = const Size(900, 500);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     var opened = 0;
-    await tester.pumpWidget(_host(_nav(song: null, onOpenPlayer: () => opened++)));
+    await tester.pumpWidget(
+      _host(_nav(song: null, onOpenPlayer: () => opened++)),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.text('暂无播放'), findsOneWidget);
-    expect(find.text('选一首歌开始'), findsOneWidget);
+    expect(find.text('暂无播放'), findsNothing);
     expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
-
-    await tester.tap(find.text('暂无播放'));
     expect(opened, 0);
     expect(tester.takeException(), isNull);
   });
@@ -149,7 +146,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(_host(_nav(tab: HomeTab.playlists)));
+    await tester.pumpWidget(_host(_nav(index: 2)));
     await tester.pumpAndSettle();
 
     await expectLater(

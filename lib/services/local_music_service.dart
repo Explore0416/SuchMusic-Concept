@@ -51,8 +51,20 @@ bool isUnknownMeta(String? v) {
 /// 只去一层会留下 `.kgg`，标题里就会带着后缀。这里循环剥到干净为止。
 String stripAudioExtension(String name) {
   const known = {
-    'mp3', 'flac', 'm4a', 'aac', 'wav', 'ogg', 'opus', 'wma',
-    'kgm', 'kgma', 'vpr', 'kgg', 'ape', 'dsf',
+    'mp3',
+    'flac',
+    'm4a',
+    'aac',
+    'wav',
+    'ogg',
+    'opus',
+    'wma',
+    'kgm',
+    'kgma',
+    'vpr',
+    'kgg',
+    'ape',
+    'dsf',
   };
   var result = name;
   while (true) {
@@ -135,15 +147,22 @@ class LocalTrack {
   }
 
   /// 转成播放器可用的歌曲模型；[playUri] 允许用解码后的路径覆盖原始 Uri。
+  ///
+  /// **必须同时带上 [SongModel.localPath]**：播放器靠它走 `file://` 原生文件
+  /// 通道（`content://` 被部分 ROM 拒绝时这是唯一能播的路），内嵌封面与本地
+  /// 歌词也靠它定位。早期版本只写了 `localUri`，导致「点了报 Source error、
+  /// 封面歌名全空」。
   SongModel toSongModel({String? playUri}) {
+    final effective = playUri ?? uri;
     return SongModel(
-      id: 'local:${playUri ?? uri}',
+      id: 'local:$effective',
       name: name.isEmpty ? '未命名' : name,
       artist: artist.isEmpty ? '未知歌手' : artist,
       album: album.isEmpty ? '本地文件' : album,
       duration: durationMs > 0 ? durationMs : null,
       source: SongSource.local,
-      localUri: playUri ?? uri,
+      localUri: effective,
+      localPath: filePathOfUri(effective) ?? path,
     );
   }
 
@@ -170,6 +189,31 @@ class LocalTrack {
   }
 }
 
+/// 从播放地址取出真实文件路径。
+///
+/// `file://` 与裸路径（`/storage/...`）都能拿到路径；`content://` 拿不到——
+/// 它没有文件系统路径，只能交给 ContentResolver。
+String? filePathOfUri(String? uriOrPath) {
+  if (uriOrPath == null) return null;
+  final v = uriOrPath.trim();
+  if (v.isEmpty) return null;
+  if (v.startsWith('content://')) return null;
+  if (v.startsWith('file://')) return Uri.tryParse(v)?.toFilePath();
+  if (v.contains('://')) return null; // http(s) 等网络地址
+  return v;
+}
+
+/// 按歌曲反查扫描结果里的原始条目。
+///
+/// [SongModel.id] 带 `local:` 前缀（见 [LocalTrack.toSongModel]），而扫描结果
+/// 的键是**裸 uri**。用 `tracks[song.id]` 永远查不到，表现为点击后静默返回、
+/// 一首也放不出来；这里以 `localUri` 为准，`id` 只作兜底。
+LocalTrack? findTrackFor(Map<String, LocalTrack> tracks, SongModel song) {
+  final byUri = tracks[song.localUri];
+  if (byUri != null) return byUri;
+  return tracks[song.id];
+}
+
 /// 本地音乐扫描（调用 Android 侧 MediaStore + 目录遍历）。
 ///
 /// 全流程本地进行：不联网、不上传任何文件信息。
@@ -178,15 +222,17 @@ class LocalMusicService {
 
   static final LocalMusicService instance = LocalMusicService._();
 
-  static const MethodChannel _channel =
-      MethodChannel('com.lightningteam.suchmusic/local_music');
+  static const MethodChannel _channel = MethodChannel(
+    'com.lightningteam.suchmusic/local_music',
+  );
 
   /// 扫描本地音乐。无音频权限时会先由原生侧发起授权请求，授权后自动继续。
   Future<LocalScanResult> scan() async {
     try {
       final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>('scan');
       if (raw == null) return LocalScanResult.empty;
-      final list = (raw['tracks'] as List?)
+      final list =
+          (raw['tracks'] as List?)
               ?.whereType<Map<dynamic, dynamic>>()
               .map(LocalTrack.fromMap)
               .where((t) => t.uri.isNotEmpty)

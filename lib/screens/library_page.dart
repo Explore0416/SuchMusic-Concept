@@ -1,20 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../services/user_library_service.dart';
-import '../utils/responsive.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 import '../widgets/design_dialog.dart';
 import 'kugou_playlist_page.dart';
 import 'song_picker_page.dart';
 import 'user_playlist_detail_page.dart';
 
-/// 「歌单」总页：我喜欢的音乐 / 自建歌单 / 酷狗歌单。
+/// 「歌单」页：我喜欢的音乐 / 自建歌单 / 酷狗歌单。
 ///
-/// 三块内容放在同一页，避免「歌单」和「酷狗歌单」两个入口各占一行。
+/// 三块内容收在同一页，避免「歌单」和「酷狗歌单」两个入口各占一行。
+/// 顶部大标题建立页面身份；「我喜欢的音乐」用一张主卡突出，其余按组排列。
 class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key, this.embedded = false});
 
-  /// 嵌入首页「歌单」标签时置 true：不套 Scaffold / AppBar，
-  /// 由宿主页面提供背景与标题（宽屏时标题已在左侧导航上）。
+  /// 兼容旧调用：嵌入形态不再需要单独的 Scaffold，页面始终自带标题。
   final bool embedded;
 
   @override
@@ -24,196 +25,180 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   final UserLibraryService _lib = UserLibraryService.instance;
 
-  static const Color _accent = Color(0xFF2F84FE);
-  static const Color _sub = Color(0xFF999999);
-
   @override
   Widget build(BuildContext context) {
-    final s = Responsive.uiScale(MediaQuery.of(context).size);
-    return ValueListenableBuilder<int>(
-      valueListenable: _lib.version,
-      builder: (_, _, _) {
-        final body = _buildBody(s);
-        if (widget.embedded) {
-          // 嵌入首页标签：底部要避开悬浮播放胶囊，留出足够余量
-          return ListView(
-            padding: EdgeInsets.fromLTRB(12 * s, 8 * s, 12 * s, 108),
-            children: _bodyChildren(s),
-          );
-        }
-        return Scaffold(
-          backgroundColor: const Color(0xFFF5F6F8),
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0,
-            title: Text(
-              '歌单',
-              style: TextStyle(fontSize: 17 * s, fontWeight: FontWeight.w600),
-            ),
+    return SafeArea(
+      bottom: false,
+      child: ValueListenableBuilder<int>(
+        valueListenable: _lib.version,
+        builder: (_, _, _) => ListView(
+          padding: const EdgeInsets.only(
+            bottom: AppLayout.bottomInsetWithPlayer,
           ),
-          body: body,
-        );
-      },
+          children: [
+            AppPageHeader(
+              title: '歌单',
+              subtitle: '喜欢的歌与自建歌单都收在这里',
+              trailing: AppIconButton(
+                icon: Icons.add_rounded,
+                filled: true,
+                onTap: _createPlaylist,
+                tooltip: '新建歌单',
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+              child: _buildLikedCard(),
+            ),
+            const SizedBox(height: AppSpace.xxl),
+            AppSectionHeader(
+              title: '我的歌单',
+              actionLabel: _lib.playlists.isEmpty ? null : '新建',
+              onAction: _lib.playlists.isEmpty ? null : _createPlaylist,
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+              child: _lib.playlists.isEmpty
+                  ? _buildEmptyPlaylists()
+                  : _buildPlaylistCard(),
+            ),
+            const SizedBox(height: AppSpace.xxl),
+            const AppSectionHeader(title: '酷狗歌单'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+              child: AppCard(
+                child: AppListTile(
+                  icon: Icons.cloud_outlined,
+                  title: '查看酷狗歌单',
+                  subtitle: '登录后可查看账号歌单，也可粘贴链接导入',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const KugouPlaylistPage(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpace.xxxl),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildBody(double s) => ListView(
-    padding: EdgeInsets.fromLTRB(12 * s, 12 * s, 12 * s, 24 * s),
-    children: _bodyChildren(s),
-  );
-
-  List<Widget> _bodyChildren(double s) => [
-    _card(
-      s,
-      children: [
-        _tile(
-          s,
-          icon: Icons.favorite,
-          iconColor: const Color(0xFFFF5A7A),
-          title: '我喜欢的音乐',
-          subtitle: _lib.likedSongs.isEmpty
-              ? '播放时点 ♡ 收藏到这里'
-              : '${_lib.likedSongs.length} 首',
-          onTap: () => _openLiked(),
+  /// 我喜欢的音乐：单独一张主卡，用玫瑰色系与收藏语义绑定。
+  Widget _buildLikedCard() {
+    final count = _lib.likedSongs.length;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFFE9EE), Color(0xFFFFF7F3)],
         ),
-        _divider(s),
-        _tile(
-          s,
-          icon: Icons.add_circle_outline,
-          iconColor: _accent,
-          title: '新建歌单',
-          subtitle: '从当前播放列表多选添加',
-          onTap: () => _createPlaylist(s),
-        ),
-      ],
-    ),
-    SizedBox(height: 16 * s),
-    _sectionTitle(s, '我的歌单'),
-    SizedBox(height: 8 * s),
-    if (_lib.playlists.isEmpty)
-      _hint(s, '还没有自建歌单，点上方「新建歌单」开始')
-    else
-      _card(
-        s,
-        children: [
-          for (var i = 0; i < _lib.playlists.length; i++) ...[
-            if (i > 0) _divider(s),
-            _tile(
-              s,
-              icon: Icons.queue_music,
-              iconColor: _accent,
-              title: _lib.playlists[i].name,
-              subtitle: '${_lib.playlists[i].songs.length} 首',
-              onTap: () => _openPlaylist(_lib.playlists[i].id),
-            ),
-          ],
-        ],
+        border: Border.all(color: const Color(0xFFFBDDE4), width: 0.7),
       ),
-    SizedBox(height: 16 * s),
-    _sectionTitle(s, '酷狗歌单'),
-    SizedBox(height: 8 * s),
-    _card(
-      s,
-      children: [
-        _tile(
-          s,
-          icon: Icons.cloud_outlined,
-          iconColor: _accent,
-          title: '查看酷狗歌单',
-          subtitle: '登录后可查看账号歌单，也可粘贴链接导入',
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const KugouPlaylistPage()),
-          ),
-        ),
-      ],
-    ),
-  ];
-
-  Widget _sectionTitle(double s, String text) => Padding(
-    padding: EdgeInsets.only(left: 4 * s),
-    child: Text(
-      text,
-      style: TextStyle(
-        fontSize: 13 * s,
-        color: _sub,
-        fontWeight: FontWeight.w500,
-      ),
-    ),
-  );
-
-  Widget _hint(double s, String text) => Padding(
-    padding: EdgeInsets.symmetric(vertical: 18 * s),
-    child: Text(
-      text,
-      textAlign: TextAlign.center,
-      style: TextStyle(fontSize: 12 * s, color: _sub),
-    ),
-  );
-
-  Widget _card(double s, {required List<Widget> children}) => Container(
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12 * s),
-    ),
-    child: Column(children: children),
-  );
-
-  Widget _divider(double s) => Divider(
-    height: 1,
-    indent: 56 * s,
-    endIndent: 12 * s,
-    color: const Color(0xFFF0F0F0),
-  );
-
-  Widget _tile(
-    double s, {
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-  }) => InkWell(
-    onTap: onTap,
-    child: Padding(
-      padding: EdgeInsets.symmetric(horizontal: 14 * s, vertical: 12 * s),
-      child: Row(
-        children: [
-          Icon(icon, size: 22 * s, color: iconColor),
-          SizedBox(width: 12 * s),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _openLiked,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpace.lg),
+            child: Row(
               children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15 * s,
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w500,
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(
+                    color: AppColors.surface,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.favorite_rounded,
+                    size: 24,
+                    color: AppColors.rose,
                   ),
                 ),
-                SizedBox(height: 2 * s),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5 * s, color: _sub),
+                const SizedBox(width: AppSpace.lg),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        '我喜欢的音乐',
+                        style: TextStyle(
+                          fontSize: 17,
+                          height: 1.3,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        count == 0 ? '播放时点爱心，收藏到这里' : '$count 首',
+                        style: AppType.caption.copyWith(
+                          color: const Color(0xFF9A6270),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  size: 22,
+                  color: Color(0xFFC99AA6),
                 ),
               ],
             ),
           ),
-          Icon(
-            Icons.chevron_right,
-            size: 18 * s,
-            color: const Color(0xFFCCCCCC),
-          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlaylistCard() {
+    final playlists = _lib.playlists;
+    return AppCard(
+      child: Column(
+        children: [
+          for (var i = 0; i < playlists.length; i++) ...[
+            if (i > 0) const AppHairline(indent: 66),
+            AppListTile(
+              icon: Icons.queue_music_rounded,
+              title: playlists[i].name,
+              subtitle: '${playlists[i].songs.length} 首',
+              onTap: () => _openPlaylist(playlists[i].id),
+              trailing: const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: AppColors.inkDisabled,
+              ),
+            ),
+          ],
         ],
       ),
-    ),
-  );
+    );
+  }
+
+  Widget _buildEmptyPlaylists() {
+    return AppCard(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+        child: AppEmptyState(
+          icon: Icons.queue_music_rounded,
+          title: '还没有自建歌单',
+          message: '把常听的歌整理成一张自己的歌单',
+          actionLabel: '新建歌单',
+          onAction: _createPlaylist,
+          compact: true,
+        ),
+      ),
+    );
+  }
 
   void _openLiked() {
     Navigator.push(
@@ -232,7 +217,7 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  Future<void> _createPlaylist(double s) async {
+  Future<void> _createPlaylist() async {
     final controller = TextEditingController();
     final name = await showDialog<String>(
       context: context,
@@ -249,8 +234,9 @@ class _LibraryPageState extends State<LibraryPage> {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('取消'),
           ),
-          TextButton(
+          FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
             child: const Text('创建'),
           ),
         ],

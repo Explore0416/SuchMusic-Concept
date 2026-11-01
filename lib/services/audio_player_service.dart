@@ -12,7 +12,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song_model.dart';
 import '../utils/app_constants.dart';
 import 'island_service.dart';
+import 'kgm_decoder.dart';
 import 'local_lyric_service.dart';
+import 'local_music_service.dart';
 import 'lyrics_parser.dart';
 import '../utils/audio_cover.dart';
 import 'karaoke/karaoke_model.dart';
@@ -33,6 +35,33 @@ Uri? localSourceUriOf(SongModel song) {
   final local = song.localUri;
   if (local == null || local.isEmpty) return null;
   return Uri.tryParse(local);
+}
+
+/// 本地曲目的**候选播放地址**，按可靠性排序（已去重）。
+///
+/// ① 真实文件路径 → `file://`：ExoPlayer 的原生文件通道，时长/拖动/内嵌封面
+///    都最准，也是 `content://` 被 ROM 拒绝（SecurityException / 无权限）时
+///    唯一还能播的路；
+/// ② 原始 `localUri`：MediaStore 的 `content://`，或目录扫描得到的 `file://`。
+///
+/// 一条都不返回，说明这首歌压根没有可用的本地地址（不是本地曲目）。
+List<Uri> localPlaybackUris(SongModel song) {
+  final out = <Uri>[];
+  void add(Uri? u) {
+    if (u == null) return;
+    final s = u.toString();
+    if (s.isEmpty) return;
+    if (out.any((e) => e.toString() == s)) return;
+    out.add(u);
+  }
+
+  final path = filePathOfUri(song.localPath) ?? filePathOfUri(song.localUri);
+  if (path != null && path.isNotEmpty) add(Uri.file(path));
+  add(localSourceUriOf(song));
+  // localPath 里塞了 content:// 的历史脏数据也认一次
+  final raw = song.localPath;
+  if (raw != null && raw.startsWith('content://')) add(Uri.tryParse(raw));
+  return out;
 }
 
 enum PlayerState { idle, loading, playing, paused, error }
@@ -103,10 +132,8 @@ class AudioPlayerService {
         if (!await coverDir.exists()) {
           await coverDir.create(recursive: true);
         }
-        final ext =
-            (bytes.length > 3 && bytes[0] == 0x89) ? 'png' : 'jpg';
-        final file =
-            File('${coverDir.path}/local_${path.hashCode}.$ext');
+        final ext = (bytes.length > 3 && bytes[0] == 0x89) ? 'png' : 'jpg';
+        final file = File('${coverDir.path}/local_${path.hashCode}.$ext');
         if (!await file.exists()) {
           await file.writeAsBytes(bytes);
         }
@@ -295,7 +322,8 @@ class AudioPlayerService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await applyMixWithOthers(
-          prefs.getBool(AppConstants.allowMixWithOthers) ?? false);
+        prefs.getBool(AppConstants.allowMixWithOthers) ?? false,
+      );
     } catch (_) {}
     // 恢复逐字歌词开关与下一首预缓存开关
     try {
@@ -320,13 +348,15 @@ class AudioPlayerService {
     try {
       final session = await AudioSession.instance;
       if (allow) {
-        await session.configure(const AudioSessionConfiguration(
-          avAudioSessionCategory: AVAudioSessionCategory.playback,
-          avAudioSessionCategoryOptions:
-              AVAudioSessionCategoryOptions.mixWithOthers,
-          androidAudioFocusGainType:
-              AndroidAudioFocusGainType.gainTransientMayDuck,
-        ));
+        await session.configure(
+          const AudioSessionConfiguration(
+            avAudioSessionCategory: AVAudioSessionCategory.playback,
+            avAudioSessionCategoryOptions:
+                AVAudioSessionCategoryOptions.mixWithOthers,
+            androidAudioFocusGainType:
+                AndroidAudioFocusGainType.gainTransientMayDuck,
+          ),
+        );
       } else {
         await session.configure(const AudioSessionConfiguration.music());
       }
@@ -438,6 +468,7 @@ class AudioPlayerService {
     }
     return -1;
   }
+
   List<SongModel> get playlist => List.unmodifiable(_playlist);
   int get currentIndex => _currentIndex;
   PlayMode get playMode => _playMode;
@@ -566,8 +597,10 @@ class AudioPlayerService {
     }
 
     // 2) 按歌曲归属音源取歌词（网易云 / 酷狗各自接口）；失败静默无歌词
-    final lrcText = await SourceManager()
-        .withFallback<String>(song, (src, s, strict) => src.getLyrics(s));
+    final lrcText = await SourceManager().withFallback<String>(
+      song,
+      (src, s, strict) => src.getLyrics(s),
+    );
     if (_currentSong?.id != song.id) return; // 等待期间已切歌，丢弃过期结果
     if (lrcText != null && lrcText.isNotEmpty) {
       _lyrics = parseLrc(lrcText);
@@ -582,8 +615,11 @@ class AudioPlayerService {
 
   /// 触发逐字对齐（后台：下载→解码→isolate 计算，就绪后经监听推送）。
   /// 逐字开关关闭时直接跳过；缓存命中立即推送。
-  Future<void> _requestKaraoke(String songId, String lrcText,
-      {String? localAudioPath}) async {
+  Future<void> _requestKaraoke(
+    String songId,
+    String lrcText, {
+    String? localAudioPath,
+  }) async {
     if (!_karaokeEnabled) return;
     KaraokeService().attachLyrics(songId, lrcText);
     final hit = localAudioPath != null
@@ -612,8 +648,11 @@ class AudioPlayerService {
     if (song == null) return;
     if (_currentLrc.isNotEmpty) {
       // 复用当前歌词原文直接重新对齐，避免重新拉歌词导致歌词列表闪烁
-      await _requestKaraoke(song.id, _currentLrc,
-          localAudioPath: song.isLocal ? song.localPath : null);
+      await _requestKaraoke(
+        song.id,
+        _currentLrc,
+        localAudioPath: song.isLocal ? song.localPath : null,
+      );
     } else {
       _loadLyricsFor(song);
     }
@@ -639,7 +678,8 @@ class AudioPlayerService {
     final cur = _currentSong;
     if (cur == null) return null;
     final st = KaraokeService().stateOf(cur.id)?.status;
-    final computing = st == KaraokeStatus.downloading ||
+    final computing =
+        st == KaraokeStatus.downloading ||
         st == KaraokeStatus.decoding ||
         st == KaraokeStatus.aligning;
     if (computing) {
@@ -733,6 +773,9 @@ class AudioPlayerService {
   /// 有本地音频源，直接跑逐字对齐管线（无需下载）
   Future<void> _extractLocalLyrics(SongModel song) async {
     final songId = song.id;
+    // 只有 content:// 地址的条目没有文件路径，提取内嵌歌词/同名 .lrc 都无从下手
+    final path = song.localPath;
+    if (path == null || path.isEmpty) return;
     _karaokeSub?.cancel();
     _karaokeSub = KaraokeService().onStateChanged.listen((s) {
       if (!_karaokeEnabled) return;
@@ -749,7 +792,7 @@ class AudioPlayerService {
         _karaokeController.add(null);
       }
     });
-    final lrc = await AudioCoverExtractor.extractLyrics(song.localPath!);
+    final lrc = await AudioCoverExtractor.extractLyrics(path);
     if (_currentSong?.id != songId) return; // 等待期间已切歌，丢弃过期结果
     if (lrc != null && lrc.isNotEmpty) {
       _lyrics = parseLrc(lrc);
@@ -757,9 +800,76 @@ class AudioPlayerService {
       _updateCurrentLyric(_position);
       _currentLrc = lrc;
       // 本地文件直接送对齐管线生成逐字数据（就绪后经上面监听推送）
-      await _requestKaraoke(songId, lrc, localAudioPath: song.localPath);
+      await _requestKaraoke(songId, lrc, localAudioPath: path);
     }
     unawaited(_maybePrecacheNext());
+  }
+
+  /// 装载一条本地源。`file://` 走原生文件通道（时长/seek 才准确），
+  /// 其余（`content://`）交给 MediaStore 的 ContentResolver。
+  ///
+  /// 超时压到 10 秒：坏文件会让 ExoPlayer 长时间卡在 loading，
+  /// 界面表现为「转圈圈转到天荒地老」，比直接报错还难受。
+  Future<void> _loadLocalSource(Uri target) async {
+    const limit = Duration(seconds: 10);
+    if (target.scheme == 'file') {
+      await _player
+          .setFilePath(target.toFilePath(), preload: true)
+          .timeout(limit);
+      return;
+    }
+    await _player.setAudioSource(AudioSource.uri(target)).timeout(limit);
+  }
+
+  /// 把本地播放失败翻译成一句能照着做的话。
+  ///
+  /// ExoPlayer 只会回一个 `(0) Source error`（TYPE_SOURCE，连原因都不带），
+  /// 直接甩给用户等于什么都没说。这里把能查的都查一遍：文件还在不在、
+  /// 是不是空文件、有没有读权限、文件头是不是标准音频容器。
+  Future<String> describeLocalPlaybackFailure(
+    SongModel song,
+    Object? error,
+  ) async {
+    final name = song.name;
+    final path = filePathOfUri(song.localPath) ?? filePathOfUri(song.localUri);
+    if (path == null || path.isEmpty) {
+      // content:// 也有可能失败，但至少把 id 给出来方便定位
+      final uri = song.localUri ?? '（无地址）';
+      return '「$name」读取失败：$uri 打不开，请到「本地音乐」重新扫描';
+    }
+    final file = File(path);
+    if (!await file.exists()) {
+      return '「$name」的文件已不存在（可能被移动或清理），重新扫描后再试';
+    }
+    int size;
+    try {
+      size = await file.length();
+    } catch (_) {
+      size = -1;
+    }
+    if (size == 0) return '「$name」是空文件（0 字节），可能没有下载完整';
+
+    Uint8List? head;
+    try {
+      final raf = await file.open();
+      head = Uint8List.fromList(await raf.read(64));
+      await raf.close();
+    } on FileSystemException catch (e) {
+      if (e.osError?.errorCode == 13) {
+        return '没有读取「$name」的权限，请在系统设置里授予「所有文件访问」后重试';
+      }
+      return '读不了「$name」：${e.osError?.message ?? e.message}';
+    } catch (_) {
+      // 读头失败不影响后面的判断，交给播放器错误信息兜底
+    }
+
+    if (head != null && head.isNotEmpty && !KgmDecoder.looksLikeAudio(head)) {
+      return '「$name」不是标准音频文件（可能是加密或专有格式），当前无法播放';
+    }
+    if (head == null || head.isEmpty) {
+      return '「$name」读不出内容，文件可能已损坏';
+    }
+    return '「$name」的系统解码器不支持该编码，换一首试试';
   }
 
   Future<bool> play(SongModel song, {bool exitFm = true}) async {
@@ -780,8 +890,8 @@ class AudioPlayerService {
       final localFile = (localPath != null && localPath.isNotEmpty)
           ? localPath
           : null;
-      final isLocalSong = localUri != null || localFile != null ||
-          song.source.isLocal;
+      final isLocalSong =
+          localUri != null || localFile != null || song.source.isLocal;
 
       // 本地歌曲：注入 local:// 封面键（走内嵌封面缓存链路），不污染原对象
       final uiSong = localFile != null && song.coverUrl == null
@@ -798,9 +908,8 @@ class AudioPlayerService {
 
       // 本地歌曲：直接播文件，跳过在线取址 / 试听判定 / 封面回填
       if (isLocalSong) {
-        final target = localUri ??
-            (localFile != null ? Uri.file(localFile) : null);
-        if (target == null) {
+        final candidates = localPlaybackUris(song);
+        if (candidates.isEmpty) {
           // 本地曲目没有地址时绝不回退在线音源：那只会拿到 404/断链，
           // 表现为 just_audio 的 "Connection aborted" / "(0) Source error"。
           _lastError = '本地文件路径已失效，请从「本地音乐」重新选择该歌曲';
@@ -808,15 +917,25 @@ class AudioPlayerService {
           return false;
         }
         _fetchLyrics(uiSong);
-        if (target.scheme == 'file') {
-          // 原生文件通道：避免把 file:// 当网络流处理时 duration=00:00
-          await _player
-              .setFilePath(target.toFilePath(), preload: true)
-              .timeout(const Duration(seconds: 15));
-        } else {
-          await _player
-              .setAudioSource(AudioSource.uri(target))
-              .timeout(const Duration(seconds: 15));
+        // 逐条通道试：file:// 在前，content:// 兜底。任何一条成功就播，
+        // 全失败才认输——并把「文件到底怎么了」翻成一句人话。
+        Object? lastFailure;
+        var loaded = false;
+        for (final candidate in candidates) {
+          try {
+            await _loadLocalSource(candidate);
+            loaded = true;
+            break;
+          } catch (e) {
+            lastFailure = e;
+            debugPrint('[player] 本地源不可用 $candidate: $e');
+          }
+        }
+        if (!loaded) {
+          _lastError = await describeLocalPlaybackFailure(uiSong, lastFailure);
+          debugPrint('[player] 本地播放失败: ${uiSong.name} / $lastFailure');
+          _updateState(PlayerState.error);
+          return false;
         }
         if (gen != _playGeneration) return true;
         _trialController.add(false);
@@ -829,7 +948,9 @@ class AudioPlayerService {
 
       // 在线曲目：按歌曲归属音源取地址（网易云 / 酷狗），严格模式下不用兜底外链
       final url = await SourceManager().withFallback<String>(
-          song, (src, s, strict) => src.getSongUrl(s, strict: strict));
+        song,
+        (src, s, strict) => src.getSongUrl(s, strict: strict),
+      );
       if (gen != _playGeneration) {
         return true; // 等待期间用户已切歌，本次请求被取代，不算失败
       }
@@ -841,7 +962,8 @@ class AudioPlayerService {
 
       // 试听判定：未登录时 VIP 歌（fee=1）只能拿到试听片段
       _trialController.add(
-          !MusicApiService().hasCachedUser && (song.fee ?? 0) == 1);
+        !MusicApiService().hasCachedUser && (song.fee ?? 0) == 1,
+      );
 
       await _player
           .setAudioSource(AudioSource.uri(Uri.parse(url)))
@@ -852,7 +974,9 @@ class AudioPlayerService {
 
       if (song.coverUrl == null || song.coverUrl!.isEmpty) {
         final detail = await SourceManager().withFallback<SongModel>(
-            song, (src, s, strict) => src.getSongDetail(s));
+          song,
+          (src, s, strict) => src.getSongDetail(s),
+        );
         if (gen != _playGeneration) return true;
         if (detail != null && detail.coverUrl != null) {
           _currentSong = detail;
@@ -887,6 +1011,41 @@ class AudioPlayerService {
 
   Future<void> pause() async {
     await _player.pause();
+  }
+
+  // ── 定时关闭 ────────────────────────────────────────────────
+  // 放在服务层而不是页面里：用户设了 30 分钟，退出播放页也应该继续计时。
+
+  Timer? _sleepTimer;
+  DateTime? _sleepDeadline;
+
+  /// 定时关闭的到点时间；为空表示没开。
+  DateTime? get sleepDeadline => _sleepDeadline;
+
+  bool get hasSleepTimer => _sleepDeadline != null;
+
+  /// 剩余时间（未开启时为 null）。
+  Duration? get sleepRemaining {
+    final d = _sleepDeadline;
+    if (d == null) return null;
+    final left = d.difference(DateTime.now());
+    return left.isNegative ? Duration.zero : left;
+  }
+
+  void startSleepTimer(Duration duration) {
+    _sleepTimer?.cancel();
+    _sleepDeadline = DateTime.now().add(duration);
+    _sleepTimer = Timer(duration, () async {
+      _sleepDeadline = null;
+      _sleepTimer = null;
+      await pause();
+    });
+  }
+
+  void cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepDeadline = null;
   }
 
   Future<void> resume() async {
@@ -988,7 +1147,8 @@ class AudioPlayerService {
     // 本地歌曲：注入 local:// 封面键（走内嵌封面缓存链路），不污染原列表对象
     final displaySongs = <SongModel>[
       for (final s in songs)
-        if (s.localPath != null && s.localPath!.isNotEmpty &&
+        if (s.localPath != null &&
+            s.localPath!.isNotEmpty &&
             s.coverUrl == null)
           s.copyWith(coverUrl: localCoverKey(s.localPath!))
         else
@@ -1023,14 +1183,16 @@ class AudioPlayerService {
         final i = cursor++;
         final song = songs[i];
         // 本地歌曲无需在线取址
-        if (localSourceUriOf(song) != null || song.source.isLocal) {
+        if (localPlaybackUris(song).isNotEmpty || song.source.isLocal) {
           urls[i] = 'local';
           trialFlags[i] = false;
           continue;
         }
         // 按歌曲归属音源取地址（网易云 / 酷狗），严格模式避免拿兜底断链
         final url = await SourceManager().withFallback<String>(
-            song, (src, x, strict) => src.getSongUrl(x, strict: strict));
+          song,
+          (src, x, strict) => src.getSongUrl(x, strict: strict),
+        );
         urls[i] = url;
         trialFlags[i] = anonymous && (song.fee ?? 0) == 1;
       }
@@ -1046,20 +1208,18 @@ class AudioPlayerService {
     final sources = <AudioSource>[];
     for (var i = 0; i < songs.length; i++) {
       final song = songs[i];
-      final localUri = localSourceUriOf(song);
-      final localPath = song.localPath;
-      // 本地音乐（含解密后的 .kgm）优先用 localUri：它没有在线音源，
-      // 走 SourceManager 只会拿到 null → 队列为空 → 直接 error、时长 00:00。
-      if (localUri != null) {
+      // 本地音乐（含解密后的 .kgm）优先用真实文件路径：content:// 在部分
+      // ROM 上会被 ExoPlayer 拒绝，而 file:// 是原生文件通道，最稳。
+      final localUris = localPlaybackUris(song);
+      if (localUris.isNotEmpty) {
         playable.add(displaySongs[i]);
         playableTrial.add(false);
-        sources.add(AudioSource.uri(localUri));
-        continue;
-      }
-      if (localPath != null && localPath.isNotEmpty) {
-        playable.add(displaySongs[i]);
-        playableTrial.add(false);
-        sources.add(AudioSource.file(localPath));
+        final first = localUris.first;
+        sources.add(
+          first.scheme == 'file'
+              ? AudioSource.file(first.toFilePath())
+              : AudioSource.uri(first),
+        );
         continue;
       }
       // 本地曲目缺地址时不回退在线音源（见 play() 同名判断）
@@ -1230,8 +1390,7 @@ class AudioPlayerService {
       _pushPlayHistory(_currentIndex);
       _currentIndex = _nextShuffleIndex();
     } else {
-      _currentIndex =
-          (_currentIndex - 1 + _playlist.length) % _playlist.length;
+      _currentIndex = (_currentIndex - 1 + _playlist.length) % _playlist.length;
     }
     _savePlaylist();
     await play(_playlist[_currentIndex]);

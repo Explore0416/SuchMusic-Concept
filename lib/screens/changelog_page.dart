@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 /// 更新日志页面
@@ -14,8 +17,6 @@ class ChangelogPage extends StatefulWidget {
 }
 
 class _ChangelogPageState extends State<ChangelogPage> {
-  static const Color _themeBlue = Color(0xFF2F84FE);
-
   List<ChangelogEntry> _entries = const [];
   bool _loading = true;
   String? _error;
@@ -51,44 +52,32 @@ class _ChangelogPageState extends State<ChangelogPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F4F8),
+      backgroundColor: AppColors.canvas,
       body: SafeArea(
-        child: Stack(
+        bottom: false,
+        child: Column(
           children: [
-            Column(
-              children: [
-                const SizedBox(
-                  height: 44,
-                  child: Center(
-                    child: Text(
-                      '更新日志',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF333333),
-                      ),
-                    ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.sm,
+                AppSpace.sm,
+                AppSpace.page,
+                AppSpace.lg,
+              ),
+              child: Row(
+                children: [
+                  AppIconButton(
+                    icon: Icons.arrow_back_ios_new_rounded,
+                    iconSize: 18,
+                    tooltip: '返回',
+                    onTap: () => Navigator.maybePop(context),
                   ),
-                ),
-                Expanded(child: _buildBody()),
-              ],
-            ),
-            Positioned(
-              left: 4,
-              top: 4,
-              child: GestureDetector(
-                onTap: () => Navigator.pop(context),
-                behavior: HitTestBehavior.opaque,
-                child: const Padding(
-                  padding: EdgeInsets.all(10),
-                  child: Icon(
-                    Icons.arrow_back_ios_new,
-                    size: 20,
-                    color: Color(0xFF333333),
-                  ),
-                ),
+                  const SizedBox(width: AppSpace.xs),
+                  const Text('更新日志', style: AppType.display),
+                ],
               ),
             ),
+            Expanded(child: _buildBody()),
           ],
         ),
       ),
@@ -119,8 +108,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
     }
     if (_entries.isEmpty) {
       return const Center(
-        child: Text('暂无更新记录',
-            style: TextStyle(fontSize: 13, color: Color(0xFF999999))),
+        child: Text(
+          '暂无更新记录',
+          style: TextStyle(fontSize: 13, color: Color(0xFF999999)),
+        ),
       );
     }
     return ListView.separated(
@@ -132,14 +123,15 @@ class _ChangelogPageState extends State<ChangelogPage> {
         final open = _expanded.contains(e.version);
         return Container(
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(17),
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.hairline, width: 0.7),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               InkWell(
-                borderRadius: BorderRadius.circular(17),
+                borderRadius: BorderRadius.circular(AppRadius.card),
                 onTap: () => setState(() {
                   if (open) {
                     _expanded.remove(e.version);
@@ -153,38 +145,24 @@ class _ChangelogPageState extends State<ChangelogPage> {
                     children: [
                       Text(
                         'v${e.version}',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF333333),
+                        style: AppType.body.copyWith(
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                       if (i == 0) ...[
                         const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: _themeBlue.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(7),
-                          ),
-                          child: const Text(
-                            '当前最新',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: _themeBlue,
-                            ),
-                          ),
+                        const AppTag(
+                          text: '当前最新',
+                          color: AppColors.brand,
+                          background: AppColors.brandSoft,
                         ),
                       ],
                       const Spacer(),
                       if (e.date.isNotEmpty)
                         Text(
                           e.date,
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            color: Color(0xFF999999),
+                          style: AppType.caption.copyWith(
+                            color: AppColors.inkTertiary,
                           ),
                         ),
                       const SizedBox(width: 4),
@@ -201,11 +179,11 @@ class _ChangelogPageState extends State<ChangelogPage> {
               ),
               if (open)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Divider(height: 1, color: Color(0xFFF0F0F0)),
+                      const AppHairline(),
                       const SizedBox(height: 10),
                       for (final block in e.blocks) _buildBlock(block),
                     ],
@@ -225,11 +203,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
           padding: const EdgeInsets.only(top: 10, bottom: 2),
           child: Text(
             b.text,
-            style: const TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF333333),
-            ),
+            style: AppType.body.copyWith(fontWeight: FontWeight.w700),
           ),
         );
       case ChangelogBlockKind.quote:
@@ -237,24 +211,17 @@ class _ChangelogPageState extends State<ChangelogPage> {
           margin: const EdgeInsets.only(top: 4, bottom: 2),
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFF7F8FA),
-            borderRadius: BorderRadius.circular(9),
+            color: AppColors.surfaceMuted,
+            borderRadius: BorderRadius.circular(AppRadius.row),
           ),
           child: Text.rich(
             TextSpan(children: _inline(b.text)),
-            style: const TextStyle(
-              fontSize: 12.5,
-              height: 1.55,
-              color: Color(0xFF666666),
-            ),
+            style: AppType.caption.copyWith(height: 1.6),
           ),
         );
       case ChangelogBlockKind.bullet:
         return Padding(
-          padding: EdgeInsets.only(
-            left: b.level > 1 ? 14.0 : 0,
-            top: 3,
-          ),
+          padding: EdgeInsets.only(left: b.level > 1 ? 14.0 : 0, top: 3),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -272,10 +239,10 @@ class _ChangelogPageState extends State<ChangelogPage> {
               Expanded(
                 child: Text.rich(
                   TextSpan(children: _inline(b.text)),
-                  style: const TextStyle(
-                    fontSize: 13,
+                  style: AppType.body.copyWith(
                     height: 1.6,
-                    color: Color(0xFF666666),
+                    fontWeight: FontWeight.w400,
+                    color: AppColors.inkSecondary,
                   ),
                 ),
               ),
@@ -287,11 +254,7 @@ class _ChangelogPageState extends State<ChangelogPage> {
           padding: const EdgeInsets.only(top: 4),
           child: Text.rich(
             TextSpan(children: _inline(b.text)),
-            style: const TextStyle(
-              fontSize: 12,
-              height: 1.5,
-              color: Color(0xFF777777),
-            ),
+            style: AppType.caption.copyWith(height: 1.55),
           ),
         );
       case ChangelogBlockKind.text:
@@ -319,22 +282,26 @@ class _ChangelogPageState extends State<ChangelogPage> {
         spans.add(TextSpan(text: raw.substring(last, m.start)));
       }
       if (m.group(1) != null) {
-        spans.add(TextSpan(
-          text: m.group(1),
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF444444),
+        spans.add(
+          TextSpan(
+            text: m.group(1),
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF444444),
+            ),
           ),
-        ));
+        );
       } else {
-        spans.add(TextSpan(
-          text: m.group(2),
-          style: const TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 12,
-            color: Color(0xFF555555),
+        spans.add(
+          TextSpan(
+            text: m.group(2),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              color: Color(0xFF555555),
+            ),
           ),
-        ));
+        );
       }
       last = m.end;
     }
@@ -387,11 +354,13 @@ List<ChangelogEntry> parseChangelog(String source) {
   void flush() {
     final v = version;
     if (v != null) {
-      entries.add(ChangelogEntry(
-        version: v,
-        date: date,
-        blocks: List<ChangelogBlock>.unmodifiable(blocks),
-      ));
+      entries.add(
+        ChangelogEntry(
+          version: v,
+          date: date,
+          blocks: List<ChangelogBlock>.unmodifiable(blocks),
+        ),
+      );
     }
     blocks.clear();
   }
@@ -418,17 +387,21 @@ List<ChangelogEntry> parseChangelog(String source) {
     if (t == '---') continue;
 
     if (t.startsWith('### ')) {
-      blocks.add(ChangelogBlock(
-        kind: ChangelogBlockKind.section,
-        text: t.substring(4).trim(),
-      ));
+      blocks.add(
+        ChangelogBlock(
+          kind: ChangelogBlockKind.section,
+          text: t.substring(4).trim(),
+        ),
+      );
       continue;
     }
     if (t.startsWith('> ')) {
-      blocks.add(ChangelogBlock(
-        kind: ChangelogBlockKind.quote,
-        text: t.substring(2).trim(),
-      ));
+      blocks.add(
+        ChangelogBlock(
+          kind: ChangelogBlockKind.quote,
+          text: t.substring(2).trim(),
+        ),
+      );
       continue;
     }
     if (t.startsWith('|')) {
@@ -440,19 +413,20 @@ List<ChangelogEntry> parseChangelog(String source) {
           .where((e) => e.isNotEmpty)
           .toList();
       if (cells.isEmpty) continue;
-      blocks.add(ChangelogBlock(
-        kind: ChangelogBlockKind.table,
-        text: cells.join(' · '),
-      ));
+      blocks.add(
+        ChangelogBlock(kind: ChangelogBlockKind.table, text: cells.join(' · ')),
+      );
       continue;
     }
     if (t.startsWith('- ') || t.startsWith('* ')) {
       final indent = line.length - line.trimLeft().length;
-      blocks.add(ChangelogBlock(
-        kind: ChangelogBlockKind.bullet,
-        text: t.substring(2).trim(),
-        level: indent >= 2 ? 2 : 1,
-      ));
+      blocks.add(
+        ChangelogBlock(
+          kind: ChangelogBlockKind.bullet,
+          text: t.substring(2).trim(),
+          level: indent >= 2 ? 2 : 1,
+        ),
+      );
       continue;
     }
     blocks.add(ChangelogBlock(kind: ChangelogBlockKind.text, text: t));

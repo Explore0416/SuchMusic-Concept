@@ -23,6 +23,7 @@
     <!-- 桌面悬浮歌词：在其他应用上层显示（需用户在系统设置中手动授予） -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <application
+        android:enableOnBackInvokedCallback="true"
         android:label="SuchMusic概念版"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"

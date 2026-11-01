@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 import '../widgets/design_dialog.dart';
 
 /// 使用协议页面
@@ -13,106 +15,87 @@ class AgreementPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F4F8),
+      backgroundColor: AppColors.canvas,
       body: SafeArea(
-        child: Stack(
+        bottom: false,
+        child: Column(
           children: [
-            Column(
-              children: [
-                const SizedBox(
-                  height: 44,
-                  child: Center(
-                    child: Text(
-                      '使用协议',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF333333),
-                      ),
-                    ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.sm,
+                AppSpace.sm,
+                AppSpace.page,
+                AppSpace.sm,
+              ),
+              child: Row(
+                children: [
+                  AppIconButton(
+                    icon: Icons.arrow_back_ios_new_rounded,
+                    iconSize: 18,
+                    tooltip: '返回',
+                    onTap: () => Navigator.maybePop(context),
                   ),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(15, 8, 15, 24),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(17),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Center(
-                            child: Text(
-                              'SuchMusic概念版 用户协议',
-                              style: TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF333333),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Center(
-                            child: Text(
-                              '版本号：v1.3｜更新日期：2026-10-16｜生效日期：2026-10-16',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                color: Color(0xFF999999),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          // 重点提示：重大利害关系条款已加粗
-                          Text.rich(
-                            TextSpan(
-                              children: [
-                                const TextSpan(
-                                  text: '【请您注意】',
-                                  style: TextStyle(
-                                    fontSize: 13.5,
-                                    height: 1.6,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF333333),
-                                  ),
-                                ),
-                                const TextSpan(
-                                  text:
-                                      '本协议中与您的权益有重大利害关系的条款（特别是第二条、第三条、第七条）已加粗，提请您重点阅读。首次启动本软件时，我们将以弹窗方式请您阅读并勾选确认本协议。',
-                                  style: _bodyStyle,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            '使用本软件即代表您已阅读、理解并同意本用户协议全部条款。',
-                            style: _boldBodyStyle,
-                          ),
-                          for (final s in _sections) ..._buildSection(s),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+                  const SizedBox(width: AppSpace.xs),
+                  const Text('使用协议', style: AppType.display),
+                ],
+              ),
             ),
-            // 返回按钮：与关于页一致
-            Positioned(
-              left: 4,
-              top: 4,
-              child: GestureDetector(
-                onTap: () => Navigator.pop(context),
-                behavior: HitTestBehavior.opaque,
-                child: const Padding(
-                  padding: EdgeInsets.all(10),
-                  child: Icon(
-                    Icons.arrow_back_ios_new,
-                    size: 20,
-                    color: Color(0xFF333333),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.page,
+                  AppSpace.xs,
+                  AppSpace.page,
+                  AppSpace.xxxl,
+                ),
+                child: AppCard(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.xl,
+                    AppSpace.xxl,
+                    AppSpace.xl,
+                    AppSpace.xxl,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Text(
+                          'SuchMusic概念版 用户协议',
+                          style: AppType.title.copyWith(height: 1.32),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpace.sm),
+                      Center(
+                        child: Text(
+                          '版本号：v1.3｜更新日期：2026-10-16｜生效日期：2026-10-16',
+                          style: AppType.caption.copyWith(
+                            color: AppColors.inkTertiary,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpace.lg),
+                      // 重点提示：重大利害关系条款已加粗
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(text: '【请您注意】', style: _boldBodyStyle),
+                            TextSpan(
+                              text:
+                                  '本协议中与您的权益有重大利害关系的条款（特别是第二条、第三条、第七条）已加粗，提请您重点阅读。首次启动本软件时，我们将以弹窗方式请您阅读并勾选确认本协议。',
+                              style: _bodyStyle,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: AppSpace.sm),
+                      const Text(
+                        '使用本软件即代表您已阅读、理解并同意本用户协议全部条款。',
+                        style: _boldBodyStyle,
+                      ),
+                      for (final s in _sections) ..._buildSection(s),
+                    ],
                   ),
                 ),
               ),
@@ -123,32 +106,38 @@ class AgreementPage extends StatelessWidget {
     );
   }
 
+  /// 正文：协议是长阅读场景，行高给到 1.75 才不挤
   static const _bodyStyle = TextStyle(
-    fontSize: 13.5,
-    height: 1.6,
-    color: Color(0xFF666666),
+    fontFamily: 'MiSans',
+    fontSize: 15,
+    height: 1.75,
+    fontWeight: FontWeight.w400,
+    color: AppColors.inkSecondary,
   );
 
   static const _boldBodyStyle = TextStyle(
-    fontSize: 13.5,
-    height: 1.6,
+    fontFamily: 'MiSans',
+    fontSize: 15,
+    height: 1.75,
     fontWeight: FontWeight.w600,
-    color: Color(0xFF333333),
+    color: AppColors.ink,
   );
 
   List<Widget> _buildSection(_Section s) {
     return [
-      const SizedBox(height: 18),
+      const SizedBox(height: AppSpace.xl),
       Text(
         s.title,
         style: const TextStyle(
+          fontFamily: 'MiSans',
           fontSize: 15,
-          fontWeight: FontWeight.w600,
-          color: Color(0xFF333333),
+          height: 1.4,
+          fontWeight: FontWeight.w700,
+          color: AppColors.ink,
         ),
       ),
       for (final p in s.paragraphs) ...[
-        const SizedBox(height: 6),
+        const SizedBox(height: AppSpace.sm),
         Text(p.text, style: p.bold ? _boldBodyStyle : _bodyStyle),
       ],
     ];
@@ -438,7 +427,7 @@ class _AgreementConsentDialogState extends State<_AgreementConsentDialog> {
               Text(
                 '请先将上方协议内容阅读至底部',
                 style: TextStyle(
-                  fontSize: 11.5 * k,
+                  fontSize: 12 * k,
                   color: const Color(0xFF999999),
                 ),
               ),

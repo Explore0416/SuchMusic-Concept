@@ -40,6 +40,24 @@ class LocalMusicScanner(private val context: Context) {
         )
 
         /**
+         * MediaStore 的入选条件。
+         *
+         * 只写 `IS_MUSIC != 0` 会漏掉大量 `.wav`：系统只在文件带完整标签
+         * （艺人 / 专辑齐全）或时长足够长时才把 IS_MUSIC 置 1。录音、下载的
+         * 音效、以及绝大多数无标签的 wav 都是 0，于是在「本地音乐」里根本
+         * 看不到，用户会以为根本不支持 wav。
+         *
+         * 改成「音乐 **或** 非系统提示音」：排除铃声 / 通知音 / 闹钟 / 播客，
+         * 其余音频（含 .wav / .ape / .dsf 等无标签文件）一并收录。
+         */
+        private val MEDIA_SELECTION: String =
+            "(${MediaStore.Audio.Media.IS_MUSIC} != 0)" +
+                " OR (${MediaStore.Audio.Media.IS_RINGTONE} = 0" +
+                " AND ${MediaStore.Audio.Media.IS_NOTIFICATION} = 0" +
+                " AND ${MediaStore.Audio.Media.IS_ALARM} = 0" +
+                " AND ${MediaStore.Audio.Media.IS_PODCAST} = 0)"
+
+        /**
          * 从文件名里识别**加密容器**的扩展名，识别不到返回 null。
          *
          * 酷狗会把加密壳套在真实格式后缀上，例如：
@@ -115,7 +133,11 @@ class LocalMusicScanner(private val context: Context) {
 
         if (allFiles) {
             try {
-                scanFolders(tracks, seen, includeAllAudio = !audioPerm)
+                // 即使已有音频权限也补扫普通音频：
+                // MediaStore 未必索引到刚拷进来的 .wav（新增文件要等系统媒体扫描），
+                // 只靠数据库会出现「文件明明在手机里，列表里却没有」。
+                // 重复条目由 seen（按真实路径）挡掉。
+                scanFolders(tracks, seen, includeAllAudio = true)
             } catch (e: Throwable) {
                 Log.w(TAG, "目录扫描失败: ${e.message}")
             }
@@ -146,7 +168,7 @@ class LocalMusicScanner(private val context: Context) {
         context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             projection,
-            "${MediaStore.Audio.Media.IS_MUSIC} != 0",
+            MEDIA_SELECTION,
             null,
             "${MediaStore.Audio.Media.DISPLAY_NAME} ASC",
         )?.use { c ->
@@ -180,7 +202,10 @@ class LocalMusicScanner(private val context: Context) {
                 out.add(
                     mapOf(
                         "uri" to key,
-                        "path" to if (isKgm && !dataPath.isNullOrBlank()) dataPath else null,
+                        // 真实路径一律带上：content:// 在某些 ROM 上会被
+                        // ExoPlayer 拒绝（SecurityException / FileNotFound），
+                        // Dart 侧据此回退到 file:// 再试一次。
+                        "path" to dataPath?.takeIf { it.isNotBlank() },
                         // 标题去掉全部音频/加密后缀：`东风破_MQ.kgg.flac` → `东风破_MQ`
                         "name" to stripAudioSuffixes(display),
                         "title" to (c.getString(titleCol) ?: display),
@@ -205,9 +230,15 @@ class LocalMusicScanner(private val context: Context) {
         includeAllAudio: Boolean,
     ) {
         val root = Environment.getExternalStorageDirectory() ?: return
-        // 优先扫音乐/下载与常见音乐 App 目录，避免全盘遍历拖慢首屏
+        // 优先扫音乐/下载与常见音乐 App 目录，避免全盘遍历拖慢首屏。
+        // 录音目录单独列出：手机自带录音机存下来的 .wav 常见于这些位置，
+        // 且多数不会被打上音乐标签（MediaStore 也索引不到）。
         val preferred = listOf(
             "Music", "Download", "Downloads", "Documents",
+            "Recordings", "Recorder", "Records", "SoundRecorder",
+            "录音", "录音机", "音乐",
+            // 小米/红米把录音放在 MIUI/sound_recorder 下，扫父目录即可覆盖
+            "MIUI",
             "Kugou", "kgmusic", "KuGou", "网易云音乐", "CloudMusic",
         )
         val targets = mutableListOf<File>()

@@ -24,47 +24,54 @@ void main() {
     return MaterialApp(
       home: Scaffold(
         body: Center(
-          child: Builder(builder: (openCtx) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ElevatedButton(
-                  onPressed: () {
-                    showModalBottomSheet<void>(
-                      context: openCtx,
-                      builder: (ctx) => Builder(builder: (inner) {
-                        return SizedBox(
-                          height: 200,
-                          child: Column(children: [
-                            ElevatedButton(
-                              onPressed: () => DesignToast.show(inner, '来自弹窗'),
-                              child: const Text('apply'),
-                            ),
-                            ElevatedButton(
-                              onPressed: () => Navigator.pop(inner),
-                              child: const Text('close'),
-                            ),
-                          ]),
-                        );
-                      }),
-                    );
-                  },
-                  child: const Text('open'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    DesignToast.show(openCtx, 'A');
-                    DesignToast.show(openCtx, 'B');
-                  },
-                  child: const Text('show-twice'),
-                ),
-                ElevatedButton(
-                  onPressed: () => DesignToast.show(openCtx, 'once'),
-                  child: const Text('show-once'),
-                ),
-              ],
-            );
-          }),
+          child: Builder(
+            builder: (openCtx) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      showModalBottomSheet<void>(
+                        context: openCtx,
+                        builder: (ctx) => Builder(
+                          builder: (inner) {
+                            return SizedBox(
+                              height: 200,
+                              child: Column(
+                                children: [
+                                  ElevatedButton(
+                                    onPressed: () =>
+                                        DesignToast.show(inner, '来自弹窗'),
+                                    child: const Text('apply'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () => Navigator.pop(inner),
+                                    child: const Text('close'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                    child: const Text('open'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      DesignToast.show(openCtx, 'A');
+                      DesignToast.show(openCtx, 'B');
+                    },
+                    child: const Text('show-twice'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => DesignToast.show(openCtx, 'once'),
+                    child: const Text('show-once'),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -76,8 +83,9 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('回归：弹窗内展示 Toast → 关闭弹窗 → 根 Overlay 重建不再抛异常（灰屏根因）',
-      (tester) async {
+  testWidgets('回归：弹窗内展示 Toast → 关闭弹窗 → 根 Overlay 重建不再抛异常（灰屏根因）', (
+    tester,
+  ) async {
     await tester.pumpWidget(host());
 
     await tester.tap(find.text('open'));
@@ -144,12 +152,16 @@ void main() {
 
   testWidgets('兜底：调用方已卸载时 show 静默失败，不抛异常', (tester) async {
     late BuildContext dead;
-    await tester.pumpWidget(MaterialApp(
-      home: Builder(builder: (c) {
-        dead = c;
-        return const SizedBox();
-      }),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (c) {
+            dead = c;
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
     // 卸载该 context
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
     await tester.pump();
@@ -158,5 +170,71 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'Toast 在任何情况下都不得成为异常源');
     await settleToast(tester);
+  });
+
+  // 尺寸回归：胶囊条必须由内容决定大小。
+  // 【历史 Bug】容器内部套了 `Center`，且没有固定高度 —— `Center` 会撑满父级
+  // 给出的松约束（整屏高度），再配合 `BorderRadius.circular(pill)`，渲染成一块
+  // 盖住大半屏的黑色椭圆。用户实测截图即此形态。
+  group('胶囊条尺寸由内容决定', () {
+    Future<void> showAndMeasure(WidgetTester tester, Size physical) async {
+      tester.view.physicalSize = physical;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (ctx) => TextButton(
+                onPressed: () => DesignToast.show(ctx, '已清除本地推荐数据'),
+                child: const Text('show'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('show'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    RenderBox boxOfToast(WidgetTester tester) =>
+        tester.renderObject<RenderBox>(find.byKey(designToastKey));
+
+    testWidgets('横屏下不撑满屏幕', (tester) async {
+      await showAndMeasure(tester, const Size(1080, 720));
+      final box = boxOfToast(tester);
+      // 文字单行 + 上下各 11 的 padding，正常在 40～60 之间。
+      // 一旦被撑开就会接近屏幕高度 720。
+      expect(box.size.height, lessThan(80), reason: '胶囊条高度必须由文字行高决定');
+      expect(box.size.width, lessThan(1080 * 0.9), reason: '胶囊条宽度不得撑满屏幕');
+      await settleToast(tester);
+    });
+
+    testWidgets('竖屏下不撑满屏幕', (tester) async {
+      await showAndMeasure(tester, const Size(390, 844));
+      final box = boxOfToast(tester);
+      expect(box.size.height, lessThan(80));
+      expect(box.size.width, lessThan(390 * 0.9));
+      await settleToast(tester);
+    });
+
+    testWidgets('胶囊条宽度随文字变长而增加，但不超过上限', (tester) async {
+      await showAndMeasure(tester, const Size(390, 844));
+      final short = boxOfToast(tester).size.width;
+
+      DesignToast.show(
+        tester.element(find.byType(Scaffold)),
+        '这是一条明显更长的提示文字，用来验证胶囊条会随内容变宽',
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      final long = boxOfToast(tester).size.width;
+
+      expect(long, greaterThan(short));
+      expect(long, lessThanOrEqualTo(390 * 0.86 + 0.5));
+      await settleToast(tester);
+    });
   });
 }

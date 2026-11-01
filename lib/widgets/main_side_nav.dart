@@ -1,54 +1,60 @@
 import 'package:flutter/material.dart';
 
 import '../models/song_model.dart';
-import '../utils/home_tab.dart';
+import '../theme/app_theme.dart';
+import 'app_bottom_dock.dart';
 
-/// 宽屏（横屏 / 平板）左侧导航栏。
+/// 宽屏（平板 / 横屏）左侧导航栏。
 ///
-/// 纯展示组件：状态与回调全部由 MainShell 传入，便于单独做布局测试与截图。
-/// 「首页 / 本地 / 歌单」与首页顶部标签共用 [HomeTab] 的值；
-/// 底部是当前播放卡 —— 横屏去掉底部悬浮胶囊后，这里是回到播放页的入口。
+/// 一级入口与窄屏底部导航坞完全一致（首页 / 本地 / 歌单 / 我的），
+/// 只是物理形态随屏幕宽度切换；选中态用白色卡片 + 发丝边表达层级，
+/// 不再用高饱和色块。底部保留「正在播放」卡，作为横屏回到播放页的入口。
 class MainSideNav extends StatelessWidget {
   const MainSideNav({
     super.key,
-    required this.tab,
-    required this.profileSelected,
+    required this.index,
     required this.song,
     required this.isPlaying,
-    required this.onSelectTab,
-    required this.onSelectProfile,
+    required this.onSelect,
     required this.onTogglePlay,
     required this.onOpenPlayer,
     this.cover,
     this.bottomPadding = 0,
   });
 
-  static const double width = 220;
+  static const double width = 224;
 
-  /// 当前首页内部标签（[HomeTab.home] / [HomeTab.local] / [HomeTab.playlists]）
-  final int tab;
-
-  /// 当前是否停在「我的」
-  final bool profileSelected;
+  /// 当前一级入口下标（0 首页 / 1 本地 / 2 歌单 / 3 我的）
+  final int index;
 
   final SongModel? song;
   final bool isPlaying;
-
-  final ValueChanged<int> onSelectTab;
-  final VoidCallback onSelectProfile;
+  final ValueChanged<int> onSelect;
   final VoidCallback onTogglePlay;
   final VoidCallback onOpenPlayer;
-
-  /// 当前歌曲封面（由宿主提供，未播放时为空 → 占位图标）
   final Widget? cover;
-
   final double bottomPadding;
+
+  static const _items = <({IconData icon, IconData activeIcon, String label})>[
+    (icon: Icons.home_outlined, activeIcon: Icons.home_rounded, label: '首页'),
+    (icon: Icons.album_outlined, activeIcon: Icons.album_rounded, label: '本地'),
+    (
+      icon: Icons.queue_music_outlined,
+      activeIcon: Icons.queue_music_rounded,
+      label: '歌单',
+    ),
+    (
+      icon: Icons.person_outline_rounded,
+      activeIcon: Icons.person_rounded,
+      label: '我的',
+    ),
+  ];
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: width,
-      color: Colors.white,
+      color: AppColors.canvas,
       child: SafeArea(
         right: false,
         bottom: false,
@@ -56,22 +62,22 @@ class MainSideNav extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Padding(
-              padding: EdgeInsets.fromLTRB(22, 26, 22, 4),
+              padding: EdgeInsets.fromLTRB(24, 26, 20, 2),
               child: Text(
                 'SuchMusic',
                 style: TextStyle(
-                  fontSize: 19,
+                  fontSize: 20,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: 0.2,
-                  color: Colors.black87,
+                  letterSpacing: -0.3,
+                  color: AppColors.ink,
                 ),
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(22, 0, 22, 18),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 20, 22),
               child: Text(
                 '概念版',
-                style: TextStyle(fontSize: 11.5, color: Color(0xFF9C9C9C)),
+                style: AppType.caption.copyWith(color: AppColors.inkTertiary),
               ),
             ),
             // 菜单区可滚动：横屏高度很小（如 360dp）时不会挤爆底部播放卡
@@ -79,44 +85,23 @@ class MainSideNav extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 children: [
-                  _entry(
-                    icon: Icons.home_outlined,
-                    activeIcon: Icons.home,
-                    label: '首页',
-                    active: !profileSelected && tab == HomeTab.home,
-                    onTap: () => onSelectTab(HomeTab.home),
-                  ),
-                  _entry(
-                    icon: Icons.album_outlined,
-                    activeIcon: Icons.album,
-                    label: '本地',
-                    active: !profileSelected && tab == HomeTab.local,
-                    onTap: () => onSelectTab(HomeTab.local),
-                  ),
-                  _entry(
-                    icon: Icons.queue_music_outlined,
-                    activeIcon: Icons.queue_music,
-                    label: '歌单',
-                    active: !profileSelected && tab == HomeTab.playlists,
-                    onTap: () => onSelectTab(HomeTab.playlists),
-                  ),
-                  _entry(
-                    icon: Icons.person_outline,
-                    activeIcon: Icons.person,
-                    label: '我的',
-                    active: profileSelected,
-                    onTap: onSelectProfile,
-                  ),
+                  for (var i = 0; i < _items.length; i++) _entry(i, _items[i]),
                 ],
               ),
             ),
-            const Divider(
-              height: 1,
-              indent: 20,
-              endIndent: 20,
-              color: Color(0xFFEFEFEF),
-            ),
-            _buildNowPlaying(),
+            if (song != null)
+              Padding(
+                padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: SideNowPlayingCard(
+                  title: song!.name,
+                  subtitle: song!.artist.isEmpty ? '未知歌手' : song!.artist,
+                  cover: cover ?? const SizedBox.shrink(),
+                  isPlaying: isPlaying,
+                  progress: 0,
+                  onTap: onOpenPlayer,
+                  onToggle: onTogglePlay,
+                ),
+              ),
             SizedBox(height: 12 + bottomPadding),
           ],
         ),
@@ -124,128 +109,47 @@ class MainSideNav extends StatelessWidget {
     );
   }
 
-  Widget _entry({
-    required IconData icon,
-    required IconData activeIcon,
-    required String label,
-    required bool active,
-    required VoidCallback onTap,
-  }) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFFF1F2F4) : Colors.transparent,
-          borderRadius: BorderRadius.circular(26),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              active ? activeIcon : icon,
-              size: 22,
-              color: active ? Colors.black87 : const Color(0xFF8A8A8A),
-            ),
-            const SizedBox(width: 14),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                color: active ? Colors.black87 : const Color(0xFF5A5A5A),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-
-  /// 底部「正在播放」卡：点整卡进播放页，右侧按钮只切播放/暂停
-  Widget _buildNowPlaying() {
-    final s = song;
+  Widget _entry(
+    int i,
+    ({IconData icon, IconData activeIcon, String label}) item,
+  ) {
+    final active = i == index;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: s == null ? null : onOpenPlayer,
-        child: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF5F6F8),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  color: const Color(0xFFE8E8E8),
-                  child: s == null
-                      ? const Icon(
-                          Icons.music_note,
-                          size: 20,
-                          color: Color(0xFFBDBDBD),
-                        )
-                      : cover,
-                ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Material(
+        color: active ? AppColors.surface : Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadius.row),
+        child: InkWell(
+          onTap: () => onSelect(i),
+          borderRadius: BorderRadius.circular(AppRadius.row),
+          child: Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadius.row),
+              border: Border.all(
+                color: active ? AppColors.hairline : Colors.transparent,
+                width: 0.7,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      s?.name ?? '暂无播放',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: s == null
-                            ? const Color(0xFF9C9C9C)
-                            : Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      s?.artist ?? '选一首歌开始',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF9C9C9C),
-                      ),
-                    ),
-                  ],
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  active ? item.activeIcon : item.icon,
+                  size: 22,
+                  color: active ? AppColors.ink : AppColors.inkTertiary,
                 ),
-              ),
-              if (s != null)
-                SizedBox(
-                  width: 34,
-                  height: 34,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: onTogglePlay,
-                      child: Icon(
-                        isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        size: 22,
-                        color: Colors.black87,
-                      ),
-                    ),
+                const SizedBox(width: 12),
+                Text(
+                  item.label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                    color: active ? AppColors.ink : AppColors.inkSecondary,
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

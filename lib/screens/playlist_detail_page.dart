@@ -1,19 +1,26 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/music_api_service.dart';
 import '../services/sources/source_manager.dart';
 import '../services/play_context_service.dart';
-import '../widgets/fade_slide_in.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 
+/// 歌单详情 / 每日推荐详情。
+///
+/// 结构：深色模糊封面做头图，白色内容卡从下方浮起承载曲目列表。
+/// 头图固定、列表独立滚动，长时间翻歌时仍能看清这是哪个歌单。
 class PlaylistDetailPage extends StatefulWidget {
   final PlaylistModel playlist;
+
   /// 每日推荐模式：没有歌单 ID，歌曲通过每日推荐接口加载
   final bool isDaily;
+
   /// 直接使用的封面（如首页传来的第一首歌封面），优先于歌单封面
   final String? coverUrl;
 
@@ -24,8 +31,8 @@ class PlaylistDetailPage extends StatefulWidget {
   }) : coverUrl = null;
 
   const PlaylistDetailPage.daily({super.key, this.coverUrl})
-      : playlist = const PlaylistModel(id: 'daily_recommend', name: '每日推荐'),
-        isDaily = true;
+    : playlist = const PlaylistModel(id: 'daily_recommend', name: '每日推荐'),
+      isDaily = true;
 
   @override
   State<PlaylistDetailPage> createState() => _PlaylistDetailPageState();
@@ -37,24 +44,43 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   List<SongModel> _songs = [];
   bool _loading = true;
   Uint8List? _coverBytes;
+  String? _currentSongId;
+  StreamSubscription<SongModel?>? _currentSub;
+  String? _error;
 
-  static final Dio _coverDio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  static final Dio _coverDio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   @override
   void initState() {
     super.initState();
     _loadCover(widget.coverUrl);
     _loadSongs();
+    // 跟着播放状态走，列表里能实时标出正在播的那一首
+    _currentSongId = _audioPlayer.currentSong?.id;
+    _currentSub = _audioPlayer.onCurrentSongChanged.listen((song) {
+      if (!mounted) return;
+      if (song?.id == _currentSongId) return;
+      setState(() => _currentSongId = song?.id);
+    });
+  }
+
+  @override
+  void dispose() {
+    _currentSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadCover([String? url]) async {
     url ??= widget.playlist.coverUrl;
     if (url == null) return;
     // 网易云封面服务支持 `?param=500y500` 压缩；酷狗封面已是固定尺寸 → 不追加
-    final isNetease = url.contains('music.126.net') || url.contains('music.163.com');
+    final isNetease =
+        url.contains('music.126.net') || url.contains('music.163.com');
     final sizedUrl = isNetease ? '${url.split('?').first}?param=500y500' : url;
     try {
       final response = await _coverDio.get(
@@ -75,18 +101,32 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   Future<void> _loadSongs() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     final isKugou = widget.playlist.source.isKugou;
     // 按歌单**自身**音源取实现（避免当前音源与歌单来源不一致时取错接口）
     final src = SourceManager().sourceFor(widget.playlist.source);
     final List<SongModel> songs;
-    if (widget.isDaily) {
-      songs = isKugou
-          ? await src.dailyRecommend()
-          : await _apiService.getDailyRecommendSongs();
-    } else {
-      songs = isKugou
-          ? await src.rankSongs(widget.playlist.id)
-          : await _apiService.playlistDetail(widget.playlist.id);
+    try {
+      if (widget.isDaily) {
+        songs = isKugou
+            ? await src.dailyRecommend()
+            : await _apiService.getDailyRecommendSongs();
+      } else {
+        songs = isKugou
+            ? await src.rankSongs(widget.playlist.id)
+            : await _apiService.playlistDetail(widget.playlist.id);
+      }
+    } catch (e) {
+      // 网络/接口失败不再抛到界面外：留在本页给出重试出口
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '拿不到这个歌单的内容，检查网络或稍后重试';
+      });
+      return;
     }
     if (!mounted) return;
     setState(() {
@@ -116,8 +156,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     final kind = widget.isDaily
         ? PlaySourceKind.daily
         : (widget.playlist.source.isKugou
-            ? PlaySourceKind.rank
-            : PlaySourceKind.playlist);
+              ? PlaySourceKind.rank
+              : PlaySourceKind.playlist);
     PlayContextService().setSource(
       kind: kind,
       tags: widget.playlist.name.isNotEmpty
@@ -133,270 +173,343 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       value: const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
-        systemNavigationBarColor: Colors.transparent,
-        systemNavigationBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: AppColors.surface,
+        systemNavigationBarIconBrightness: Brightness.dark,
         systemNavigationBarContrastEnforced: false,
       ),
       child: Scaffold(
-        body: _buildBody(),
+        backgroundColor: const Color(0xFF14161D),
+        body: Stack(
+          children: [
+            Positioned.fill(child: _buildBlurredBackground()),
+            SafeArea(
+              bottom: false,
+              child: Column(
+                children: [
+                  _buildTopBar(),
+                  _buildHero(),
+                  Expanded(child: _buildContentSheet()),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildBody() {
-    if (_songs.isEmpty && !_loading) {
-      return Stack(
-        children: [
-          _buildBlurredBackground(),
-          _buildBackButton(),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.music_off, size: 48, color: Colors.white38),
-                const SizedBox(height: 12),
-                Text(
-                  '歌单"${widget.playlist.name}"为空或加载失败',
-                  style: const TextStyle(fontSize: 14, color: Colors.white54),
-                ),
-              ],
-            ),
+  // ─────────────────────────── 头图 ───────────────────────────
+
+  Widget _buildBlurredBackground() {
+    if (_coverBytes == null) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF232838), Color(0xFF14161D)],
           ),
-        ],
+        ),
       );
     }
-
     return Stack(
+      fit: StackFit.expand,
       children: [
-        _buildBlurredBackground(),
-        _buildHeaderCover(),
-        _buildBackButton(),
-        _buildPlaylistInfo(),
-        _buildPlayButton(),
-        _buildSongCount(),
-        if (_loading)
-          const Positioned.fill(
-            child: Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            ),
-          )
-        else
-          _buildSongList(),
+        Image.memory(_coverBytes!, fit: BoxFit.cover),
+        ClipRect(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 36, sigmaY: 36),
+            child: const ColoredBox(color: Color(0x9914161D)),
+          ),
+        ),
       ],
     );
   }
 
-  Widget _buildBlurredBackground() {
-    return Positioned.fill(
-      child: _coverBytes != null
-          ? Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.memory(_coverBytes!, fit: BoxFit.cover),
-                ClipRect(
-                  child: BackdropFilter(
-                    filter: ui.ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.4),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : Container(color: const Color(0xFF1a1a2e)),
-    );
-  }
-
-  Widget _buildHeaderCover() {
-    return Positioned(
-      left: 0,
-      right: 0,
-      top: -1,
-      height: 218,
-      child: _coverBytes != null
-          ? Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.memory(_coverBytes!, fit: BoxFit.cover),
-                Container(color: Colors.black.withValues(alpha: 0.25)),
-              ],
-            )
-          : Container(color: const Color(0xFF1a1a2e)),
-    );
-  }
-
-  Widget _buildBackButton() {
-    final topPadding = MediaQuery.of(context).padding.top;
-    return Positioned(
-      left: 8,
-      top: topPadding + 4,
-      child: IconButton(
-        icon: const Icon(Icons.arrow_back_ios, size: 20, color: Colors.white),
-        onPressed: () => Navigator.pop(context),
+  Widget _buildTopBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.sm,
+        AppSpace.sm,
+        AppSpace.sm,
+        0,
       ),
-    );
-  }
-
-  Widget _buildPlaylistInfo() {
-    final topPadding = MediaQuery.of(context).padding.top;
-    return Positioned(
-      left: 25,
-      top: topPadding + 92,
-      right: 120,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         children: [
-          Text(
-            widget.playlist.name,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+          _glassIconButton(
+            icon: Icons.arrow_back_ios_new_rounded,
+            onTap: () => Navigator.maybePop(context),
           ),
-          const SizedBox(height: 4),
-          if (widget.playlist.description != null &&
-              widget.playlist.description!.isNotEmpty)
-            Text(
-              widget.playlist.description!,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w400,
-                color: Colors.white,
-            ),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            ),
+          const Spacer(),
+          AppTag(
+            text: widget.isDaily ? '每日推荐' : widget.playlist.source.label,
+            color: Colors.white,
+            background: Colors.white.withValues(alpha: 0.24),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildPlayButton() {
-    final topPadding = MediaQuery.of(context).padding.top;
-    return Positioned(
-      right: 25,
-      top: topPadding + 146,
-      child: GestureDetector(
-        onTap: _playAll,
-        child: Container(
-          width: 46,
-          height: 31,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: const Color(0xFF3080FF),
-            borderRadius: BorderRadius.circular(25),
-          ),
-          child: SvgPicture.asset(
-            'assets/images/svg/Play.svg',
-            width: 22,
-            height: 22,
-            fit: BoxFit.contain,
-            colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-          ),
+  Widget _glassIconButton({
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Material(
+        color: Colors.white.withValues(alpha: 0.12),
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: Icon(icon, size: 18, color: Colors.white),
         ),
       ),
     );
   }
 
-  Widget _buildSongCount() {
-    final topPadding = MediaQuery.of(context).padding.top;
-    final count = widget.playlist.trackCount ?? _songs.length;
-    return Positioned(
-      right: 75,
-      top: topPadding + 151,
-      child: Text(
-        '$count首',
-        style: const TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w400,
-          color: Colors.white,
-        ),
+  Widget _buildHero() {
+    final count = _songs.isNotEmpty
+        ? _songs.length
+        : (widget.playlist.trackCount ?? 0);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.page,
+        AppSpace.lg,
+        AppSpace.page,
+        AppSpace.xl,
       ),
-    );
-  }
-
-  Widget _buildSongList() {
-    return Positioned(
-      left: 25,
-      right: 25,
-      top: 217,
-      bottom: 0,
-      child: ListView.builder(
-        padding: EdgeInsets.zero,
-        itemCount: _songs.length,
-        itemBuilder: (_, index) {
-          final song = _songs[index];
-          // 逐条淡入上滑，避免整屏「啪」地出现
-          return FadeSlideIn(
-            index: index,
-            child: _buildSongItem(index, song),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildSongItem(int index, SongModel song) {
-    return GestureDetector(
-      onTap: () => _playSong(index),
-      child: SizedBox(
-        height: 48,
-        child: Row(
-          children: [
-            SizedBox(
-              width: 36,
-              child: Text(
-                '${index + 1}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w400,
-                  color: Colors.white,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    song.name,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.white,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (song.artist.isNotEmpty)
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              _buildCoverThumb(),
+              const SizedBox(width: AppSpace.lg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Text(
-                      song.artist,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.white54,
+                      widget.playlist.name,
+                      style: AppType.title.copyWith(
+                        color: Colors.white,
+                        height: 1.26,
                       ),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    const SizedBox(height: AppSpace.sm),
+                    Text(
+                      _loading ? '正在加载…' : (count > 0 ? '$count 首' : '空歌单'),
+                      style: AppType.caption.copyWith(
+                        color: Colors.white.withValues(alpha: 0.72),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpace.lg),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: FilledButton(
+              onPressed: _songs.isEmpty ? null : _playAll,
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: AppColors.ink,
+                disabledBackgroundColor: Colors.white.withValues(alpha: 0.3),
+                disabledForegroundColor: Colors.white70,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.row),
+                ),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.play_arrow_rounded, size: 22),
+                  SizedBox(width: 6),
+                  Text('播放全部'),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            SvgPicture.asset(
-              'assets/images/svg/Play.svg',
-              width: 16,
-              height: 16,
-              colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCoverThumb() {
+    return Container(
+      width: 104,
+      height: 104,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x40000000),
+            blurRadius: 24,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: _coverBytes != null
+            ? Image.memory(_coverBytes!, fit: BoxFit.cover)
+            : const ColoredBox(
+                color: Color(0xFF2A2F3C),
+                child: Icon(
+                  Icons.album_rounded,
+                  size: 36,
+                  color: Colors.white24,
+                ),
+              ),
+      ),
+    );
+  }
+
+  // ─────────────────────────── 白色内容卡 ───────────────────────────
+
+  Widget _buildContentSheet() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.canvas,
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+        child: _buildSheetBody(),
+      ),
+    );
+  }
+
+  Widget _buildSheetBody() {
+    if (_loading) return _buildSkeletons();
+
+    if (_songs.isEmpty) {
+      return AppEmptyState(
+        icon: _error == null
+            ? Icons.music_off_rounded
+            : Icons.cloud_off_rounded,
+        title: _error == null ? '这个歌单暂时没有歌' : '加载没成功',
+        message: _error ?? '换个歌单看看，或稍后再试',
+        actionLabel: '重新加载',
+        onAction: _loadSongs,
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.md,
+        AppSpace.md,
+        AppSpace.md,
+        AppSpace.xxxl,
+      ),
+      itemCount: _songs.length,
+      itemBuilder: (_, index) => _buildSongRow(index, _songs[index]),
+    );
+  }
+
+  Widget _buildSkeletons() {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.page,
+        AppSpace.xl,
+        AppSpace.page,
+        0,
+      ),
+      itemCount: 8,
+      itemBuilder: (_, _) => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            AppSkeleton(width: 20, height: 12, radius: 6),
+            SizedBox(width: AppSpace.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppSkeleton(width: 180, height: 13, radius: 6),
+                  SizedBox(height: AppSpace.sm),
+                  AppSkeleton(width: 104, height: 11, radius: 6),
+                ],
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSongRow(int index, SongModel song) {
+    final isCurrent = _currentSongId == song.id;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _playSong(index),
+        borderRadius: BorderRadius.circular(AppRadius.row),
+        child: SizedBox(
+          height: 60,
+          child: Row(
+            children: [
+              SizedBox(
+                width: 28,
+                child: Text(
+                  '${index + 1}',
+                  textAlign: TextAlign.center,
+                  style: AppType.caption.copyWith(
+                    color: isCurrent ? AppColors.brand : AppColors.inkTertiary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpace.md),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      song.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.body.copyWith(
+                        color: isCurrent ? AppColors.brand : AppColors.ink,
+                        fontWeight: isCurrent
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
+                    ),
+                    if (song.artist.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        song.artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.caption,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpace.sm),
+              Icon(
+                isCurrent ? Icons.graphic_eq_rounded : Icons.play_arrow_rounded,
+                size: 20,
+                color: isCurrent ? AppColors.brand : AppColors.inkDisabled,
+              ),
+            ],
+          ),
         ),
       ),
     );

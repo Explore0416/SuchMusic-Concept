@@ -1,10 +1,8 @@
 import 'dart:async';
-
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../models/song_model.dart';
 import '../services/music_api_service.dart';
 import '../services/audio_player_service.dart';
@@ -12,10 +10,14 @@ import '../services/search_history_service.dart';
 import '../services/play_context_service.dart';
 import '../services/sources/source_manager.dart';
 import '../services/app_init.dart';
+import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
 import '../utils/player_route.dart';
-import '../widgets/fade_slide_in.dart';
+import '../widgets/app_ui.dart';
 
+/// 搜索页：输入即联想，提交即结果。
+///
+/// 四种状态各有承载：初始（历史 + 热搜）/ 联想 / 加载（骨架）/ 结果与空结果。
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
 
@@ -30,14 +32,15 @@ class _SearchPageState extends State<SearchPage> {
   final SearchHistoryService _historyService = SearchHistoryService();
   final FocusNode _focusNode = FocusNode();
 
-  double _backScale = 1.0;
-  double _searchScale = 1.0;
   bool _isLoading = false;
   List<SongModel> _searchResults = [];
   List<String> _hotKeys = [];
   List<String> _suggestions = [];
   List<String> _searchHistory = [];
   String _errorMessage = '';
+
+  /// 已提交的关键词，用于在结果里高亮
+  String _submittedQuery = '';
 
   StreamSubscription<SongSource>? _sourceSub;
   Timer? _suggestDebounce;
@@ -125,6 +128,14 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  void _submitKeyword(String keyword) {
+    _searchController.text = keyword;
+    _searchController.selection = TextSelection.fromPosition(
+      TextPosition(offset: keyword.length),
+    );
+    _performSearch();
+  }
+
   Future<void> _performSearch() async {
     final query = _searchController.text.trim();
     if (query.isEmpty) return;
@@ -141,6 +152,7 @@ class _SearchPageState extends State<SearchPage> {
       _errorMessage = '';
       _searchResults = [];
       _suggestions = [];
+      _submittedQuery = query;
     });
 
     try {
@@ -159,7 +171,8 @@ class _SearchPageState extends State<SearchPage> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = '搜索失败: ${e.toString().replaceFirst('Exception: ', '')}';
+          _errorMessage =
+              '搜索失败: ${e.toString().replaceFirst('Exception: ', '')}';
         });
       }
     }
@@ -191,6 +204,16 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
+  Future<void> _playAll() async {
+    if (_searchResults.isEmpty) return;
+    openPlayerPage(context);
+    PlayContextService().setSource(
+      kind: PlaySourceKind.search,
+      keyword: _submittedQuery.isEmpty ? null : _submittedQuery,
+    );
+    await _audioPlayer.playSongs(List<SongModel>.from(_searchResults));
+  }
+
   @override
   void dispose() {
     _suggestDebounce?.cancel();
@@ -204,346 +227,298 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F2F4),
+      backgroundColor: AppColors.canvas,
       body: SafeArea(
+        bottom: false,
         child: ResponsiveContent(
           child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(15, 10, 15, 6),
-              child: _buildSearchBar(),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 15),
-                child: _buildBody(),
-              ),
-            ),
-          ],
-        ),
+            children: [
+              _buildSearchBar(),
+              Expanded(child: _buildBody()),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: Color(0xFF09244B)),
-      );
-    }
-
-    if (_searchResults.isNotEmpty || _errorMessage.isNotEmpty) {
-      return _buildSearchResults();
-    }
-
-    if (_suggestions.isNotEmpty) {
-      return _buildSuggestions();
-    }
-
-    return _buildInitialContent();
-  }
+  // ─────────────────────────── 顶栏 ───────────────────────────
 
   Widget _buildSearchBar() {
-    return Row(
-      children: [
-        GestureDetector(
-          onTapDown: (_) {
-            setState(() {
-              _backScale = 0.85;
-            });
-          },
-          onTapUp: (_) {
-            setState(() {
-              _backScale = 1.15;
-            });
-            Future.delayed(const Duration(milliseconds: 120), () {
-              if (mounted) {
-                setState(() {
-                  _backScale = 1.0;
-                });
-              }
-            });
-            Navigator.pop(context);
-          },
-          onTapCancel: () {
-            setState(() {
-              _backScale = 1.0;
-            });
-          },
-          child: AnimatedScale(
-            duration: const Duration(milliseconds: 120),
-            curve: Curves.easeOut,
-            scale: _backScale,
+    final hasText = _searchController.text.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.xs,
+        AppSpace.sm,
+        AppSpace.page,
+        AppSpace.md,
+      ),
+      child: Row(
+        children: [
+          AppIconButton(
+            icon: Icons.arrow_back_ios_new_rounded,
+            iconSize: 18,
+            tooltip: '返回',
+            onTap: () => Navigator.maybePop(context),
+          ),
+          Expanded(
             child: Container(
-              margin: const EdgeInsets.only(right: 12),
-              width: 24,
-              height: 24,
-              child: SvgPicture.string(
-                '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 1024 1024"><path d="M747.245 81.064c-28.497-29.315-74.739-29.315-103.307 0l-367.236 378.011c-28.483 29.367-28.483 76.982 0 106.291l367.236 377.997c28.562 29.367 74.806 29.367 103.307 0 28.546-29.325 28.546-76.929 0-106.304l-315.6-324.841 315.599-324.803c28.545-29.367 28.544-76.973 0-106.356l0 0z" fill="#CACACA"></path></svg>',
+              height: 46,
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(AppRadius.row),
+                border: Border.all(color: AppColors.hairline, width: 0.7),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: AppSpace.md),
+                  const Icon(
+                    Icons.search_rounded,
+                    size: 18,
+                    color: AppColors.inkTertiary,
+                  ),
+                  const SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _focusNode,
+                      autofocus: true,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _performSearch(),
+                      cursorColor: AppColors.brand,
+                      style: AppType.body,
+                      decoration: InputDecoration(
+                        filled: false,
+                        isDense: true,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        contentPadding: EdgeInsets.zero,
+                        hintText: '搜索歌曲、歌手',
+                        hintStyle: AppType.body.copyWith(
+                          color: AppColors.inkTertiary,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (hasText)
+                    AppIconButton(
+                      icon: Icons.cancel_rounded,
+                      size: 36,
+                      iconSize: 16,
+                      foreground: AppColors.inkTertiary,
+                      onTap: () => _searchController.clear(),
+                    )
+                  else
+                    const SizedBox(width: AppSpace.md),
+                ],
               ),
             ),
           ),
-        ),
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(30),
-            ),
-            child: TextField(
-              controller: _searchController,
-              focusNode: _focusNode,
-              autofocus: true,
-              onSubmitted: (_) => _performSearch(),
-              decoration: const InputDecoration(
-                hintText: '搜索歌曲',
-                hintStyle: TextStyle(
-                  color: Colors.black,
-                  fontSize: 14,
-                ),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-              ),
-            ),
-          ),
-        ),
-        GestureDetector(
-          onTapDown: (_) {
-            setState(() {
-              _searchScale = 0.85;
-            });
-          },
-          onTapUp: (_) {
-            setState(() {
-              _searchScale = 1.15;
-            });
-            Future.delayed(const Duration(milliseconds: 120), () {
-              if (mounted) {
-                setState(() {
-                  _searchScale = 1.0;
-                });
-              }
-            });
-          },
-          onTapCancel: () {
-            setState(() {
-              _searchScale = 1.0;
-            });
-          },
-          onTap: _performSearch,
-          child: AnimatedScale(
-            duration: const Duration(milliseconds: 120),
-            curve: Curves.easeOut,
-            scale: _searchScale,
-            child: Container(
-              margin: const EdgeInsets.only(left: 12),
-              child: const Text(
-                '搜索',
-                style: TextStyle(
-                  color: Color(0xFF7C7C7C),
-                  fontSize: 16,
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        _buildSourceBadge(),
-      ],
+          const SizedBox(width: AppSpace.sm),
+          _buildSourceBadge(),
+        ],
+      ),
     );
   }
 
-  /// 顶栏音源标识（REQ-07）
+  /// 顶栏音源标识（REQ-07）：说明这次搜索打的是哪个源
   Widget _buildSourceBadge() {
     return StreamBuilder<SongSource>(
       stream: SourceManager().onSourceChanged,
       initialData: SourceManager().currentSource,
       builder: (context, snapshot) {
         final kind = snapshot.data ?? SongSource.netease;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: const Color(0xFFE8F0FF),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            kind.label,
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFF2F84FE),
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+        return AppTag(
+          text: kind.label,
+          color: AppColors.brand,
+          background: AppColors.brandSoft,
         );
       },
     );
   }
 
-  Widget _buildSuggestions() {
-    return ListView.separated(
-      itemCount: _suggestions.length,
-      separatorBuilder: (context, i) => const Divider(height: 1, color: Color(0xFFEEEEEE)),
-      itemBuilder: (context, index) {
-        final keyword = _suggestions[index];
-        return ListTile(
-          leading: const Icon(Icons.search, color: Color(0xFFB0B0B0)),
-          title: Text(
-            keyword,
-            style: const TextStyle(fontSize: 14, color: Colors.black87),
-          ),
-          onTap: () {
-            _searchController.text = keyword;
-            _searchController.selection = TextSelection.fromPosition(
-              TextPosition(offset: keyword.length),
-            );
-            _performSearch();
-          },
-        );
-      },
-    );
+  // ─────────────────────────── 状态分发 ───────────────────────────
+
+  Widget _buildBody() {
+    if (_isLoading) return _buildSkeletonList();
+
+    if (_searchResults.isNotEmpty || _errorMessage.isNotEmpty) {
+      return _buildSearchResults();
+    }
+
+    if (_suggestions.isNotEmpty) return _buildSuggestions();
+
+    return _buildInitialContent();
   }
 
-  Widget _buildInitialContent() {
-    if (_hotKeys.isEmpty && _searchHistory.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+  /// 加载态用骨架行而不是居中转圈：形状预示结果，等待感更短。
+  Widget _buildSkeletonList() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.page,
+        vertical: AppSpace.xs,
+      ),
+      itemCount: 8,
+      itemBuilder: (context, index) => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Row(
           children: [
-            Icon(Icons.search, size: 48, color: Colors.grey[300]),
-            const SizedBox(height: 12),
-            Text(
-              '输入关键词搜索歌曲',
-              style: TextStyle(color: Colors.grey[400], fontSize: 14),
+            AppSkeleton(width: 48, height: 48, radius: 12),
+            SizedBox(width: AppSpace.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppSkeleton(width: 168, height: 13, radius: 6),
+                  SizedBox(height: AppSpace.sm),
+                  AppSkeleton(width: 96, height: 11, radius: 6),
+                ],
+              ),
             ),
           ],
         ),
-      );
-    }
-
-    final children = <Widget>[];
-
-    if (_searchHistory.isNotEmpty) {
-      children.add(_buildHistorySection());
-      children.add(const SizedBox(height: 20));
-    }
-
-    children.add(const Padding(
-      padding: EdgeInsets.only(left: 4, bottom: 12),
-      child: Text(
-        '热搜榜',
-        style: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: Colors.black87,
-        ),
       ),
-    ));
-
-    for (var i = 0; i < _hotKeys.length; i++) {
-      final keyword = _hotKeys[i];
-      children.add(ListTile(
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        leading: SizedBox(
-          width: 24,
-          child: Text(
-            '${i + 1}',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: i < 3 ? const Color(0xFFE83220) : Colors.grey[500],
-            ),
-          ),
-        ),
-        title: Text(
-          keyword,
-          style: const TextStyle(fontSize: 14, color: Colors.black87),
-        ),
-        trailing: const Icon(Icons.chevron_right, color: Color(0xFFCCCCCC)),
-        onTap: () {
-          _searchController.text = keyword;
-          _searchController.selection = TextSelection.fromPosition(
-            TextPosition(offset: keyword.length),
-          );
-          _performSearch();
-        },
-      ));
-      if (i < _hotKeys.length - 1) {
-        children.add(const Divider(height: 1, color: Color(0xFFEEEEEE)));
-      }
-    }
-
-    return ListView(
-      padding: EdgeInsets.zero,
-      children: children,
     );
   }
 
-  Widget _buildHistorySection() {
+  // ─────────────────────────── 初始态 ───────────────────────────
+
+  Widget _buildInitialContent() {
+    if (_hotKeys.isEmpty && _searchHistory.isEmpty) {
+      return const AppEmptyState(
+        icon: Icons.search_rounded,
+        title: '输入关键词开始搜索',
+        message: '歌名、歌手都能搜，也可以直接从热搜里挑一个',
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.only(
+        left: AppSpace.page,
+        right: AppSpace.page,
+        bottom: AppSpace.xxxl,
+      ),
+      children: [
+        if (_searchHistory.isNotEmpty) ...[
+          AppSectionHeader(
+            title: '搜索历史',
+            actionLabel: '清空',
+            onAction: _confirmClearHistory,
+            padding: const EdgeInsets.only(bottom: AppSpace.md),
+          ),
+          _buildHistoryChips(),
+          const SizedBox(height: AppSpace.xxl),
+        ],
+        _buildHotSection(),
+      ],
+    );
+  }
+
+  Widget _buildHistoryChips() {
+    return Wrap(
+      spacing: AppSpace.sm,
+      runSpacing: AppSpace.sm,
+      children: _searchHistory.map((keyword) {
+        return Material(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          child: InkWell(
+            onTap: () => _submitKeyword(keyword),
+            onLongPress: () async {
+              // 长按删单条：手势不该是唯一入口，所以保留「清空」显式按钮
+              await _historyService.remove(keyword);
+              if (mounted) {
+                setState(() {
+                  _searchHistory = _historyService.history;
+                });
+              }
+            },
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+            child: Container(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.pill),
+                border: Border.all(color: AppColors.hairline, width: 0.7),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                keyword,
+                style: AppType.caption.copyWith(color: AppColors.ink),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildHotSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 12),
+        AppSectionHeader(
+          title: '热搜榜',
+          subtitle: '长按历史可删除单条',
+          padding: EdgeInsets.zero,
+        ),
+        const SizedBox(height: AppSpace.md),
+        if (_hotKeys.isEmpty)
+          const AppEmptyState(
+            icon: Icons.local_fire_department_outlined,
+            title: '暂时取不到热搜',
+            message: '直接搜歌名同样可以',
+            compact: true,
+          )
+        else
+          for (var i = 0; i < _hotKeys.length; i++)
+            _buildHotRow(i, _hotKeys[i]),
+      ],
+    );
+  }
+
+  Widget _buildHotRow(int index, String keyword) {
+    final top = index < 3;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _submitKeyword(keyword),
+        borderRadius: BorderRadius.circular(AppRadius.row),
+        child: SizedBox(
+          height: 48,
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                '搜索历史',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
+              SizedBox(
+                width: 24,
+                child: Text(
+                  '${index + 1}',
+                  textAlign: TextAlign.center,
+                  style: AppType.captionStrong.copyWith(
+                    fontSize: 15,
+                    color: top ? AppColors.rose : AppColors.inkTertiary,
+                  ),
                 ),
               ),
-              GestureDetector(
-                onTap: _confirmClearHistory,
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.delete_outline,
-                      size: 20, color: Colors.grey[500]),
+              const SizedBox(width: AppSpace.md),
+              Expanded(
+                child: Text(
+                  keyword,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.body,
                 ),
               ),
+              if (top)
+                const AppTag(
+                  text: '热',
+                  color: AppColors.rose,
+                  background: AppColors.roseSoft,
+                ),
             ],
           ),
         ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _searchHistory.map((keyword) {
-            return GestureDetector(
-              onTap: () {
-                _searchController.text = keyword;
-                _searchController.selection = TextSelection.fromPosition(
-                  TextPosition(offset: keyword.length),
-                );
-                _performSearch();
-              },
-              onLongPress: () async {
-                await _historyService.remove(keyword);
-                if (mounted) {
-                  setState(() {
-                    _searchHistory = _historyService.history;
-                  });
-                }
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  keyword,
-                  style: const TextStyle(fontSize: 13, color: Colors.black87),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ],
+      ),
     );
   }
 
@@ -552,7 +527,7 @@ class _SearchPageState extends State<SearchPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('清空搜索历史'),
-        content: const Text('确定要清空所有搜索历史吗？'),
+        content: const Text('确定要清空所有搜索历史吗？清空后无法恢复。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -560,6 +535,7 @@ class _SearchPageState extends State<SearchPage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
             child: const Text('清空'),
           ),
         ],
@@ -575,95 +551,238 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  Widget _buildSearchResults() {
-    if (_errorMessage.isNotEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.music_off, size: 48, color: Colors.grey[400]),
-            const SizedBox(height: 12),
-            Text(
-              _errorMessage,
-              style: TextStyle(color: Colors.grey[500], fontSize: 14),
-            ),
-          ],
-        ),
-      );
-    }
+  // ─────────────────────────── 联想态 ───────────────────────────
 
+  Widget _buildSuggestions() {
     return ListView.builder(
-      itemCount: _searchResults.length,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+      itemCount: _suggestions.length,
       itemBuilder: (context, index) {
-        return Padding(
-          padding: EdgeInsets.only(
-              bottom: index < _searchResults.length - 1 ? 12 : 0),
-          child: FadeSlideIn(
-            index: index,
-            child: _buildSongItem(_searchResults[index]),
+        final keyword = _suggestions[index];
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _submitKeyword(keyword),
+            borderRadius: BorderRadius.circular(AppRadius.row),
+            child: SizedBox(
+              height: 52,
+              child: Row(
+                children: [
+                  const SizedBox(width: AppSpace.md),
+                  const Icon(
+                    Icons.search_rounded,
+                    size: 18,
+                    color: AppColors.inkTertiary,
+                  ),
+                  const SizedBox(width: AppSpace.md),
+                  Expanded(
+                    child: Text(
+                      keyword,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.body.copyWith(fontWeight: FontWeight.w400),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.north_west_rounded,
+                    size: 16,
+                    color: AppColors.inkDisabled,
+                  ),
+                  const SizedBox(width: AppSpace.md),
+                ],
+              ),
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildSongItem(SongModel song) {
-    return GestureDetector(
-      onTap: () => _playSong(song),
-      child: SizedBox(
-        height: 48,
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0F0F0),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: song.coverUrl != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
-                      child: _SongCoverImage(url: song.coverUrl!),
-                    )
-                  : const Icon(Icons.music_note,
-                      color: Colors.grey, size: 24),
+  // ─────────────────────────── 结果态 ───────────────────────────
+
+  Widget _buildSearchResults() {
+    if (_errorMessage.isNotEmpty) {
+      final notFound = _errorMessage == '未找到相关歌曲';
+      return AppEmptyState(
+        icon: notFound ? Icons.search_off_rounded : Icons.cloud_off_rounded,
+        title: notFound ? '没有找到「$_submittedQuery」' : '搜索没成功',
+        message: notFound ? '换个关键词，或在设置里切换音源再试' : _errorMessage,
+        actionLabel: '重新搜索',
+        onAction: _performSearch,
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.only(
+        left: AppSpace.page,
+        right: AppSpace.page,
+        bottom: AppSpace.xxxl,
+      ),
+      itemCount: _searchResults.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) return _buildResultHeader();
+        return _buildSongRow(_searchResults[index - 1]);
+      },
+    );
+  }
+
+  Widget _buildResultHeader() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpace.xs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '${_searchResults.length} 首结果',
+              style: AppType.caption.copyWith(color: AppColors.inkTertiary),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    song.name,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      height: 1.1,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.black,
+          ),
+          Material(
+            color: AppColors.brandSoft,
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+            child: InkWell(
+              onTap: _playAll,
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.play_arrow_rounded,
+                      size: 16,
+                      color: AppColors.brand,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    song.artist,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      height: 1.1,
-                      fontWeight: FontWeight.w400,
-                      color: Color(0x80000000),
+                    const SizedBox(width: 4),
+                    Text(
+                      '播放全部',
+                      style: AppType.captionStrong.copyWith(
+                        color: AppColors.brand,
+                      ),
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSongRow(SongModel song) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _playSong(song),
+        borderRadius: BorderRadius.circular(AppRadius.row),
+        child: SizedBox(
+          height: 64,
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: song.coverUrl != null && song.coverUrl!.isNotEmpty
+                      ? _SongCoverImage(url: song.coverUrl!)
+                      : const ColoredBox(
+                          color: AppColors.surfaceMuted,
+                          child: Icon(
+                            Icons.music_note_rounded,
+                            color: AppColors.inkTertiary,
+                            size: 20,
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(width: AppSpace.md),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _HighlightedText(
+                      text: song.name,
+                      keyword: _submittedQuery,
+                      base: AppType.body,
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      song.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.caption,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpace.sm),
+              const Icon(
+                Icons.more_horiz_rounded,
+                size: 20,
+                color: AppColors.inkDisabled,
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// 命中关键词高亮：把搜索词标成品牌色，长列表里更容易扫读。
+class _HighlightedText extends StatelessWidget {
+  const _HighlightedText({
+    required this.text,
+    required this.keyword,
+    required this.base,
+  });
+
+  final String text;
+  final String keyword;
+  final TextStyle base;
+
+  @override
+  Widget build(BuildContext context) {
+    final key = keyword.trim();
+    if (key.isEmpty) {
+      return Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: base,
+      );
+    }
+    final lowerText = text.toLowerCase();
+    final lowerKey = key.toLowerCase();
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final at = lowerText.indexOf(lowerKey, start);
+      if (at < 0) {
+        spans.add(TextSpan(text: text.substring(start)));
+        break;
+      }
+      if (at > start) {
+        spans.add(TextSpan(text: text.substring(start, at)));
+      }
+      spans.add(
+        TextSpan(
+          text: text.substring(at, at + key.length),
+          style: const TextStyle(color: AppColors.brand),
+        ),
+      );
+      start = at + key.length;
+    }
+    return Text.rich(
+      TextSpan(style: base, children: spans),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }
@@ -687,10 +806,12 @@ class _SongCoverImageState extends State<_SongCoverImage>
     duration: const Duration(milliseconds: 1200),
   )..repeat();
 
-  static final Dio _dio = Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   @override
   void initState() {
@@ -741,7 +862,7 @@ class _SongCoverImageState extends State<_SongCoverImage>
         return Stack(
           fit: StackFit.expand,
           children: [
-            const ColoredBox(color: Color(0xFFF0F0F0)),
+            const ColoredBox(color: Color(0xFFEDEDE9)),
             Positioned(
               left: -52 + 104 * _shimmerController.value,
               top: 0,
@@ -753,9 +874,9 @@ class _SongCoverImageState extends State<_SongCoverImage>
                     begin: Alignment.centerLeft,
                     end: Alignment.centerRight,
                     colors: [
-                      Color(0x00F0F0F0),
-                      Colors.white,
-                      Color(0x00F0F0F0),
+                      Color(0x00EDEDE9),
+                      Color(0x99FFFFFF),
+                      Color(0x00EDEDE9),
                     ],
                   ),
                 ),
@@ -769,17 +890,17 @@ class _SongCoverImageState extends State<_SongCoverImage>
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return _buildShimmer();
-    }
+    if (_loading) return _buildShimmer();
     if (_imageBytes != null) {
-      return Image.memory(
-        _imageBytes!,
-        width: 46,
-        height: 46,
-        fit: BoxFit.cover,
-      );
+      return Image.memory(_imageBytes!, fit: BoxFit.cover);
     }
-    return const Icon(Icons.music_note, color: Colors.grey);
+    return const ColoredBox(
+      color: AppColors.surfaceMuted,
+      child: Icon(
+        Icons.music_note_rounded,
+        color: AppColors.inkTertiary,
+        size: 20,
+      ),
+    );
   }
 }

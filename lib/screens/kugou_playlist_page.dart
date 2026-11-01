@@ -5,7 +5,9 @@ import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 import '../services/kugou_credential_service.dart';
 import '../services/sources/kugou_source.dart';
+import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../widgets/app_ui.dart';
 import '../widgets/design_dialog.dart';
 import '../widgets/fade_slide_in.dart';
 import 'playlist_detail_page.dart';
@@ -83,7 +85,8 @@ class _KugouPlaylistPageState extends State<KugouPlaylistPage> {
       // 取歌单元信息（失败也不阻塞，用占位信息进入）
       final info = await src.playlistInfo(gcid);
       if (!mounted) return;
-      final playlist = info ??
+      final playlist =
+          info ??
           PlaylistModel(
             id: gcid,
             name: '酷狗歌单',
@@ -116,107 +119,110 @@ class _KugouPlaylistPageState extends State<KugouPlaylistPage> {
 
   @override
   Widget build(BuildContext context) {
-    final scale = MediaQuery.textScalerOf(context).scale(1.0).clamp(Responsive.textScaleMin, Responsive.textScaleMax);
-    final content = Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
-      appBar: AppBar(
-        title: const Text('酷狗歌单'),
-        backgroundColor: const Color(0xFFF5F6F8),
-        elevation: 0,
-        foregroundColor: Colors.black,
-      ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints:
-              const BoxConstraints(maxWidth: Responsive.contentMaxWidth),
-          child: RefreshIndicator(
-            onRefresh: _load,
-            child: ListView(
-              padding: EdgeInsets.fromLTRB(16 * scale, 8 * scale, 16 * scale, 24),
-              children: [
-                _buildImportCard(scale),
-                SizedBox(height: 18 * scale),
-                ..._buildBody(scale),
-              ],
-            ),
+    return Scaffold(
+      backgroundColor: AppColors.canvas,
+      body: SafeArea(
+        bottom: false,
+        child: ResponsiveContent(
+          child: Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _load,
+                  color: AppColors.brand,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.page,
+                      0,
+                      AppSpace.page,
+                      AppSpace.xxxl,
+                    ),
+                    children: [_buildImportCard(), ..._buildBody()],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
-    return content;
   }
 
-  Widget _buildImportCard(double s) {
-    return Container(
-      padding: EdgeInsets.all(16 * s),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x14000000), blurRadius: 12, offset: Offset(0, 4)),
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.sm,
+        AppSpace.sm,
+        AppSpace.sm,
+        AppSpace.lg,
+      ),
+      child: Row(
+        children: [
+          AppIconButton(
+            icon: Icons.arrow_back_ios_new_rounded,
+            iconSize: 18,
+            tooltip: '返回',
+            onTap: () => Navigator.maybePop(context),
+          ),
+          const SizedBox(width: AppSpace.xs),
+          const Text('酷狗歌单', style: AppType.display),
         ],
       ),
+    );
+  }
+
+  /// 导入入口：一个输入框 + 一个按钮，说明「没有登录也能用」
+  Widget _buildImportCard() {
+    return AppCard(
+      padding: const EdgeInsets.all(AppSpace.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.playlist_add, size: 20, color: Color(0xFF3080FF)),
-              const SizedBox(width: 8),
+              const Icon(
+                Icons.playlist_add_rounded,
+                size: 20,
+                color: AppColors.brand,
+              ),
+              const SizedBox(width: AppSpace.sm),
               Text(
                 '导入酷狗歌单',
-                style: TextStyle(
-                  fontSize: 15 * s,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
+                style: AppType.body.copyWith(fontWeight: FontWeight.w600),
               ),
             ],
           ),
-          SizedBox(height: 10 * s),
+          const SizedBox(height: AppSpace.md),
           TextField(
             controller: _importController,
             minLines: 1,
             maxLines: 2,
-            decoration: InputDecoration(
+            style: AppType.body,
+            decoration: const InputDecoration(
               hintText: '粘贴歌单链接或 ID（如 collection_3_xxx_1_0）',
-              hintStyle: TextStyle(fontSize: 13 * s, color: const Color(0xFFAAAAAA)),
-              filled: true,
-              fillColor: const Color(0xFFF5F6F8),
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12 * s, vertical: 10 * s),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
-              ),
             ),
-            style: TextStyle(fontSize: 14 * s),
           ),
-          SizedBox(height: 10 * s),
+          const SizedBox(height: AppSpace.md),
           SizedBox(
             width: double.infinity,
-            height: 42 * s,
-            child: ElevatedButton(
+            height: 46,
+            child: FilledButton(
               onPressed: _importing ? null : _import,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF3080FF),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.brand,
+                minimumSize: const Size(0, 46),
               ),
               child: _importing
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
-                  : Text('导入并打开',
-                      style: TextStyle(
-                          fontSize: 14 * s, fontWeight: FontWeight.w500)),
+                  : const Text('导入并打开'),
             ),
           ),
         ],
@@ -224,158 +230,166 @@ class _KugouPlaylistPageState extends State<KugouPlaylistPage> {
     );
   }
 
-  List<Widget> _buildBody(double s) {
+  List<Widget> _buildBody() {
     if (_loading) {
       return [
-        Padding(
-          padding: EdgeInsets.only(top: 40 * s),
-          child: const Center(child: CircularProgressIndicator()),
+        const Padding(
+          padding: EdgeInsets.only(top: AppSpace.xxl),
+          child: Center(
+            child: CircularProgressIndicator(color: AppColors.brand),
+          ),
         ),
       ];
     }
     if (_groups.isEmpty) {
-      return [_buildEmptyHint(s)];
+      return [_buildEmptyHint()];
     }
+
     final widgets = <Widget>[];
     for (final g in _groups) {
-      widgets.add(Padding(
-        padding: EdgeInsets.only(bottom: 8 * s, top: 4 * s),
-        child: Row(
-          children: [
-            Text(
-              g.platform.label,
-              style: TextStyle(
-                fontSize: 15 * s,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            4,
+            AppSpace.xxl,
+            AppSpace.page,
+            AppSpace.sm,
+          ),
+          child: Row(
+            children: [
+              Text(g.platform.label, style: AppType.title),
+              const SizedBox(width: AppSpace.sm),
+              AppTag(
+                text: '${g.playlists.length} 个',
+                color: AppColors.inkTertiary,
+                background: AppColors.surfaceMuted,
               ),
-            ),
-            SizedBox(width: 8 * s),
-            Text('${g.playlists.length} 个歌单',
-                style: TextStyle(fontSize: 12 * s, color: const Color(0xFF999999))),
-          ],
+            ],
+          ),
         ),
-      ));
+      );
+
       if (g.playlists.isEmpty) {
-        widgets.add(Padding(
-          padding: EdgeInsets.only(bottom: 12 * s),
-          child: Text('暂无歌单（或登录态已失效）',
-              style: TextStyle(fontSize: 13 * s, color: const Color(0xFF999999))),
-        ));
+        widgets.add(
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: AppSpace.md),
+            child: Text(
+              '暂无歌单，登录态可能已失效',
+              style: AppType.caption.copyWith(color: AppColors.inkTertiary),
+            ),
+          ),
+        );
         continue;
       }
+
+      final rows = <Widget>[];
       for (var i = 0; i < g.playlists.length; i++) {
-        widgets.add(FadeSlideIn(
-          index: i,
-          child: _buildPlaylistTile(g.playlists[i], s),
-        ));
+        if (i > 0) {
+          rows.add(const AppHairline(indent: 56, endIndent: AppSpace.lg));
+        }
+        rows.add(_buildPlaylistTile(g.playlists[i]));
       }
+      widgets.add(
+        AppCard(
+          padding: EdgeInsets.zero,
+          child: Column(children: rows),
+        ),
+      );
     }
     return widgets;
   }
 
-  Widget _buildEmptyHint(double s) {
-    return Container(
-      padding: EdgeInsets.symmetric(vertical: 28 * s, horizontal: 16 * s),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        children: [
-          Icon(Icons.library_music_outlined,
-              size: 36 * s, color: const Color(0xFFCCCCCC)),
-          SizedBox(height: 10 * s),
-          Text(
-            '尚未登录酷狗账号\n登录后这里会显示你的酷狗歌单',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 13 * s, color: const Color(0xFF999999), height: 1.6),
-          ),
-          SizedBox(height: 6 * s),
-          Text(
-            '也可以直接在上面粘贴歌单链接导入',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12 * s, color: const Color(0xFFBBBBBB)),
-          ),
-        ],
+  Widget _buildEmptyHint() {
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.xxl),
+      child: AppEmptyState(
+        icon: Icons.library_music_outlined,
+        title: '还没有看到酷狗歌单',
+        message: '登录酷狗账号后会显示在这里；也可以直接粘贴链接导入',
       ),
     );
   }
 
-  Widget _buildPlaylistTile(PlaylistModel pl, double s) {
-    return Container(
-      margin: EdgeInsets.only(bottom: 8 * s),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-      ),
+  Widget _buildPlaylistTile(PlaylistModel pl) {
+    final hasCover = pl.coverUrl != null && pl.coverUrl!.isNotEmpty;
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
         onTap: () => _openPlaylist(pl),
         child: Padding(
-          padding: EdgeInsets.all(10 * s),
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.lg,
+            vertical: AppSpace.md,
+          ),
           child: Row(
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(12),
                 child: SizedBox(
-                  width: 52 * s,
-                  height: 52 * s,
-                  child: (pl.coverUrl != null && pl.coverUrl!.isNotEmpty)
+                  width: 48,
+                  height: 48,
+                  child: hasCover
                       ? Image.network(
                           pl.coverUrl!,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _coverPlaceholder(s),
+                          errorBuilder: (_, _, _) => const _CoverPlaceholder(),
                         )
-                      : _coverPlaceholder(s),
+                      : const _CoverPlaceholder(),
                 ),
               ),
-              SizedBox(width: 12 * s),
+              const SizedBox(width: AppSpace.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       pl.name.isEmpty ? '未命名歌单' : pl.name,
-                      maxLines: 2,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14 * s,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black87,
-                      ),
+                      style: AppType.body,
                     ),
                     if (pl.trackCount != null) ...[
-                      SizedBox(height: 4 * s),
-                      Text('${pl.trackCount} 首',
-                          style: TextStyle(
-                              fontSize: 12 * s,
-                              color: const Color(0xFF999999))),
+                      const SizedBox(height: 3),
+                      Text('${pl.trackCount} 首', style: AppType.caption),
                     ],
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: Color(0xFFCCCCCC)),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: AppColors.inkDisabled,
+              ),
             ],
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _coverPlaceholder(double s) => Container(
-        color: const Color(0xFFEEF1F5),
-        child: Icon(Icons.music_note,
-            size: 22 * s, color: const Color(0xFFBBBBBB)),
-      );
+class _CoverPlaceholder extends StatelessWidget {
+  const _CoverPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(
+      color: AppColors.surfaceMuted,
+      child: Icon(
+        Icons.music_note_rounded,
+        size: 20,
+        color: AppColors.inkTertiary,
+      ),
+    );
+  }
 }
 
 /// 供外部（如「我的」页）使用的入口图标（保持风格一致）。
 // ignore: unused_element
 Widget kugouPlaylistEntryIcon() => SvgPicture.asset(
-      'assets/images/svg/Play_cycle.svg',
-      width: 20,
-      height: 20,
-      colorFilter: const ColorFilter.mode(Color(0xFF3080FF), BlendMode.srcIn),
-    );
+  'assets/images/svg/Play_cycle.svg',
+  width: 20,
+  height: 20,
+  colorFilter: const ColorFilter.mode(Color(0xFF3080FF), BlendMode.srcIn),
+);

@@ -1,4 +1,4 @@
-// 「我的」页音源账号卡片：网易云一家、酷狗一家，共两行入口。
+// 「我的」页登录入口：一个入口覆盖全部音源，页面内不再重复挂账号入口。
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,25 +18,42 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('未登录态只展示「网易云音乐」「酷狗音乐」两个入口', (tester) async {
+  testWidgets('未登录：页面只有一个登录入口，不再挂「音源账号」区块', (tester) async {
     await pumpProfile(tester);
 
-    expect(find.text('网易云音乐'), findsOneWidget);
-    expect(find.text('酷狗音乐'), findsOneWidget);
-    // 概念版不再单独占一行（两行酷狗已合并为一个入口）
-    expect(find.text('酷狗概念版'), findsNothing);
-    expect(find.text('扫码登录'), findsWidgets);
+    expect(find.text('登录'), findsOneWidget);
+    // 音源账号区块已并入登录弹层
+    expect(find.text('音源账号'), findsNothing);
+    expect(find.text('设置'), findsOneWidget);
   });
 
-  testWidgets('点「酷狗音乐」打开聚合面板，两个平台各一行', (tester) async {
+  testWidgets('点登录打开统一弹层，可在网易云 / 酷狗之间切换', (tester) async {
     await pumpProfile(tester);
 
-    await tester.tap(find.text('酷狗音乐'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('登录'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
 
-    // 面板里出现两个平台（标题也叫「酷狗音乐」，故用 findsWidgets）
+    // 弹层标题与两个音源分段同时出现
+    expect(find.text('登录'), findsWidgets);
+    expect(find.text('网易云音乐'), findsWidgets);
+    expect(find.text('酷狗音乐'), findsWidgets);
+  });
+
+  testWidgets('切到酷狗后展示概念版与原版两行授权入口', (tester) async {
+    await pumpProfile(tester);
+
+    await tester.tap(find.text('登录'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 分段按钮里的「酷狗音乐」——取第一个可点的
+    await tester.tap(find.text('酷狗音乐').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
     expect(find.text('酷狗概念版'), findsOneWidget);
     expect(find.text('酷狗音乐'), findsWidgets);
-    expect(find.text('扫码登录'), findsWidgets);
+    expect(find.text('去登录'), findsWidgets);
   });
 }
