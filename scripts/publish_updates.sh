@@ -240,4 +240,33 @@ else
   echo "ℹ️ 未配置 CF_API_TOKEN/CF_ZONE_ID，跳过缓存清除"
 fi
 
+# ▶ 同步 GitHub 代码仓库（概念版）：分支 + tag + Release
+#     让项目主页 Releases 页始终显示最新版，用户可从 GitHub 下载 APK。
+#     仅在 concept/* 或 sync/* 分支上自动推送分支与 tag；其余分支仅补建 Release。
+RELEASE_REPO="${RELEASE_REPO:-Explore0416/SuchMusic-Concept}"
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  CUR="$(git rev-parse --abbrev-ref HEAD)"
+  if [[ "$CUR" == concept/* || "$CUR" == sync/* ]]; then
+    echo "▶ 同步 GitHub 代码仓库（${RELEASE_REPO}）：分支 ${CUR} + tag v${VERSION_NAME}"
+    GC="url.https://x-access-token:${UPDATES_TOKEN}@github.com/.insteadOf=https://github.com/"
+    if git -c "$GC" push -u origin "$CUR" >/dev/null 2>&1; then
+      echo "✔ 已推送分支 ${CUR}"
+    else
+      echo "⚠️ 分支推送失败，请手动推送（Release 仍会创建）"
+    fi
+    git tag -f "v${VERSION_NAME}" >/dev/null 2>&1
+    if git -c "$GC" push origin "v${VERSION_NAME}" >/dev/null 2>&1; then
+      echo "✔ 已推送 tag v${VERSION_NAME}"
+    else
+      echo "⚠️ tag 推送失败，请手动推送（Release 仍会创建）"
+    fi
+  fi
+  GH_ONLY_VERSION="$VERSION_NAME" RELEASE_REPO="$RELEASE_REPO" RELEASE_BRANCH="$CUR" \
+    APK_DIR="$(dirname "$APK_PATH")" \
+    bash "$SCRIPT_DIR/create_github_releases.sh" \
+    || echo "⚠️ GitHub Release 同步失败，可稍后手动补发（不影响主发布）"
+else
+  echo "ℹ️ 当前非 git 仓库环境，跳过 GitHub 代码同步"
+fi
+
 echo "✔ 完成：清单 ${DOMAIN}/update.json ｜ 安装包 ${DOMAIN}/latest.apk"
