@@ -272,10 +272,8 @@ class AppListTile extends StatelessWidget {
     this.trailing,
     this.showChevron = true,
     this.onTap,
-    this.padding = const EdgeInsets.symmetric(
-      horizontal: AppSpace.lg,
-      vertical: 14,
-    ),
+    this.padding,
+    this.dense = false,
   });
 
   final String title;
@@ -287,29 +285,44 @@ class AppListTile extends StatelessWidget {
   final Widget? trailing;
   final bool showChevron;
   final VoidCallback? onTap;
-  final EdgeInsetsGeometry padding;
+
+  /// 行内边距；为 null 时按 [dense] 取默认值（常规 14 / 紧凑 10）
+  final EdgeInsetsGeometry? padding;
+
+  /// 紧凑模式：图标块 38 → 32、竖向边距 14 → 10（行高 66 → 52）。
+  ///
+  /// 只给「设置」这类长列表页用：同样的屏高能多看到几项，
+  /// 默认关闭，不影响其它页面的现有观感。
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
+    final iconSide = dense ? 32.0 : 38.0;
+    final effectivePadding =
+        padding ??
+        EdgeInsets.symmetric(
+          horizontal: AppSpace.lg,
+          vertical: dense ? 10 : 14,
+        );
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: padding,
+          padding: effectivePadding,
           child: Row(
             children: [
               if (leading != null)
                 leading!
               else if (icon != null)
                 Container(
-                  width: 38,
-                  height: 38,
+                  width: iconSide,
+                  height: iconSide,
                   decoration: BoxDecoration(
                     color: iconBackground,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(dense ? 10 : 12),
                   ),
-                  child: Icon(icon, size: 20, color: iconColor),
+                  child: Icon(icon, size: dense ? 18 : 20, color: iconColor),
                 ),
               if (leading != null || icon != null) const SizedBox(width: 14),
               Expanded(

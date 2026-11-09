@@ -2,18 +2,20 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:netease_music_api/netease_music_api.dart';
-import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
 
 import '../services/music_api_service.dart';
 import '../services/app_init.dart';
-import '../services/kugou_credential_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/fade_slide_in.dart';
 import '../widgets/login_sheet.dart';
+import '../widgets/source_switcher.dart';
 import 'playlist_detail_page.dart';
 import 'settings_page.dart';
+
+/// 身份卡的定位 key：测试据此验证「不再用渐变，只靠头像与字重立层级」。
+const Key profileIdentityCardKey = Key('profile-identity-card');
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -34,6 +36,10 @@ class _ProfilePageState extends State<ProfilePage> {
   List<PlaylistModel> _playlists = [];
   bool _loadingPlaylists = false;
 
+  /// 登录态版本号：登录 / 退出 / 扫码返回后自增，
+  /// 让身份卡下方的双音源登录态行重读一次（行内自己读凭证，不复用本页状态）。
+  int _sourceStatusRevision = 0;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +57,7 @@ class _ProfilePageState extends State<ProfilePage> {
     if (_apiService.hasCachedUser) {
       setState(() {
         _isLoggedIn = true;
+        _sourceStatusRevision++;
       });
       _verifyLogin();
     }
@@ -73,6 +80,7 @@ class _ProfilePageState extends State<ProfilePage> {
         _cachedAvatarUrl = null;
         _cachedUserId = null;
       }
+      _sourceStatusRevision++;
     });
     if (_isLoggedIn) _loadPlaylists();
   }
@@ -87,6 +95,7 @@ class _ProfilePageState extends State<ProfilePage> {
       _cachedAvatarUrl = null;
       _cachedUserId = null;
       _playlists = [];
+      _sourceStatusRevision++;
     });
   }
 
@@ -120,24 +129,30 @@ class _ProfilePageState extends State<ProfilePage> {
           _cachedNickname = _apiService.cachedNickname;
           _cachedAvatarUrl = _apiService.cachedAvatarUrl;
           _cachedUserId = _apiService.cachedUserId;
+          _sourceStatusRevision++;
         });
         _loadPlaylists();
       },
     );
     if (!mounted) return;
     // 酷狗是在弹层里二级授权的，回来要刷新一次状态
-    setState(() {});
+    setState(() => _sourceStatusRevision++);
   }
 
-  /// 已连接的音源名称，用于身份卡副标题。
-  String _connectedSources() {
-    final cred = KugouCredentialService.instance;
-    final kugou =
-        cred.hasCredentialsFor(KugouPlatform.lite) ||
-        cred.hasCredentialsFor(KugouPlatform.standard);
-    final names = <String>[if (_isLoggedIn) '网易云', if (kugou) '酷狗'];
-    if (names.isEmpty) return '账号已失效，点这里重新登录';
-    return '已连接 ${names.join(' · ')}';
+  /// 身份卡下方的双音源登录态：两个「圆点 + 名称」，说明当前登录了哪个音源。
+  ///
+  /// 过去的做法是在身份卡里塞一句「已连接 网易云、酷狗」——既是辅助说明，
+  /// 又用了被禁的中点。现在换成一行可读的状态点，信息更少但更准。
+  Widget _buildSourceStatusLine() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.page + AppSpace.xs,
+        AppSpace.md,
+        AppSpace.page,
+        0,
+      ),
+      child: SourceStatusRow(reloadToken: _sourceStatusRevision),
+    );
   }
 
   @override
@@ -185,6 +200,8 @@ class _ProfilePageState extends State<ProfilePage> {
           loggedIn: true,
         ),
       ),
+      // 意见 2 收尾：身份卡下方一行双音源登录态
+      _buildSourceStatusLine(),
       const SizedBox(height: AppSpace.xxl),
       AppSectionHeader(
         title: '我的歌单',
@@ -215,9 +232,10 @@ class _ProfilePageState extends State<ProfilePage> {
           loggedIn: false,
         ),
       ),
+      _buildSourceStatusLine(),
       const SizedBox(height: AppSpace.xxl),
-      // 未登录时页面会显得空，这里把「登录能得到什么」讲清楚，
-      // 而不是留一大片白让人不知道自己错过了什么。
+      // 未登录时页面会显得空，这里只把「登录能得到什么」列成三行，
+      // 不再给每行配一句解释——标题本身已经说清了。
       const AppSectionHeader(title: '登录后可以'),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
@@ -228,23 +246,11 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           child: Column(
             children: const [
-              _FeatureLine(
-                icon: Icons.queue_music_rounded,
-                title: '云端歌单',
-                desc: '这里会列出你在网易云、酷狗收藏的歌单',
-              ),
+              _FeatureLine(icon: Icons.queue_music_rounded, title: '云端歌单'),
               AppHairline(indent: 44),
-              _FeatureLine(
-                icon: Icons.insights_rounded,
-                title: '每日推荐与私人 FM',
-                desc: '按你实际听的口味每天换一批，不用再猜',
-              ),
+              _FeatureLine(icon: Icons.insights_rounded, title: '每日推荐与私人 FM'),
               AppHairline(indent: 44),
-              _FeatureLine(
-                icon: Icons.swap_horiz_rounded,
-                title: '两个音源一起用',
-                desc: '网易云与酷狗分别登录，缺歌时自动换源',
-              ),
+              _FeatureLine(icon: Icons.swap_horiz_rounded, title: '两个音源一起用'),
             ],
           ),
         ),
@@ -259,6 +265,9 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   /// 身份卡：登录前后共用同一骨架，只换头像、文案与右侧动作。
+  ///
+  /// 底色就是白卡面 + 0.7 发丝线，不再用冷蓝渐变：大面积色块会把「我的」页
+  /// 变成一块蓝，和黑主色打架。层级改由头像尺寸、名字字重与间距承担。
   Widget _buildIdentityCard({
     required String nickname,
     required String avatarUrl,
@@ -272,14 +281,11 @@ class _ProfilePageState extends State<ProfilePage> {
         onTap: _openLogin,
         borderRadius: BorderRadius.circular(AppRadius.card),
         child: Container(
+          key: profileIdentityCardKey,
           padding: const EdgeInsets.all(AppSpace.lg),
           decoration: BoxDecoration(
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(AppRadius.card),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFF0F3FF), Color(0xFFFFFFFF)],
-            ),
             border: Border.all(color: AppColors.hairline, width: 0.7),
           ),
           child: Row(
@@ -300,43 +306,30 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
               const SizedBox(width: AppSpace.lg),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            nickname,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              height: 1.25,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.2,
-                              color: AppColors.ink,
-                            ),
-                          ),
+                    Flexible(
+                      child: Text(
+                        nickname,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          height: 1.25,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                          color: AppColors.ink,
                         ),
-                        if (vipType != 0) ...[
-                          const SizedBox(width: AppSpace.sm),
-                          const AppTag(
-                            text: 'VIP',
-                            color: AppColors.brand,
-                            background: AppColors.brandSoft,
-                          ),
-                        ],
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      loggedIn ? _connectedSources() : '登录后同步歌单与每日推荐',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.caption,
-                    ),
+                    if (vipType != 0) ...[
+                      const SizedBox(width: AppSpace.sm),
+                      const AppTag(
+                        text: 'VIP',
+                        color: AppColors.brand,
+                        background: AppColors.brandSoft,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -464,11 +457,10 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget _buildSettingsCard() {
     return AppCard(
       child: AppListTile(
-        icon: Icons.settings_outlined,
+        icon: Icons.settings_rounded,
         iconColor: AppColors.inkSecondary,
         iconBackground: AppColors.surfaceMuted,
         title: '设置',
-        subtitle: '音效、下载、关于与更新',
         onTap: _openSettings,
       ),
     );
@@ -557,7 +549,11 @@ class _AvatarImageState extends State<_AvatarImage> {
         fit: BoxFit.cover,
       );
     }
-    return const Icon(Icons.person, size: 40, color: Colors.grey);
+    return const Icon(
+      Icons.person_rounded,
+      size: 40,
+      color: AppColors.inkTertiary,
+    );
   }
 }
 
@@ -634,21 +630,20 @@ class _PlaylistCoverImageState extends State<_PlaylistCoverImage> {
         fit: BoxFit.cover,
       );
     }
-    return const Icon(Icons.music_note, color: Colors.grey);
+    return const Icon(
+      Icons.music_note_rounded,
+      size: 20,
+      color: AppColors.inkTertiary,
+    );
   }
 }
 
-/// 未登录页的能力说明行：图标 + 标题 + 一句白话
+/// 未登录页的能力行：图标 + 标题（不再配一句解释，标题已经说清了）
 class _FeatureLine extends StatelessWidget {
-  const _FeatureLine({
-    required this.icon,
-    required this.title,
-    required this.desc,
-  });
+  const _FeatureLine({required this.icon, required this.title});
 
   final IconData icon;
   final String title;
-  final String desc;
 
   @override
   Widget build(BuildContext context) {
@@ -666,20 +661,7 @@ class _FeatureLine extends StatelessWidget {
             child: Icon(icon, size: 18, color: AppColors.inkSecondary),
           ),
           const SizedBox(width: AppSpace.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title, style: AppType.body),
-                const SizedBox(height: 2),
-                Text(
-                  desc,
-                  style: AppType.caption.copyWith(color: AppColors.inkTertiary),
-                ),
-              ],
-            ),
-          ),
+          Expanded(child: Text(title, style: AppType.body)),
         ],
       ),
     );

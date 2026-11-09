@@ -142,8 +142,8 @@ class _UserPlaylistDetailPageState extends State<UserPlaylistDetailPage> {
           const SizedBox(width: AppSpace.sm),
           FilledButton(
             onPressed: songs.isEmpty ? null : () => _playAll(songs),
+            // 主 CTA 用主题的墨色实心，全站一致；强调色只留给选中态
             style: FilledButton.styleFrom(
-              backgroundColor: AppColors.brand,
               minimumSize: const Size(0, 40),
               padding: const EdgeInsets.symmetric(horizontal: AppSpace.lg),
             ),

@@ -140,11 +140,18 @@ abstract final class AppShadow {
 abstract final class AppLayout {
   static const dockHeight = 64.0;
   static const dockGap = 8.0;
-  static const miniPlayerHeight = 60.0;
+
+  /// 迷你播放卡高度（1.4.0：60 → 76，为 3px 进度条与上下曲按钮让位）
+  static const miniPlayerHeight = 76.0;
+
+  /// 播放卡内进度条的拖拽热区高度（条本身 3px，热区 20px 便于手指命中）
+  static const miniPlayerProgressHitHeight = 20.0;
+
   static const dockMargin = 16.0;
 
   /// 有播放内容时：导航坞 + 间距 + 播放卡 + 上下留白
-  static const bottomInsetWithPlayer = 168.0;
+  /// （1.4.0：168 → 184，随 [miniPlayerHeight] 同步 +16）
+  static const bottomInsetWithPlayer = 184.0;
 
   /// 无播放内容时：只有导航坞
   static const bottomInset = 104.0;

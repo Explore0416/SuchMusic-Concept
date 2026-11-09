@@ -17,13 +17,16 @@ import '../utils/navigation_guard.dart';
 import '../utils/player_route.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_ui.dart';
+import '../widgets/home_sections.dart';
+import '../widgets/source_switcher.dart';
 import 'playlist_detail_page.dart';
 import 'search_page.dart';
 
-/// 首页：私人 FM 主卡 + 个性化歌单轨 + 榜单 + 歌单广场。
+/// 首页：私人 FM 主卡 + 三种形状不同的内容区块 + 榜单 + 歌单广场。
 ///
-/// 视觉走「纸感暖白 + 墨色文字 + 单一钴蓝强调」：标题用大字号建立层级，
-/// 内容用横向封面轨组织，避免把十几个模块平铺成一条无尽的列表。
+/// 视觉走「纸感暖白 + 墨色文字 + 单一钴蓝强调」：标题用大字号建立层级。
+/// 1.4.0 起三个推荐区块刻意用**三种不同的编排**（横卡 / 网格 / 排行列表）
+/// 区分密度与节奏，不再是把同一排卡片复制三遍。
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -50,6 +53,15 @@ class _HomePageState extends State<HomePage> {
   String? _fmCoverUrl;
   SongModel? _fmFirstSong;
   StreamSubscription<SongModel?>? _fmSongSub;
+  StreamSubscription<SongSource>? _sourceSub;
+
+  /// 区块标题与内容之间的间距（1.4.0：12 → 16）
+  static const EdgeInsets _sectionHeaderPadding = EdgeInsets.fromLTRB(
+    AppSpace.page,
+    0,
+    AppSpace.page,
+    AppSpace.lg,
+  );
 
   @override
   void initState() {
@@ -59,6 +71,8 @@ class _HomePageState extends State<HomePage> {
     _loadPlaylistSquare();
     _loadFmCover();
     _loadLocalPicks();
+    // 音源切换后首页内容必须跟着换（网易云 / 酷狗的榜单、每日推荐互不相通）
+    _sourceSub = SourceManager().onSourceChanged.listen(_onSourceChanged);
     // FM 模式切歌时，同步更新首页主卡封面
     _fmSongSub = AudioPlayerService().onCurrentSongChanged.listen((song) {
       final player = AudioPlayerService();
@@ -75,7 +89,32 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     _fmSongSub?.cancel();
+    _sourceSub?.cancel();
     super.dispose();
+  }
+
+  /// 音源切换：清空旧音源内容并重新拉取，避免「切了酷狗还在看网易云榜单」。
+  void _onSourceChanged(SongSource kind) {
+    if (!mounted) return;
+    RecommendService.instance.invalidate();
+    setState(() {
+      _loadingRankings = true;
+      _loadingHotSongs = true;
+      _loadingDailySongs = true;
+      _loadingSquare = true;
+      _rankings = [];
+      _hotSongs = [];
+      _dailySongs = [];
+      _localPicks = [];
+      _hotChart = null;
+      _fmFirstSong = null;
+      _fmCoverUrl = null;
+    });
+    _loadRankings();
+    _loadDailySongs();
+    _loadPlaylistSquare();
+    _loadFmCover();
+    _loadLocalPicks();
   }
 
   /// 「猜你想听」：本地播放历史 + 当前音源的个性化新歌混排。
@@ -285,41 +324,33 @@ class _HomePageState extends State<HomePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildHeader(),
+              // 双音源是核心卖点：紧贴 header，一眼可见，一点即切
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: AppSpace.page),
+                child: SourceSwitcher(),
+              ),
+              const SizedBox(height: AppSpace.lg),
+              // 常驻搜索框：固定在页面顶部，不必先找入口再跳界面
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+                child: HomeSearchEntry(onTap: _openSearch),
+              ),
+              const SizedBox(height: AppSpace.xl),
               Padding(
                 padding: const EdgeInsets.fromLTRB(
                   AppSpace.page,
                   0,
                   AppSpace.page,
-                  AppSpace.xxl,
+                  HomeSectionSpacer.height,
                 ),
                 child: _buildHero(),
               ),
-              if (_localPicks.isNotEmpty)
-                _buildSongRail(
-                  title: '猜你想听',
-                  subtitle: '根据本机播放记录挑选',
-                  songs: _localPicks,
-                ),
-              _buildSongRail(
-                title: '每日推荐',
-                subtitle: '每天更新，为你挑 12 首',
-                songs: _dailySongs,
-                loading: _loadingDailySongs,
-                onAction: _openDailyRecommend,
-                actionLabel: '全部',
-              ),
-              _buildSongRail(
-                title: '热歌推荐',
-                songs: _hotSongs,
-                loading: _loadingHotSongs,
-                actionLabel: '榜单',
-                onAction: _hotChart == null
-                    ? null
-                    : () => _openRanking(_hotChart!),
-              ),
+              _buildPickRail(),
+              _buildDailyGrid(),
+              _buildHotRank(),
               _buildRankingRail(),
               _buildPlaylistSquare(),
-              const SizedBox(height: AppSpace.xxl),
+              const HomeSectionSpacer(),
             ],
           ),
         ),
@@ -327,43 +358,32 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void _openSearch() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SearchPage()),
+    );
+  }
+
+  /// 页面头部：问候语 + 日期，左对齐、右侧留空。
+  ///
+  /// 搜索入口已收敛为下方的常驻搜索框（唯一入口），这里不再放放大镜按钮，
+  /// 避免两个搜索入口互相打架。
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.page,
         AppSpace.sm,
+        AppSpace.page,
         AppSpace.md,
-        AppSpace.xl,
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_greeting(), style: AppType.display),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Text(_today(), style: AppType.caption),
-                    const SizedBox(width: AppSpace.sm),
-                    _SourceDot(),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          AppIconButton(
-            icon: Icons.search_rounded,
-            filled: true,
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SearchPage()),
-            ),
-            tooltip: '搜索',
-          ),
+          Text(_greeting(), style: AppType.display),
+          const SizedBox(height: 4),
+          Text(_today(), style: AppType.caption),
         ],
       ),
     );
@@ -503,65 +523,95 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  /// 横向封面轨：标题 + 可选右侧动作 + 一排卡片。
-  Widget _buildSongRail({
-    required String title,
-    String? subtitle,
-    required List<SongModel> songs,
-    bool loading = false,
-    String? actionLabel,
-    VoidCallback? onAction,
-  }) {
-    final showEmpty = !loading && songs.isEmpty;
-    if (showEmpty && onAction == null && songs.isEmpty) {
-      // 每日推荐为空时保留区块（给重试/入口），其余空轨直接不渲染
-      if (title != '每日推荐') return const SizedBox.shrink();
-    }
+  /// 区块 1：猜你想听，横向大卡（148 封面，一屏 2 张多一点）。
+  ///
+  /// 为空时整块不渲染（本机没有播放记录时这里本来就没有推荐可说）。
+  Widget _buildPickRail() {
+    if (_localPicks.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppSectionHeader(
+          title: '猜你想听',
+          padding: _sectionHeaderPadding,
+        ),
+        PickRail(
+          songs: _localPicks,
+          coverOf: _coverOf,
+          onSongTap: _playSong,
+        ),
+        const HomeSectionSpacer(),
+      ],
+    );
+  }
+
+  /// 区块 2：每日推荐，两列网格（前 6 首），右上角保留「全部」入口。
+  Widget _buildDailyGrid() {
+    final isEmpty = !_loadingDailySongs && _dailySongs.isEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         AppSectionHeader(
-          title: title,
-          subtitle: subtitle,
-          actionLabel: actionLabel,
-          onAction: onAction,
-          padding: const EdgeInsets.fromLTRB(
-            AppSpace.page,
-            0,
-            AppSpace.page,
-            AppSpace.md,
-          ),
+          title: '每日推荐',
+          actionLabel: '全部',
+          onAction: _openDailyRecommend,
+          padding: _sectionHeaderPadding,
         ),
-        if (loading)
-          _RailSkeleton()
-        else if (songs.isEmpty)
+        if (isEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.page,
-              0,
-              AppSpace.page,
-              AppSpace.xl,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
             child: Text('暂无内容，稍后再试', style: AppType.caption),
           )
         else
-          SizedBox(
-            height: 176,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
-              itemCount: songs.length,
-              separatorBuilder: (_, _) => const SizedBox(width: AppSpace.md),
-              itemBuilder: (_, i) => _SongRailCard(
-                song: songs[i],
-                onTap: () => _playSong(songs[i]),
-              ),
-            ),
+          DailyGrid(
+            songs: _dailySongs,
+            coverOf: _coverOf,
+            onSongTap: _playSong,
+            loading: _loadingDailySongs,
           ),
-        const SizedBox(height: AppSpace.xxl),
+        const HomeSectionSpacer(),
       ],
     );
   }
+
+  /// 区块 3：热歌推荐，紧凑排行列表（前 5 首，带序号与分割线）。
+  Widget _buildHotRank() {
+    final hasAction = _hotChart != null;
+    final isEmpty = !_loadingHotSongs && _hotSongs.isEmpty;
+    // 空且没有「榜单」入口时整块不渲染，不占一屏空白
+    if (isEmpty && !hasAction) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AppSectionHeader(
+          title: '热歌推荐',
+          actionLabel: hasAction ? '榜单' : null,
+          onAction: hasAction ? () => _openRanking(_hotChart!) : null,
+          padding: _sectionHeaderPadding,
+        ),
+        if (isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
+            child: Text('暂无内容，稍后再试', style: AppType.caption),
+          )
+        else
+          HotRankList(
+            songs: _hotSongs,
+            coverOf: _coverOf,
+            onSongTap: _playSong,
+            loading: _loadingHotSongs,
+          ),
+        const HomeSectionSpacer(),
+      ],
+    );
+  }
+
+  /// 封面取图：区块只负责排版，取图统一由页面提供（含 Referer 与尺寸参数）。
+  Widget _coverOf(SongModel song, double side) => _SongCoverImage(
+        url: song.coverUrl ?? '',
+        width: side,
+        height: side,
+      );
 
   Widget _buildRankingRail() {
     if (!_loadingRankings && _rankings.isEmpty) {
@@ -627,7 +677,7 @@ class _HomePageState extends State<HomePage> {
               },
             ),
           ),
-        const SizedBox(height: AppSpace.xxl),
+        const HomeSectionSpacer(),
       ],
     );
   }
@@ -719,55 +769,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// 歌单卡片：封面 + 歌名 + 歌手，横向轨道用。
-class _SongRailCard extends StatelessWidget {
-  const _SongRailCard({required this.song, required this.onTap});
-
-  final SongModel song;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 132,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(AppRadius.card),
-              child: _SongCoverImage(
-                url: song.coverUrl ?? '',
-                width: 132,
-                height: 132,
-              ),
-            ),
-            const SizedBox(height: AppSpace.sm),
-            Text(
-              song.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.body.copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              song.artist.isEmpty ? '未知歌手' : song.artist,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.caption.copyWith(
-                fontSize: 12,
-                color: AppColors.inkTertiary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
+/// 榜单骨架：与榜单轨（124 封面）同形状，仅 `_buildRankingRail` 使用。
 class _RailSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -815,38 +817,6 @@ class _SquareSkeleton extends StatelessWidget {
         const SizedBox(height: AppSpace.sm),
         const AppSkeleton(width: 72, height: 10, radius: 4),
       ],
-    );
-  }
-}
-
-/// 音源标识：小圆点 + 文案，安静地待在标题下方。
-class _SourceDot extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<SongSource>(
-      stream: SourceManager().onSourceChanged,
-      initialData: SourceManager().currentSource,
-      builder: (context, snapshot) {
-        final kind = snapshot.data ?? SongSource.netease;
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 5,
-              height: 5,
-              decoration: const BoxDecoration(
-                color: AppColors.brand,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              kind.label,
-              style: AppType.caption.copyWith(color: AppColors.inkTertiary),
-            ),
-          ],
-        );
-      },
     );
   }
 }

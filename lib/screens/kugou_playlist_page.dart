@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 import '../models/kugou_platform.dart';
 import '../models/song_model.dart';
@@ -184,7 +183,7 @@ class _KugouPlaylistPageState extends State<KugouPlaylistPage> {
               const Icon(
                 Icons.playlist_add_rounded,
                 size: 20,
-                color: AppColors.brand,
+                color: AppColors.inkSecondary,
               ),
               const SizedBox(width: AppSpace.sm),
               Text(
@@ -209,10 +208,8 @@ class _KugouPlaylistPageState extends State<KugouPlaylistPage> {
             height: 46,
             child: FilledButton(
               onPressed: _importing ? null : _import,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.brand,
-                minimumSize: const Size(0, 46),
-              ),
+              // 主 CTA 走主题墨色，不再单独铺一块蓝
+              style: FilledButton.styleFrom(minimumSize: const Size(0, 46)),
               child: _importing
                   ? const SizedBox(
                       width: 18,
@@ -303,7 +300,7 @@ class _KugouPlaylistPageState extends State<KugouPlaylistPage> {
     return Padding(
       padding: const EdgeInsets.only(top: AppSpace.xxl),
       child: AppEmptyState(
-        icon: Icons.library_music_outlined,
+        icon: Icons.library_music_rounded,
         title: '还没有看到酷狗歌单',
         message: '登录酷狗账号后会显示在这里；也可以直接粘贴链接导入',
       ),
@@ -384,12 +381,3 @@ class _CoverPlaceholder extends StatelessWidget {
     );
   }
 }
-
-/// 供外部（如「我的」页）使用的入口图标（保持风格一致）。
-// ignore: unused_element
-Widget kugouPlaylistEntryIcon() => SvgPicture.asset(
-  'assets/images/svg/Play_cycle.svg',
-  width: 20,
-  height: 20,
-  colorFilter: const ColorFilter.mode(Color(0xFF3080FF), BlendMode.srcIn),
-);

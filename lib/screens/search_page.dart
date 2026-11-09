@@ -243,6 +243,9 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   // ─────────────────────────── 顶栏 ───────────────────────────
+  //
+  // 搜索框固定在顶部：`build()` 里它是 Column 的第一个子节点，只有下方的
+  // 结果区在滚动，所以滚列表时输入框不会跟着走。
 
   Widget _buildSearchBar() {
     final hasText = _searchController.text.isNotEmpty;
@@ -255,15 +258,9 @@ class _SearchPageState extends State<SearchPage> {
       ),
       child: Row(
         children: [
-          AppIconButton(
-            icon: Icons.arrow_back_ios_new_rounded,
-            iconSize: 18,
-            tooltip: '返回',
-            onTap: () => Navigator.maybePop(context),
-          ),
           Expanded(
             child: Container(
-              height: 46,
+              height: 44,
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(AppRadius.row),
@@ -282,6 +279,7 @@ class _SearchPageState extends State<SearchPage> {
                     child: TextField(
                       controller: _searchController,
                       focusNode: _focusNode,
+                      // 进页即获焦 → 键盘立刻弹出，不用先点输入框
                       autofocus: true,
                       textInputAction: TextInputAction.search,
                       onSubmitted: (_) => _performSearch(),
@@ -317,7 +315,38 @@ class _SearchPageState extends State<SearchPage> {
           ),
           const SizedBox(width: AppSpace.sm),
           _buildSourceBadge(),
+          const SizedBox(width: AppSpace.xs),
+          _buildCancelButton(),
         ],
+      ),
+    );
+  }
+
+  /// 「取消」：与输入框同一行、高 44，点一下退出搜索页。
+  ///
+  /// 有了它，左上角的返回箭头就是同一个功能的第二个按钮，直接去掉。
+  Widget _buildCancelButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.maybePop(context),
+        borderRadius: BorderRadius.circular(AppRadius.row),
+        child: SizedBox(
+          height: 44,
+          child: Center(
+            widthFactor: 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+              child: Text(
+                '取消',
+                style: AppType.body.copyWith(
+                  color: AppColors.brand,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

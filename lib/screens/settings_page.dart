@@ -79,20 +79,18 @@ class _SettingsPageState extends State<SettingsPage> {
               onPressed: () => Navigator.pop(ctx, kind),
               child: Row(
                 children: [
+                  // 单选选中态：唯一的彩色出现在这里，其余一律墨阶
                   Icon(
                     kind == _source
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_unchecked_rounded,
                     size: 20,
                     color: kind == _source
-                        ? const Color(0xFF2F84FE)
-                        : const Color(0xFFC4C4C4),
+                        ? AppColors.brand
+                        : AppColors.inkDisabled,
                   ),
                   const SizedBox(width: 12),
-                  Text(
-                    kind.label,
-                    style: const TextStyle(fontSize: 15, color: Colors.black),
-                  ),
+                  Text(kind.label, style: AppType.body),
                 ],
               ),
             ),
@@ -390,14 +388,12 @@ class _SettingsPageState extends State<SettingsPage> {
                         _switchRow(
                           icon: Icons.graphic_eq_rounded,
                           title: '与其他应用同时播放',
-                          subtitle: '音乐可和视频、游戏的声音共存',
                           value: _allowMixWithOthers,
                           onChanged: _toggleMix,
                         ),
                         _switchRow(
-                          icon: Icons.notifications_active_outlined,
+                          icon: Icons.notifications_active_rounded,
                           title: '通知栏 / 灵动岛显示歌词',
-                          subtitle: '需系统通知权限，关闭后只显示歌名与歌手',
                           value: _notifyLyric,
                           onChanged: _toggleNotifyLyric,
                         ),
@@ -408,10 +404,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       children: [
                         AppListTile(
                           icon: Icons.swap_horiz_rounded,
-                          iconBackground: AppColors.brandSoft,
-                          iconColor: AppColors.brand,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '当前音源',
-                          subtitle: '搜索与播放都走这个源',
                           trailing: AppTag(
                             text: _source.label,
                             color: AppColors.brand,
@@ -420,37 +416,42 @@ class _SettingsPageState extends State<SettingsPage> {
                           onTap: _selectSource,
                         ),
                         _switchRow(
-                          icon: Icons.cloud_sync_outlined,
+                          icon: Icons.cloud_sync_rounded,
                           title: '失败自动回退网易云',
-                          subtitle: '酷狗请求失败时自动改用网易云取源',
                           value: _fallback,
                           onChanged: _toggleFallback,
                         ),
+                        // 「已登录 / 未登录」是状态，但登录态不是「成功 / 失败」，
+                        // 用墨阶表达就够，避免整页多出一种绿色。
                         AppListTile(
-                          icon: Icons.person_outline_rounded,
+                          icon: Icons.person_rounded,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '酷狗账号',
-                          subtitle: '扫码登录，也可粘贴凭证兜底',
                           trailing: AppTag(
-                            text: _kugouConfigured ? '已配置' : '未配置',
+                            text: _kugouConfigured ? '已登录' : '未登录',
                             color: _kugouConfigured
-                                ? AppColors.success
+                                ? AppColors.ink
                                 : AppColors.inkTertiary,
-                            background: _kugouConfigured
-                                ? AppColors.successSoft
-                                : AppColors.surfaceMuted,
+                            background: AppColors.surfaceMuted,
                           ),
                           onTap: _openKugouAccountPicker,
                         ),
                         AppListTile(
                           icon: Icons.equalizer_rounded,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '音效',
-                          subtitle: '均衡器预设：流行 / 人声 / 重低音 / 环绕',
                           onTap: _openSoundEffect,
                         ),
                         AppListTile(
-                          icon: Icons.watch_outlined,
+                          icon: Icons.watch_rounded,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '手环',
-                          subtitle: '小米手环：绑定与音乐控制（仅本机链路）',
                           onTap: _openBand,
                         ),
                       ],
@@ -462,24 +463,24 @@ class _SettingsPageState extends State<SettingsPage> {
                           icon: Icons.save_alt_rounded,
                           iconBackground: AppColors.surfaceMuted,
                           iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '配置备份',
-                          subtitle: '导出个性化设置，清除数据后可导入恢复',
                           onTap: _openBackupDialog,
                         ),
                         AppListTile(
-                          icon: Icons.cleaning_services_outlined,
+                          icon: Icons.cleaning_services_rounded,
                           iconBackground: AppColors.surfaceMuted,
                           iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '清理数据',
-                          subtitle: '缓存、播放历史与推荐数据（均只存本机）',
                           onTap: _showStorageCleanupSheet,
                         ),
                         AppListTile(
-                          icon: Icons.bug_report_outlined,
+                          icon: Icons.bug_report_rounded,
                           iconBackground: AppColors.surfaceMuted,
                           iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '错误日志',
-                          subtitle: '查看最近异常记录（仅本机，不上传）',
                           onTap: _openErrorLog,
                         ),
                       ],
@@ -488,11 +489,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     _buildGroup(
                       children: [
                         AppListTile(
-                          icon: Icons.info_outline_rounded,
+                          icon: Icons.info_rounded,
                           iconBackground: AppColors.surfaceMuted,
                           iconColor: AppColors.inkSecondary,
+                          dense: true,
                           title: '关于 SuchMusic 概念版',
-                          subtitle: '开源协议、致谢与版本信息',
                           onTap: () {
                             Navigator.push(
                               context,
@@ -511,8 +512,9 @@ class _SettingsPageState extends State<SettingsPage> {
                           AppListTile(
                             title: '退出登录',
                             icon: Icons.logout_rounded,
-                            iconBackground: AppColors.dangerSoft,
-                            iconColor: AppColors.danger,
+                            iconBackground: AppColors.surfaceMuted,
+                            iconColor: AppColors.inkSecondary,
+                            dense: true,
                             showChevron: false,
                             onTap: _showLogoutDialog,
                           ),
@@ -591,18 +593,22 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 开关行：整行可点，开关本体也可点，两条路径都能切换
+  /// 开关行：整行可点，开关本体也可点，两条路径都能切换。
+  ///
+  /// 一行只有「图标 + 主文字 + 开关」：标题已经说清了功能，
+  /// 再加一句解释只是把同一件事说两遍。
   Widget _switchRow({
     required IconData icon,
     required String title,
-    String? subtitle,
     required bool value,
     required ValueChanged<bool> onChanged,
   }) {
     return AppListTile(
       icon: icon,
+      iconBackground: AppColors.surfaceMuted,
+      iconColor: AppColors.inkSecondary,
+      dense: true,
       title: title,
-      subtitle: subtitle,
       showChevron: false,
       onTap: () => onChanged(!value),
       trailing: Switch(
@@ -636,6 +642,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 child: Text('清理数据', style: AppType.title),
               ),
+              // 高风险提示：清理不可恢复，这一句必须留（属于规则允许的三种情况之一）
               Padding(
                 padding: const EdgeInsets.fromLTRB(
                   AppSpace.page,
@@ -646,11 +653,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: Text('以下数据都只存在本机，清理后不可恢复', style: AppType.caption),
               ),
               AppListTile(
-                icon: Icons.image_outlined,
+                icon: Icons.image_rounded,
                 iconBackground: AppColors.surfaceMuted,
                 iconColor: AppColors.inkSecondary,
+                dense: true,
                 title: '清理缓存',
-                subtitle: '封面等临时文件，不影响使用记录',
                 onTap: () {
                   Navigator.pop(ctx);
                   _showClearCacheDialog();
@@ -658,11 +665,11 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const AppHairline(indent: AppSpace.lg, endIndent: AppSpace.lg),
               AppListTile(
-                icon: Icons.insights_outlined,
+                icon: Icons.insights_rounded,
                 iconBackground: AppColors.surfaceMuted,
                 iconColor: AppColors.inkSecondary,
+                dense: true,
                 title: '清除本地推荐数据',
-                subtitle: '播放历史、时段分布、曲风推断结果',
                 onTap: () {
                   Navigator.pop(ctx);
                   _showClearRecommendationDialog();

@@ -8,6 +8,9 @@ import 'kugou_playlist_page.dart';
 import 'song_picker_page.dart';
 import 'user_playlist_detail_page.dart';
 
+/// 「我喜欢的音乐」主卡的定位 key（测试据此验证底色 / 边框，不依赖私有组件）。
+const Key libraryLikedCardKey = Key('library-liked-card');
+
 /// 「歌单」页：我喜欢的音乐 / 自建歌单 / 酷狗歌单。
 ///
 /// 三块内容收在同一页，避免「歌单」和「酷狗歌单」两个入口各占一行。
@@ -38,7 +41,6 @@ class _LibraryPageState extends State<LibraryPage> {
           children: [
             AppPageHeader(
               title: '歌单',
-              subtitle: '喜欢的歌与自建歌单都收在这里',
               trailing: AppIconButton(
                 icon: Icons.add_rounded,
                 filled: true,
@@ -68,9 +70,10 @@ class _LibraryPageState extends State<LibraryPage> {
               padding: const EdgeInsets.symmetric(horizontal: AppSpace.page),
               child: AppCard(
                 child: AppListTile(
-                  icon: Icons.cloud_outlined,
+                  icon: Icons.cloud_rounded,
+                  iconBackground: AppColors.surfaceMuted,
+                  iconColor: AppColors.inkSecondary,
                   title: '查看酷狗歌单',
-                  subtitle: '登录后可查看账号歌单，也可粘贴链接导入',
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -87,18 +90,18 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  /// 我喜欢的音乐：单独一张主卡，用玫瑰色系与收藏语义绑定。
+  /// 我喜欢的音乐：单独一张主卡。
+  ///
+  /// 收藏语义只由**红心图标**承担，卡片底色回到白面 + 发丝线：
+  /// 整块粉底会让「歌单」页出现第二种大面积彩色，和黑主色打架。
   Widget _buildLikedCard() {
     final count = _lib.likedSongs.length;
     return Container(
+      key: libraryLikedCardKey,
       decoration: BoxDecoration(
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFFFE9EE), Color(0xFFFFF7F3)],
-        ),
-        border: Border.all(color: const Color(0xFFFBDDE4), width: 0.7),
+        border: Border.all(color: AppColors.hairline, width: 0.7),
       ),
       child: Material(
         color: Colors.transparent,
@@ -113,7 +116,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   width: 52,
                   height: 52,
                   decoration: const BoxDecoration(
-                    color: AppColors.surface,
+                    color: AppColors.surfaceMuted,
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -131,17 +134,19 @@ class _LibraryPageState extends State<LibraryPage> {
                       const Text(
                         '我喜欢的音乐',
                         style: TextStyle(
-                          fontSize: 17,
-                          height: 1.3,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          height: 1.36,
+                          fontWeight: FontWeight.w600,
                           color: AppColors.ink,
                         ),
                       ),
                       const SizedBox(height: 3),
+                      // 只留「数量」这个信息值：红心图标 + 标题 + 箭头已经把
+                      // 「这是什么、点了会去哪」说完了，再补一句说明是重复。
                       Text(
-                        count == 0 ? '播放时点爱心，收藏到这里' : '$count 首',
+                        '$count 首',
                         style: AppType.caption.copyWith(
-                          color: const Color(0xFF9A6270),
+                          color: AppColors.inkTertiary,
                         ),
                       ),
                     ],
@@ -150,7 +155,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 const Icon(
                   Icons.chevron_right_rounded,
                   size: 22,
-                  color: Color(0xFFC99AA6),
+                  color: AppColors.inkDisabled,
                 ),
               ],
             ),
@@ -166,9 +171,12 @@ class _LibraryPageState extends State<LibraryPage> {
       child: Column(
         children: [
           for (var i = 0; i < playlists.length; i++) ...[
-            if (i > 0) const AppHairline(indent: 66),
+            // 缩进 68 = 行内边距 16 + 图标块 38 + 间距 14，与歌单名左缘对齐
+            if (i > 0) const AppHairline(indent: 68),
             AppListTile(
               icon: Icons.queue_music_rounded,
+              iconBackground: AppColors.surfaceMuted,
+              iconColor: AppColors.inkSecondary,
               title: playlists[i].name,
               subtitle: '${playlists[i].songs.length} 首',
               onTap: () => _openPlaylist(playlists[i].id),

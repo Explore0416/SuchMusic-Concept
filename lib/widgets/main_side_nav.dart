@@ -18,6 +18,10 @@ class MainSideNav extends StatelessWidget {
     required this.onSelect,
     required this.onTogglePlay,
     required this.onOpenPlayer,
+    this.progress = 0,
+    this.onSeek,
+    this.onPrevious,
+    this.onNext,
     this.cover,
     this.bottomPadding = 0,
   });
@@ -32,6 +36,17 @@ class MainSideNav extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final VoidCallback onTogglePlay;
   final VoidCallback onOpenPlayer;
+
+  /// 当前播放进度（0–1），驱动底部播放卡的进度条
+  final double progress;
+
+  /// 拖动进度条回调（为空时进度条只展示不可拖）
+  final ValueChanged<double>? onSeek;
+
+  /// 上一首 / 下一首（为空时按钮置灰）
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
   final Widget? cover;
   final double bottomPadding;
 
@@ -97,9 +112,12 @@ class MainSideNav extends StatelessWidget {
                   subtitle: song!.artist.isEmpty ? '未知歌手' : song!.artist,
                   cover: cover ?? const SizedBox.shrink(),
                   isPlaying: isPlaying,
-                  progress: 0,
+                  progress: progress,
                   onTap: onOpenPlayer,
                   onToggle: onTogglePlay,
+                  onSeek: onSeek,
+                  onPrevious: onPrevious,
+                  onNext: onNext,
                 ),
               ),
             SizedBox(height: 12 + bottomPadding),

@@ -234,7 +234,11 @@ class _LocalMusicViewState extends State<LocalMusicView>
   /// 骨架屏加载态：与歌曲行同构（44×44 封面块 + 两行文字条），带扫光动画
   Widget _buildSkeleton() {
     return ListView.builder(
-      padding: const EdgeInsets.only(left: 15, right: 15, top: 4),
+      padding: const EdgeInsets.only(
+        left: AppSpace.page,
+        right: AppSpace.page,
+        top: AppSpace.xs,
+      ),
       itemCount: 10,
       itemBuilder: (_, index) => _buildSkeletonItem(index),
     );
@@ -266,10 +270,13 @@ class _LocalMusicViewState extends State<LocalMusicView>
     );
   }
 
-  /// 骨架占位块：灰底 + 白色高光随时间从左向右扫过
+  /// 骨架占位块：灰底 + 高光随时间从左向右扫过。
+  ///
+  /// 颜色全部由语义令牌派生（`surfaceMuted` → `surface`），不再硬编码
+  /// `0xFFE9E9E9` / `0xFFF8F8F8`，避免暗色/主题调整时漏改。
   Widget _buildSkeletonBox(double w, double h, double radius) {
-    const base = Color(0xFFE9E9E9);
-    const highlight = Color(0xFFF8F8F8);
+    const base = AppColors.surfaceMuted;
+    const highlight = AppColors.surface;
     return AnimatedBuilder(
       animation: _shimmerCtrl,
       builder: (context, _) {
@@ -336,22 +343,58 @@ class _LocalMusicViewState extends State<LocalMusicView>
   Widget _buildEmpty() {
     // 一个都没扫到、又没给「所有文件访问权限」时，多半不是真的没有歌：
     // 录音机存的 .wav、刚拷进来还没被媒体库收录的文件都会漏。
-    // 这里直接给出口，而不是让用户面对一句「未找到音频文件」无从下手。
+    // 这里直接给出口，而不是让用户面对一句「没找到音频文件」无从下手。
     if (!_allFiles) {
-      return AppEmptyState(
+      return _buildEmptyBody(
         icon: Icons.folder_open_rounded,
-        title: '没找到音频文件',
-        message:
-            '如果手机里确实有歌（尤其是录音机录的 .wav），'
-            '多半是权限不够：授予「所有文件访问权限」后重新扫描即可。',
+        hint: '录音和刚拷进来的文件可能还没被媒体库收录，授予「所有文件访问权限」后再扫描',
         actionLabel: '去授权',
         onAction: _openAllFilesSettings,
       );
     }
-    return AppEmptyState(
+    return _buildEmptyBody(
       icon: Icons.music_off_rounded,
-      title: '未找到音频文件',
-      message: '把音乐放进手机存储后，点右上角重新扫描',
+      actionLabel: '扫描本机',
+      onAction: _refresh,
+    );
+  }
+
+  /// 空状态统一形态：48 图标 + 一句结论 + 一个主按钮（不多堆说明）。
+  Widget _buildEmptyBody({
+    required IconData icon,
+    required String actionLabel,
+    required VoidCallback onAction,
+    String? hint,
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.xxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 48, color: AppColors.inkDisabled),
+            const SizedBox(height: AppSpace.lg),
+            Text('还没有扫描到音频', style: AppType.body),
+            if (hint != null) ...[
+              const SizedBox(height: AppSpace.sm),
+              Text(
+                hint,
+                textAlign: TextAlign.center,
+                style: AppType.caption.copyWith(color: AppColors.inkTertiary),
+              ),
+            ],
+            const SizedBox(height: AppSpace.xl),
+            FilledButton(
+              onPressed: onAction,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+              ),
+              child: Text(actionLabel),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -361,19 +404,43 @@ class _LocalMusicViewState extends State<LocalMusicView>
     if (mounted) await _checkPermissionAndScan();
   }
 
+  /// 歌曲列表：整块白色卡面（圆角 20 + 发丝边），与 canvas 背景拉开边界。
+  ///
+  /// 面板本身固定占位，只有内部列表滚动；底部预留「播放卡 + 导航坞」高度，
+  /// 保证最后一行能滚到手指够得着的位置。
   Widget _buildSongList() {
-    return ListView.builder(
+    final radius = BorderRadius.circular(AppRadius.card);
+    return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.page,
         AppSpace.xs,
         AppSpace.page,
         AppLayout.bottomInsetWithPlayer,
       ),
-      itemCount: _songs.length,
-      itemBuilder: (_, index) {
-        final song = _songs[index];
-        return _buildSongItem(index, song);
-      },
+      child: DecoratedBox(
+        // 只画边框、并且画在滚动内容之上（foreground）：
+        // 行滚过去不会盖住发丝边，也不会像带底色的前景装饰那样糊住列表
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          border: Border.all(color: AppColors.hairline, width: 0.7),
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: ColoredBox(
+            color: AppColors.surface,
+            child: ListView.builder(
+              padding: EdgeInsets.zero,
+              itemCount: _songs.length,
+              itemBuilder: (_, index) => _buildSongItem(
+                index,
+                _songs[index],
+                isLast: index == _songs.length - 1,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -421,78 +488,227 @@ class _LocalMusicViewState extends State<LocalMusicView>
     );
   }
 
-  Widget _buildSongItem(int index, SongModel song) {
+  /// 单行歌曲：高 60，按下整行铺 [AppColors.surfaceMuted] 反馈。
+  ///
+  /// 左起：当前播放竖条（3×24）/ 封面 48 / 歌名+艺人 / 时长 / 更多。
+  /// 行间分割线左缩进 68，正好与封面右缘对齐。
+  Widget _buildSongItem(
+    int index,
+    SongModel song, {
+    required bool isLast,
+  }) {
     return StreamBuilder<SongModel?>(
       // currentSong 流不回放最新值，用 initialData 播种保证进入页面即高亮
       stream: _audioPlayer.onCurrentSongChanged,
       initialData: _audioPlayer.currentSong,
       builder: (context, snapshot) {
         final isCurrent = snapshot.data?.id == song.id;
-        return Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => _playSong(index),
-            child: SizedBox(
-              height: 66,
-              child: Row(
-                children: [
-                  _buildCover(song),
-                  const SizedBox(width: AppSpace.md),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          song.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppType.body.copyWith(
-                            color: isCurrent ? AppColors.brand : AppColors.ink,
-                            fontWeight: isCurrent
-                                ? FontWeight.w600
-                                : FontWeight.w500,
-                          ),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Material(
+              color: AppColors.surface,
+              child: InkWell(
+                onTap: () => _playSong(index),
+                // 水波会冲出方角行、盖住发丝边；按下态统一用整行底色更干净
+                splashFactory: NoSplash.splashFactory,
+                highlightColor: AppColors.surfaceMuted,
+                overlayColor: WidgetStateProperty.resolveWith(
+                  (states) => states.contains(WidgetState.pressed)
+                      ? AppColors.surfaceMuted
+                      : null,
+                ),
+                child: SizedBox(
+                  height: 60,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 12,
+                        child: Center(
+                          child: isCurrent
+                              ? Container(
+                                  width: 3,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.brand,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                )
+                              : null,
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          song.artist.isEmpty ? '未知歌手' : song.artist,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppType.caption.copyWith(
-                            color: AppColors.inkTertiary,
-                          ),
+                      ),
+                      _buildCover(song),
+                      const SizedBox(width: AppSpace.sm),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              song.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppType.body.copyWith(
+                                color: isCurrent
+                                    ? AppColors.brand
+                                    : AppColors.ink,
+                                fontWeight: isCurrent
+                                    ? FontWeight.w600
+                                    : FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              song.artist.isEmpty ? '未知歌手' : song.artist,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppType.caption.copyWith(
+                                color: isCurrent
+                                    ? AppColors.inkSecondary
+                                    : AppColors.inkTertiary,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(width: AppSpace.sm),
+                      Text(
+                        song.durationText,
+                        style: AppType.caption.copyWith(
+                          color: AppColors.inkTertiary,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpace.xs),
+                      _buildMoreButton(index, song),
+                      const SizedBox(width: 6),
+                    ],
                   ),
-                  const SizedBox(width: AppSpace.sm),
-                  Text(
-                    song.durationText,
+                ),
+              ),
+            ),
+            if (!isLast) const AppHairline(indent: 68),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 行尾「更多」：44×44 热区，点开歌曲信息面板（播放等动作都在里面）。
+  Widget _buildMoreButton(int index, SongModel song) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => _showTrackSheet(index, song),
+          child: const Icon(
+            Icons.more_horiz_rounded,
+            size: 20,
+            color: AppColors.inkTertiary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 歌曲信息面板：这份文件到底是什么（格式 / 时长），以及一个播放入口。
+  Future<void> _showTrackSheet(int index, SongModel song) async {
+    final track = trackOf(song);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppRadius.sheet),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 10),
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.hairline,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpace.lg),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpace.page,
+                ),
+                child: Row(
+                  children: [
+                    _buildCover(song),
+                    const SizedBox(width: AppSpace.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            song.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppType.body.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            song.artist.isEmpty ? '未知歌手' : song.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppType.caption,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (track != null) ...[
+                const SizedBox(height: AppSpace.md),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpace.page,
+                  ),
+                  child: Text(
+                    '格式 ${track.ext.isEmpty ? '未知' : track.ext.toUpperCase()}，'
+                    '时长 ${song.durationText}',
                     style: AppType.caption.copyWith(
                       color: AppColors.inkTertiary,
                     ),
                   ),
-                  const SizedBox(width: AppSpace.sm),
-                  SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: Icon(
-                      isCurrent
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      size: 22,
-                      color: isCurrent
-                          ? AppColors.brand
-                          : AppColors.inkSecondary,
-                    ),
-                  ),
-                ],
+                ),
+              ],
+              const SizedBox(height: AppSpace.sm),
+              AppListTile(
+                title: '播放这首歌',
+                icon: Icons.play_arrow_rounded,
+                showChevron: false,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _playSong(index);
+                },
               ),
-            ),
+              const SizedBox(height: AppSpace.sm),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

@@ -310,14 +310,31 @@ class _MainShellState extends State<MainShell> {
     return MiniPlayerCard(
       title: song.name,
       subtitle: song.artist.isEmpty ? '未知歌手' : song.artist,
-      cover: _buildMiniCoverImage(44),
+      cover: _buildMiniCoverImage(48),
       isPlaying: _isPlaying,
       progress: _playProgress,
       onTap: _openPlayerPage,
       onToggle: () => _audioPlayer.togglePlayPause(),
+      onSeek: _seekToRatio,
+      onPrevious: () => _audioPlayer.playPrevious(),
+      onNext: () => _audioPlayer.playNext(),
       onSwipeNext: () => _audioPlayer.playNext(),
       onSwipePrevious: () => _audioPlayer.playPrevious(),
     );
+  }
+
+  /// 播放卡进度条拖拽 → 真实 seek。
+  ///
+  /// 时长未知（还没解析出总长）时返回 null，卡片上的进度条退化为纯展示，
+  /// 避免拖一下就把播放位置跳到 0。
+  ValueChanged<double>? get _seekToRatio {
+    if (_duration.inMilliseconds <= 0) return null;
+    return (ratio) {
+      final target = Duration(
+        milliseconds: (_duration.inMilliseconds * ratio).round(),
+      );
+      unawaited(_audioPlayer.seek(target));
+    };
   }
 
   /// 宽屏左侧导航栏（结构与样式见 [MainSideNav]）
@@ -326,9 +343,13 @@ class _MainShellState extends State<MainShell> {
       index: _currentIndex,
       song: _currentSong,
       isPlaying: _isPlaying,
+      progress: _playProgress,
       onSelect: _selectTab,
       onTogglePlay: () => _audioPlayer.togglePlayPause(),
       onOpenPlayer: _openPlayerPage,
+      onPrevious: () => _audioPlayer.playPrevious(),
+      onNext: () => _audioPlayer.playNext(),
+      onSeek: _seekToRatio,
       cover: _currentSong == null ? null : _buildMiniCoverImage(44),
       bottomPadding: bottomPadding,
     );
