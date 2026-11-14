@@ -14,6 +14,7 @@ import '../services/notification_lyric_service.dart';
 import '../services/settings_backup_service.dart';
 import '../services/play_history_service.dart';
 import '../services/sources/source_manager.dart';
+import '../services/third_party/third_party_auth_service.dart';
 import '../utils/app_constants.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
@@ -22,6 +23,7 @@ import '../services/karaoke_service.dart';
 import '../widgets/design_dialog.dart';
 import 'about_page.dart';
 import 'band_page.dart';
+import 'third_party_auth_list_page.dart';
 import '../widgets/kugou_login_dialog.dart';
 import '../widgets/sound_effect_sheet.dart';
 
@@ -46,12 +48,37 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _fallback = AppConstants.defaultKugouFallbackEnabled;
   bool _kugouConfigured = false;
 
+  /// 已授权的第三方应用数量（0 时不显示数字）
+  int _thirdPartyGrantCount = 0;
+
   @override
   void initState() {
     super.initState();
     _loadMixSetting();
     _loadLyricSetting();
     _loadSourceSetting();
+    _loadThirdPartyGrantCount();
+  }
+
+  /// 读取已授权的第三方应用数量（读不到就按 0 处理，不影响设置页其余部分）
+  Future<void> _loadThirdPartyGrantCount() async {
+    try {
+      final grants = await ThirdPartyAuthService.instance.listGrants();
+      if (!mounted) return;
+      setState(() => _thirdPartyGrantCount = grants.length);
+    } catch (_) {
+      // 忽略：数量只是提示，不是功能前提
+    }
+  }
+
+  /// 第三方授权管理：返回后刷新数量（用户可能在页内撤销了授权）
+  Future<void> _openThirdPartyAuth() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const ThirdPartyAuthListPage()),
+    );
+    if (!mounted) return;
+    await _loadThirdPartyGrantCount();
   }
 
   void _loadSourceSetting() {
@@ -482,6 +509,33 @@ class _SettingsPageState extends State<SettingsPage> {
                           dense: true,
                           title: '错误日志',
                           onTap: _openErrorLog,
+                        ),
+                        AppListTile(
+                          icon: Icons.verified_user_rounded,
+                          iconBackground: AppColors.surfaceMuted,
+                          iconColor: AppColors.inkSecondary,
+                          dense: true,
+                          title: '第三方授权',
+                          // 数量只是提示：0 个时不显示数字，避免满屏无意义的「0」
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_thirdPartyGrantCount > 0) ...[
+                                AppTag(
+                                  text: '$_thirdPartyGrantCount',
+                                  color: AppColors.ink,
+                                  background: AppColors.surfaceMuted,
+                                ),
+                                const SizedBox(width: AppSpace.xs),
+                              ],
+                              const Icon(
+                                Icons.chevron_right_rounded,
+                                size: 20,
+                                color: AppColors.inkDisabled,
+                              ),
+                            ],
+                          ),
+                          onTap: _openThirdPartyAuth,
                         ),
                       ],
                     ),
