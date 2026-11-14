@@ -288,41 +288,138 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
+  /// 分栏左栏：封面 + 歌名 + 进度 + 控制 + **动作行（下载/分享/定时/更多）**。
+  ///
+  /// 手机横屏的逻辑高度可能只有 360 左右（可用高度 ≈ 300），而动作行必然要占
+  /// 一行。为了保证「宁可没有封面，也不能没有功能」，这里按可用高度三级降级：
+  ///
+  /// - `>= 420`：常规结构，封面用 [Expanded] 自适应剩余空间；
+  /// - `280 ~ 420`：封面改为「高度上限 34%」的正方形（空间不够时继续等比收缩），
+  ///   歌名缩小、进度与控制的间距各收 2；
+  /// - `< 280`：**隐藏封面**，只留歌名/艺人（各一行）+ 进度 + 控制 + 动作行。
+  ///
+  /// 三种分支都不使用滚动容器——播放页必须一屏可见。
   Widget _buildSplitLeft() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 12, 0),
-      child: Column(
-        children: [
-          const SizedBox(height: 8),
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(
-                  maxWidth: Responsive.coverMaxSide,
-                  maxHeight: Responsive.coverMaxSide,
-                ),
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: _coverImageFill(),
-                  ),
-                ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableHeight = constraints.maxHeight;
+          if (availableHeight >= 420) {
+            return _buildSplitLeftFull();
+          }
+          if (availableHeight >= 280) {
+            return _buildSplitLeftCompact(availableHeight);
+          }
+          return _buildSplitLeftTiny(constraints);
+        },
+      ),
+    );
+  }
+
+  /// 封面：正方形、居中，受 [maxHeight] 与 [Responsive.coverMaxSide] 双重约束。
+  Widget _buildSplitCover({required double maxHeight}) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: Responsive.coverMaxSide,
+          maxHeight: maxHeight < Responsive.coverMaxSide
+              ? maxHeight
+              : Responsive.coverMaxSide,
+        ),
+        child: AspectRatio(
+          aspectRatio: 1,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: _coverImageFill(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 三档中最大的一档：可用高度充足，封面吃满剩余空间。
+  Widget _buildSplitLeftFull() {
+    return Column(
+      children: [
+        const SizedBox(height: 8),
+        Expanded(child: _buildSplitCover(maxHeight: Responsive.coverMaxSide)),
+        const SizedBox(height: 12),
+        // 与上方封面（Center 居中）对齐：歌名/歌手同样居中
+        SizedBox(
+          width: double.infinity,
+          child: _buildSongInfo(collapsed: true, center: true),
+        ),
+        const SizedBox(height: 12),
+        const ProgressBar(),
+        const SizedBox(height: 8),
+        _buildControls(),
+        const SizedBox(height: 4),
+        _buildActionRow(compact: true),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  /// 中档：小高度横屏（如 640×360）。封面高度上限 34% 可用高度，
+  /// 并用 [Flexible] 兜住「固定内容已占满、封面必须让位」的极端情况。
+  Widget _buildSplitLeftCompact(double availableHeight) {
+    return Column(
+      children: [
+        const SizedBox(height: 6),
+        Flexible(
+          child: _buildSplitCover(maxHeight: availableHeight * 0.34),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: _buildSongInfo(
+            collapsed: true,
+            center: true,
+            titleSize: 17,
+          ),
+        ),
+        const SizedBox(height: 10),
+        const ProgressBar(),
+        const SizedBox(height: 6),
+        _buildControls(),
+        const SizedBox(height: 2),
+        _buildActionRow(compact: true),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  /// 最小档：可用高度 < 280 时**放弃封面**，但四个动作入口一个都不能少。
+  ///
+  /// 外层套 [FittedBox] 只作保险：正常小高度横屏（≥ 220 可用高）内容按原尺寸
+  /// 居中显示，一旦被分屏压到更矮就整体等比缩小，绝不允许出现 overflow。
+  Widget _buildSplitLeftTiny(BoxConstraints constraints) {
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: SizedBox(
+        width: constraints.maxWidth,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: double.infinity,
+              child: _buildSongInfo(
+                collapsed: true,
+                center: true,
+                titleSize: 16,
+                titleGap: 2,
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          // 与上方封面（Center 居中）对齐：歌名/歌手同样居中
-          SizedBox(
-            width: double.infinity,
-            child: _buildSongInfo(collapsed: true, center: true),
-          ),
-          const SizedBox(height: 12),
-          const ProgressBar(),
-          const SizedBox(height: 8),
-          _buildControls(),
-          const SizedBox(height: 8),
-        ],
+            const SizedBox(height: 8),
+            const ProgressBar(),
+            const SizedBox(height: 6),
+            _buildControls(),
+            const SizedBox(height: 2),
+            _buildActionRow(compact: true),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -613,7 +710,15 @@ class _PlayerPageState extends State<PlayerPage> {
   ///
   /// [center] 为 true 时**整体居中** —— 分栏（横屏）形态下封面由 Center 居中，
   /// 歌名/歌手必须同样居中，否则会明显偏左、与封面不对齐。
-  Widget _buildSongInfo({required bool collapsed, bool center = false}) {
+  ///
+  /// [titleSize] / [titleGap] 供横屏小高度档位压缩行高使用；默认值与改造前
+  /// 完全一致，竖屏（`_buildColumnBody`）传默认值 → 视觉零变化。
+  Widget _buildSongInfo({
+    required bool collapsed,
+    bool center = false,
+    double titleSize = 20,
+    double titleGap = 5,
+  }) {
     final song = _audioPlayer.currentSong;
     final cross = center ? CrossAxisAlignment.center : CrossAxisAlignment.start;
     final textAlign = center ? TextAlign.center : TextAlign.left;
@@ -627,9 +732,9 @@ class _PlayerPageState extends State<PlayerPage> {
             maxLines: 1,
             textAlign: textAlign,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'MiSans',
-              fontSize: 20,
+              fontSize: titleSize,
               height: 1.3,
               fontWeight: FontWeight.w700,
               color: Colors.white,
@@ -670,15 +775,15 @@ class _PlayerPageState extends State<PlayerPage> {
                     maxLines: 1,
                     textAlign: textAlign,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 20,
+                    style: TextStyle(
+                      fontSize: titleSize,
                       height: 1.25,
                       fontWeight: FontWeight.w700,
                       letterSpacing: -0.2,
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 5),
+                  SizedBox(height: titleGap),
                   Text(
                     song.artist.isEmpty ? '未知歌手' : song.artist,
                     maxLines: 1,
@@ -731,7 +836,11 @@ class _PlayerPageState extends State<PlayerPage> {
     return 'https://music.163.com/song?id=${song.id}';
   }
 
-  Widget _buildActionRow() {
+  /// 动作行：下载 / 分享 / 定时 / 更多。
+  ///
+  /// [compact] 仅用于横屏分栏（空间紧张）：按钮视觉尺寸缩小，但点击热区
+  /// 仍然补到 44 高；竖屏传默认 false → 与改造前完全一致。
+  Widget _buildActionRow({bool compact = false}) {
     final song = _audioPlayer.currentSong;
     final hasSong = song != null;
     final hasSleep = _audioPlayer.hasSleepTimer;
@@ -744,22 +853,26 @@ class _PlayerPageState extends State<PlayerPage> {
               ? '${(_downloadProgress * 100).clamp(0, 100).toInt()}%'
               : '下载',
           onTap: hasSong && !_downloading ? _downloadCurrent : null,
+          compact: compact,
         ),
         _ActionButton(
           icon: Icons.ios_share_rounded,
           label: '分享',
           onTap: hasSong ? _shareCurrent : null,
+          compact: compact,
         ),
         _ActionButton(
           icon: Icons.timer_outlined,
           label: _sleepLabel(),
           active: hasSleep,
           onTap: _showSleepSheet,
+          compact: compact,
         ),
         _ActionButton(
           icon: Icons.more_horiz_rounded,
           label: '更多',
           onTap: hasSong ? _showMoreSheet : null,
+          compact: compact,
         ),
       ],
     );
@@ -798,6 +911,9 @@ class _PlayerPageState extends State<PlayerPage> {
       context: context,
       backgroundColor: AppColors.surface,
       showDragHandle: true,
+      // 横屏（尤其小高度横屏）里默认弹层最高只有 9/16 屏高，
+      // 4 个选项 + 标题放不下会 overflow；允许按内容高度撑开并兜底滚动。
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadius.sheet),
@@ -805,35 +921,37 @@ class _PlayerPageState extends State<PlayerPage> {
       ),
       builder: (ctx) => SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(
-                AppSpace.xl,
-                AppSpace.sm,
-                AppSpace.xl,
-                AppSpace.md,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(
+                  AppSpace.xl,
+                  AppSpace.sm,
+                  AppSpace.xl,
+                  AppSpace.md,
+                ),
+                child: Text('定时关闭', style: AppType.title),
               ),
-              child: Text('定时关闭', style: AppType.title),
-            ),
-            AppHairline(indent: AppSpace.xl),
-            for (final m in options)
-              _SheetRow(
-                icon: Icons.timer_outlined,
-                title: '$m 分钟后停止',
-                onTap: () => Navigator.pop(ctx, m),
-              ),
-            if (_audioPlayer.hasSleepTimer)
-              _SheetRow(
-                icon: Icons.timer_off_outlined,
-                title: '关闭定时',
-                subtitle: '当前 ${_sleepLabel()}',
-                onTap: () => Navigator.pop(ctx, 0),
-              ),
-            const SizedBox(height: AppSpace.sm),
-          ],
+              AppHairline(indent: AppSpace.xl),
+              for (final m in options)
+                _SheetRow(
+                  icon: Icons.timer_outlined,
+                  title: '$m 分钟后停止',
+                  onTap: () => Navigator.pop(ctx, m),
+                ),
+              if (_audioPlayer.hasSleepTimer)
+                _SheetRow(
+                  icon: Icons.timer_off_outlined,
+                  title: '关闭定时',
+                  subtitle: '当前 ${_sleepLabel()}',
+                  onTap: () => Navigator.pop(ctx, 0),
+                ),
+              const SizedBox(height: AppSpace.sm),
+            ],
+          ),
         ),
       ),
     );
@@ -855,6 +973,8 @@ class _PlayerPageState extends State<PlayerPage> {
       context: context,
       backgroundColor: AppColors.surface,
       showDragHandle: true,
+      // 同上：横屏高度不足时让面板按内容撑开，内容真的超高才滚动
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadius.sheet),
@@ -862,38 +982,43 @@ class _PlayerPageState extends State<PlayerPage> {
       ),
       builder: (ctx) => SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(
-                AppSpace.xl,
-                AppSpace.sm,
-                AppSpace.xl,
-                AppSpace.md,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(
+                  AppSpace.xl,
+                  AppSpace.sm,
+                  AppSpace.xl,
+                  AppSpace.md,
+                ),
+                child: Text('歌曲信息', style: AppType.title),
               ),
-              child: Text('歌曲信息', style: AppType.title),
-            ),
-            AppHairline(indent: AppSpace.xl),
-            _InfoRow(label: '歌名', value: song.name),
-            _InfoRow(
-              label: '歌手',
-              value: song.artist.isEmpty ? '未知歌手' : song.artist,
-            ),
-            _InfoRow(label: '专辑', value: song.album.isEmpty ? '—' : song.album),
-            _InfoRow(label: '音源', value: song.source.label),
-            _InfoRow(label: '时长', value: _formatSeconds(song.duration)),
-            _InfoRow(label: '歌曲 ID', value: song.id, selectable: true),
-            const Padding(
-              padding: EdgeInsets.all(AppSpace.xl),
-              child: Text(
-                '长按可复制歌曲 ID。下载与分享走的是同一条取址链路，能播就能下。',
-                style: AppType.caption,
+              AppHairline(indent: AppSpace.xl),
+              _InfoRow(label: '歌名', value: song.name),
+              _InfoRow(
+                label: '歌手',
+                value: song.artist.isEmpty ? '未知歌手' : song.artist,
               ),
-            ),
-            const SizedBox(height: AppSpace.sm),
-          ],
+              _InfoRow(
+                label: '专辑',
+                value: song.album.isEmpty ? '—' : song.album,
+              ),
+              _InfoRow(label: '音源', value: song.source.label),
+              _InfoRow(label: '时长', value: _formatSeconds(song.duration)),
+              _InfoRow(label: '歌曲 ID', value: song.id, selectable: true),
+              const Padding(
+                padding: EdgeInsets.all(AppSpace.xl),
+                child: Text(
+                  '长按可复制歌曲 ID。下载与分享走的是同一条取址链路，能播就能下。',
+                  style: AppType.caption,
+                ),
+              ),
+              const SizedBox(height: AppSpace.sm),
+            ],
+          ),
         ),
       ),
     );
@@ -1706,7 +1831,9 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
     final currentFont = Responsive.clampLyricFont(scale * 30);
     final otherFont = Responsive.clampLyricFont(scale * 24);
 
-    // 上下渐隐遮罩：歌词靠近边缘时淡出，避免生硬截断
+    // 上下渐隐遮罩：歌词靠近边缘时淡出，避免生硬截断。
+    // 底部从 78% 就开始淡出（原 85% 太晚，最后一行会以近实色半截贴在屏底）；
+    // 顶部收紧到 18% 与底部对称。
     return ShaderMask(
       shaderCallback: (rect) => const LinearGradient(
         begin: Alignment.topCenter,
@@ -1717,7 +1844,7 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
           Colors.white,
           Colors.transparent,
         ],
-        stops: [0.0, 0.22, 0.85, 1.0],
+        stops: [0.0, 0.18, 0.78, 1.0],
       ).createShader(rect),
       blendMode: BlendMode.dstIn,
       child: NotificationListener<ScrollNotification>(
@@ -1882,6 +2009,7 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     this.onTap,
     this.active = false,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -1891,39 +2019,61 @@ class _ActionButton extends StatelessWidget {
   /// 激活态（定时关闭生效中）用纯白 + 600 字重，与普通入口区分
   final bool active;
 
+  /// 紧凑形态（横屏分栏用）：视觉 52×36 / 图标 20 / 间距 2 / 字号 11。
+  ///
+  /// 视觉缩小是为了不把小高度横屏挤爆，但**点击热区仍补到 44 高**
+  /// （见 [build] 里的 [SizedBox]），避免按钮变小后点不中。
+  final bool compact;
+
+  /// 紧凑形态的最小点击热区高度（Material 可点区域下限）
+  static const double _compactHitHeight = 44;
+
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
+    final boxWidth = compact ? 52.0 : 64.0;
+    final visualHeight = compact ? 36.0 : 56.0;
+    final hitHeight = compact ? _compactHitHeight : 56.0;
+    final iconSize = compact ? 20.0 : 22.0;
+    final iconGap = compact ? 2.0 : 5.0;
+    final fontSize = compact ? 11.0 : 12.0;
     return Opacity(
       opacity: enabled ? 1 : 0.32,
       child: GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: SizedBox(
-          width: 64,
-          height: 56,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 22,
-                color: Colors.white.withValues(alpha: active ? 1 : 0.86),
+          width: boxWidth,
+          height: hitHeight,
+          child: Center(
+            child: SizedBox(
+              height: visualHeight,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    icon,
+                    size: iconSize,
+                    color: Colors.white.withValues(alpha: active ? 1 : 0.86),
+                  ),
+                  SizedBox(height: iconGap),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'MiSans',
+                      fontSize: fontSize,
+                      height: 1.1,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                      color: Colors.white.withValues(
+                        alpha: active ? 0.95 : 0.62,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 5),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontFamily: 'MiSans',
-                  fontSize: 12,
-                  height: 1.1,
-                  fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                  color: Colors.white.withValues(alpha: active ? 0.95 : 0.62),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
