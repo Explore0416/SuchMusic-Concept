@@ -45,6 +45,76 @@ class AppUpdateInfo {
   /// 下载地址列表（过滤空项）：Cloudflare 优先（国内快），GitHub 兜底
   List<String> get downloadUrls =>
       [cfUrl, githubUrl, giteeUrl].where((u) => u.isNotEmpty).toList();
+
+  /// 只属于**本版本**的更新内容。
+  ///
+  /// 分发清单里的 `changelog` 是整篇 CHANGELOG，直接塞进弹窗会把历史版本
+  /// 全部摊给用户看，又长又吵。这里按 `## [版本号]` 切出当前版本那一段。
+  String get changelogForThisVersion =>
+      extractChangelogSection(changelog, versionName);
+}
+
+/// 从整篇 CHANGELOG 中截取指定版本的段落。
+///
+/// 规则：
+/// - 匹配 `## [1.4.1]` / `## 1.4.1` / `## [v1.4.1]` 形式的二级标题；
+/// - 取该标题之后、下一个 `## ` 之前的内容（保留 `### 修复` 等子标题）；
+/// - 去掉段落末尾的分隔线 `---`；
+/// - 找不到指定版本时退回**第一段**（至少让用户看到最新内容）；
+/// - 整篇没有任何 `## ` 标题时原样返回，避免弹窗空白。
+///
+/// 纯函数，便于单测。
+String extractChangelogSection(String full, String versionName) {
+  final text = full.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+  if (text.isEmpty) return '';
+
+  final lines = text.split('\n');
+  final version = versionName.trim().replaceFirst(RegExp(r'^v'), '');
+  final escaped = RegExp.escape(version);
+  final heading = RegExp(
+    '^##\\s+\\[?v?$escaped\\]?(?:\\s|\$)',
+    caseSensitive: false,
+  );
+
+  int? start;
+  for (var i = 0; i < lines.length; i++) {
+    if (heading.hasMatch(lines[i].trim())) {
+      start = i;
+      break;
+    }
+  }
+
+  // 指定版本不存在：退到第一个二级标题，至少展示最新一段。
+  if (start == null) {
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trimLeft().startsWith('## ')) {
+        start = i;
+        break;
+      }
+    }
+  }
+  if (start == null) return text;
+
+  final buffer = <String>[];
+  for (var i = start + 1; i < lines.length; i++) {
+    if (lines[i].trimLeft().startsWith('## ')) break;
+    buffer.add(lines[i]);
+  }
+
+  // 去掉尾部空行与分隔线，避免弹窗底部拖一条横线。
+  while (buffer.isNotEmpty) {
+    final last = buffer.last.trim();
+    if (last.isEmpty || last == '---' || last == '***') {
+      buffer.removeLast();
+    } else {
+      break;
+    }
+  }
+  while (buffer.isNotEmpty && buffer.first.trim().isEmpty) {
+    buffer.removeAt(0);
+  }
+
+  return buffer.join('\n').trim();
 }
 
 /// App 更新服务：请求版本信息 / 下载 APK / 调起系统安装器

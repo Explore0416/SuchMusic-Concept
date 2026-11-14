@@ -47,6 +47,12 @@ class MainActivity : AudioServiceActivity() {
     /** 本地音乐扫描器（本地页面用；扫描在后台线程执行）。 */
     private val localMusic: LocalMusicScanner by lazy { LocalMusicScanner(applicationContext) }
 
+    /**
+     * 第三方授权桥：签名校验 / explicit intent 投递 / 深链事件。
+     * 与音效桥、手环桥同理提升为实例字段——EventSink 需跨调用保持。
+     */
+    private val thirdParty: ThirdPartyBridge by lazy { ThirdPartyBridge(applicationContext) }
+
     /** 等待音频权限结果后再完成的扫描请求。 */
     private var pendingScanResult: MethodChannel.Result? = null
 
@@ -66,6 +72,8 @@ class MainActivity : AudioServiceActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         captureInboundAudio(intent)
+        // 冷启动深链：只记录，由 Dart 侧 DeepLinkService 主动 getLaunchUri 拉取
+        thirdParty.setLaunchIntent(intent)
     }
 
     /** 已在前台时再次被呼起（singleTop）→ 复用实例，走 onNewIntent。 */
@@ -73,6 +81,8 @@ class MainActivity : AudioServiceActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         captureInboundAudio(intent)
+        // suchmusic:// 深链（第三方授权）投递给 Flutter 的 EventChannel
+        ThirdPartyBridge.suchMusicUri(intent)?.let { thirdParty.emitDeepLink(it) }
     }
 
     /**
@@ -205,6 +215,9 @@ class MainActivity : AudioServiceActivity() {
         // 逐字歌词：原生解码音频（MediaCodec）后交给 Dart 侧做对齐计算
         KaraokeDecoder.register(flutterEngine)
         registerFloatingLyricChannel(flutterEngine)
+        // 第三方授权：MethodChannel（签名查询 / code 投递 / 冷启动深链）
+        // + EventChannel（onNewIntent 收到的 suchmusic:// ）
+        thirdParty.register(flutterEngine)
         val bridge = IslandBridge(applicationContext)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IslandBridge.CHANNEL)
             .setMethodCallHandler { call, result ->

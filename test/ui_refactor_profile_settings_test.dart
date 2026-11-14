@@ -231,7 +231,9 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('删掉说明后一屏能看到全部分组项（11 项，无需滚动）', (tester) async {
+    // 1.5.0 新增「设置 → 第三方授权」一行：分组项 11 → 12，
+    // 一屏仍能看到除最后一项外的全部内容，滚动量不超过一行。
+    testWidgets('删掉说明后一屏能看到几乎全部分组项（12 项，至多滚一行）', (tester) async {
       _useSize(tester, const Size(430, 932));
       await tester.pumpWidget(_host(const SettingsPage()));
       await tester.pumpAndSettle();
@@ -250,11 +252,15 @@ void main() {
 
       expect(
         find.byType(AppListTile).evaluate().length,
-        11,
-        reason: '播放 2 + 音源 5 + 数据 3 + 关于 1',
+        12,
+        reason: '播放 2 + 音源 5 + 数据 4 + 关于 1',
       );
-      expect(visible, 11, reason: '文案瘦身后一屏放得下全部分组项（旧布局只放得下 9 项）');
-      expect(position.maxScrollExtent, lessThan(24), reason: '至多滚一丁点');
+      expect(
+        visible,
+        greaterThanOrEqualTo(11),
+        reason: '文案瘦身后一屏至少能看到 11 项（旧布局只放得下 9 项）',
+      );
+      expect(position.maxScrollExtent, lessThan(80), reason: '多出一行后至多滚一项');
 
       expect(tester.takeException(), isNull);
     });

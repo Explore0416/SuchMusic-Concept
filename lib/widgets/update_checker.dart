@@ -99,9 +99,9 @@ class UpdateChecker {
                   child: SingleChildScrollView(
                     child: DesignDialog.body(
                       ctx,
-                      info.changelog.isEmpty
+                      info.changelogForThisVersion.isEmpty
                           ? '修复已知问题，优化使用体验'
-                          : info.changelog,
+                          : info.changelogForThisVersion,
                     ),
                   ),
                 ),

@@ -1,5 +1,6 @@
 // 临时预览渲染：把 1.4.0 的新界面出成 PNG，供交付时人工核对。
 // 用法：flutter test test/preview_render_test.dart --update-goldens --no-version-check
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,17 +9,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:netease_music_api/netease_music_api.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:such_music/models/song_model.dart';
+import 'package:such_music/models/third_party_auth.dart';
 import 'package:such_music/screens/library_page.dart';
 import 'package:such_music/screens/local_music_page.dart';
 import 'package:such_music/screens/player_page.dart';
 import 'package:such_music/screens/profile_page.dart';
 import 'package:such_music/screens/settings_page.dart';
+import 'package:such_music/screens/third_party_auth_list_page.dart';
+import 'package:such_music/screens/third_party_auth_page.dart';
 import 'package:such_music/services/audio_player_service.dart';
+import 'package:such_music/services/third_party/client_registry.dart';
+import 'package:such_music/services/third_party/third_party_auth_service.dart';
 import 'package:such_music/services/user_library_service.dart';
 import 'package:such_music/theme/app_theme.dart';
 import 'package:such_music/widgets/app_bottom_dock.dart';
 import 'package:such_music/widgets/home_sections.dart';
 import 'package:such_music/widgets/source_switcher.dart';
+
+import 'support/fake_third_party.dart';
 
 /// 测试用路径提供者：网易云 SDK 的 cookie 目录指到临时目录，
 /// 避开 path_provider 插件（预览图里需要让播放页有一首当前歌曲）。
@@ -176,11 +184,16 @@ void main() {
     Widget child, {
     Size size = const Size(390, 844),
     double heightFactor = 1.0,
+    int extraFrames = 0,
   }) async {
     tester.view.physicalSize = Size(size.width, size.height * heightFactor);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(_host(child));
+    await tester.pump();
+    for (var i = 0; i < extraFrames; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     await tester.pump(const Duration(milliseconds: 300));
     await expectLater(
       find.byType(MaterialApp),
@@ -329,5 +342,89 @@ void main() {
     await tester.pump(const Duration(seconds: 11));
     AudioPlayerService().dispose();
     await tester.pump(const Duration(seconds: 1));
+  });
+
+  // 1.5.0：第三方授权确认页（390×844）。
+  // 用真实页面 + 假桥（取不到应用图标 → 首字占位），已授权项折叠成一行。
+  testWidgets('third-party-auth', (tester) async {
+    await shoot(
+      tester,
+      'third-party-auth',
+      ThirdPartyAuthPage(
+        bridge: FakeBridge(),
+        request: AuthRequest(
+          client: const ThirdPartyClient(
+            clientId: 'com.example.player',
+            packageName: 'com.example.player',
+            signatureSha256: 'a1b2c3d4e5f6a7b8',
+            displayName: '酷狗助手',
+          ),
+          scopes: const <ThirdPartyScope>[
+            ThirdPartyScope.genreRead,
+            ThirdPartyScope.accountToken,
+            ThirdPartyScope.urlResolve,
+            ThirdPartyScope.playbackControl,
+          ],
+          state: 'preview',
+          silent: false,
+          alreadyGranted: const <ThirdPartyScope>{ThirdPartyScope.genreRead},
+          appLabel: '酷狗助手',
+          signaturePrefix: 'a1b2c3d4',
+        ),
+      ),
+    );
+  });
+
+  // 1.5.0：第三方授权管理页（390×844）。
+  // 直接往 mock 的 SharedPreferences 里塞两条 grant，走真实的读取链路。
+  testWidgets('third-party-auth-list', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      ThirdPartyAuthService.grantsKey: jsonEncode(<Map<String, dynamic>>[
+        ThirdPartyGrant(
+          clientId: 'com.example.player',
+          packageName: 'com.example.player',
+          scopes: const <ThirdPartyScope>{
+            ThirdPartyScope.genreRead,
+            ThirdPartyScope.urlResolve,
+          },
+          grantedAt: 1731600000,
+          lastAccessAt: 1731607800,
+          callCount: 6,
+        ).toJson(),
+        ThirdPartyGrant(
+          clientId: 'com.example.hifi',
+          packageName: 'com.example.hifi',
+          scopes: const <ThirdPartyScope>{
+            ThirdPartyScope.playbackControl,
+            ThirdPartyScope.accountToken,
+          },
+          grantedAt: 1731500000,
+          lastAccessAt: 1731591600,
+          callCount: 2,
+        ).toJson(),
+      ]),
+    });
+
+    await shoot(
+      tester,
+      'third-party-auth-list',
+      const ThirdPartyAuthListPage(
+        registry: ClientRegistry(<ThirdPartyClient>[
+          ThirdPartyClient(
+            clientId: 'com.example.player',
+            packageName: 'com.example.player',
+            signatureSha256: '',
+            displayName: '酷狗助手',
+          ),
+          ThirdPartyClient(
+            clientId: 'com.example.hifi',
+            packageName: 'com.example.hifi',
+            signatureSha256: '',
+            displayName: '小聚 HiFi',
+          ),
+        ]),
+      ),
+      extraFrames: 2,
+    );
   });
 }

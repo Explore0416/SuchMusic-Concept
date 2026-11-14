@@ -10,6 +10,7 @@ import 'screens/home_page.dart';
 import 'screens/library_page.dart';
 import 'screens/local_page.dart';
 import 'screens/profile_page.dart';
+import 'screens/third_party_auth_page.dart';
 import 'services/audio_player_handler.dart';
 import 'services/audio_player_service.dart';
 import 'services/band/band_service.dart';
@@ -21,6 +22,8 @@ import 'services/sound_effect_service.dart';
 import 'services/app_init.dart';
 import 'services/crash_log_service.dart';
 import 'services/sources/kugou_device_service.dart';
+import 'services/third_party/deep_link_service.dart';
+import 'models/third_party_auth.dart';
 import 'models/song_model.dart';
 import 'utils/player_route.dart';
 import 'utils/home_tab.dart';
@@ -209,11 +212,38 @@ class _MainShellState extends State<MainShell> {
     // 首次启动（或协议版本更新后）弹出《用户协议》确认弹窗
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) showAgreementConsentDialogIfNeed(context);
+      // 第三方授权深链：首帧之后 navigator 已就绪，冷启动 Uri 由服务内部拉取
+      _startThirdPartyDeepLinks();
       // 启动 3 秒后静默检查更新：有新版本时弹提示（远端 force 为 true 时强制更新，无法跳过）
       Timer(const Duration(seconds: 3), () {
         if (mounted) UpdateChecker.check(context, silent: true);
       });
     });
+  }
+
+  /// 启动第三方授权深链监听（ARCHITECTURE §5 / §9.1）。
+  ///
+  /// 必须在首帧之后调用：确认页要求 `appNavigatorKey.currentState` 可用。
+  /// 冷启动（App 被 `suchmusic://` 拉起）的初始 Uri 由 [DeepLinkService] 内部
+  /// 自行 `getLaunchUri` 拉取，这里无需额外处理。
+  ///
+  /// `confirm` 返回 false 表示用户拒绝或页面被返回键关闭 —— 内核据此
+  /// 回 `access_denied` 且不写授权记录，UI 不参与任何放行判断。
+  void _startThirdPartyDeepLinks() {
+    unawaited(
+      DeepLinkService.instance.start(
+        confirm: (AuthRequest request) async {
+          final navigator = appNavigatorKey.currentState;
+          if (navigator == null) return false;
+          final allowed = await navigator.push<bool>(
+            MaterialPageRoute<bool>(
+              builder: (_) => ThirdPartyAuthPage(request: request),
+            ),
+          );
+          return allowed ?? false;
+        },
+      ),
+    );
   }
 
   @override

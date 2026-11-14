@@ -64,6 +64,13 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="audio/*"/>
             </intent-filter>
+            <!-- 第三方授权：suchmusic://oauth/authorize 深链（ARCHITECTURE §6.1） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="suchmusic" android:host="oauth" android:pathPrefix="/authorize"/>
+            </intent-filter>
         </activity>
         <!-- 桌面悬浮歌词服务（前台服务，持有悬浮窗） -->
         <service
@@ -108,6 +115,13 @@
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="mqqapi"/>
+        </intent>
+        <!--
+            第三方授权回调：Android 11+ 包可见性下，resolveActivity 需要声明
+            能处理 CLIENT_CALLBACK 动作的包可见，否则会把「已安装的回调页」误判为不存在。
+        -->
+        <intent>
+            <action android:name="com.lightningteam.suchmusic.CLIENT_CALLBACK"/>
         </intent>
     </queries>
 </manifest>
