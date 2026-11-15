@@ -23,6 +23,7 @@ import 'services/app_init.dart';
 import 'services/crash_log_service.dart';
 import 'services/sources/kugou_device_service.dart';
 import 'services/third_party/deep_link_service.dart';
+import 'services/third_party/remote_clients.dart';
 import 'models/third_party_auth.dart';
 import 'models/song_model.dart';
 import 'utils/player_route.dart';
@@ -212,6 +213,9 @@ class _MainShellState extends State<MainShell> {
     // 首次启动（或协议版本更新后）弹出《用户协议》确认弹窗
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) showAgreementConsentDialogIfNeed(context);
+      // 第三方白名单：先读本地缓存（重新验签），再后台静默刷新开放平台清单。
+      // 不 await：网络慢 / 失败都不该影响启动，失败时沿用内置 + 上次有效清单。
+      unawaited(RemoteClients.instance.warmUp());
       // 第三方授权深链：首帧之后 navigator 已就绪，冷启动 Uri 由服务内部拉取
       _startThirdPartyDeepLinks();
       // 启动 3 秒后静默检查更新：有新版本时弹提示（远端 force 为 true 时强制更新，无法跳过）
