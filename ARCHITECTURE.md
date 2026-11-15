@@ -417,3 +417,4 @@ Settings → ThirdPartyAuthListPage → 撤销
 | 2026-11-14 | v1.0 | 初版：M1 更新弹窗修复 + 第三方授权接入架构 |
 | 2026-11-14 | v1.1 | M4 落地：`ThirdPartyAuthPage` / `ThirdPartyAuthListPage` / 设置入口 / `main.dart` 接线；M6 落地：`showAccessNotice`（原生通知）+ `getAppIcon`（真实图标）；`AuthCodeService` 清理定时器改懒启动（构造不再创建 Timer） |
 | 2026-11-14 | v1.2 | M1–M6 全部完成，567 测试通过；`account.token` 说明文案去重（说明行只讲「读什么」，警示行只讲「风险」）；版本 1.5.0+172 |
+| 2026-11-15 | v1.3 | 注册表改为「内置 ∪ 远端」：新增 `remote_clients.dart`（`open.lightning-team.top/api/v1/clients`，Ed25519 验签 + SP 缓存 + 启动重验），`kRegisteredClients` 变合并 getter，`ClientRegistry.standard()` 改动态视图；纯 Dart Ed25519（pointycastle 3.9.1 无此实现）；版本 1.5.1+173 |
