@@ -283,8 +283,17 @@ class AuthFailed extends AuthOutcome { final String error; final String message;
 
 ### 8.3 注册表
 
-`lib/services/third_party/client_registry.dart` 内置 `const List<ThirdPartyClient> kRegisteredClients`。
-接入新 Client = 往该数组加一条 + 发版。Debug 构建额外注入 `debug.suchmusic.probe`（包名同签名 debug key）用于自测，Release 构建不包含。
+生效注册表 = **内置名单 ∪ 开放平台公开清单**（同 `clientId` 以远端为准）。
+远端清单来自 `https://open.lightning-team.top/api/v1/clients`，Ed25519 签名，App 内置公钥验签；
+拉取、验签、缓存与回退见 `lib/services/third_party/remote_clients.dart`。
+
+两种接入方式：
+
+- **常规**：在开放平台注册并提交申请，审核通过后自动进入清单，**无需发版**（最长 6 小时生效，App 启动时刷新）。
+- **兜底**：把 Client 写进 `kBuiltInClients` 并发版，用于开放平台不可达或需要立即生效的场景。
+
+Debug 构建额外注入 `debug.suchmusic.probe`（包名同签名 debug key）用于自测，Release 构建不包含；
+探针在合并时始终最后写入，远端清单无法覆盖或伪造它。
 
 ---
 
@@ -418,3 +427,4 @@ Settings → ThirdPartyAuthListPage → 撤销
 | 2026-11-14 | v1.1 | M4 落地：`ThirdPartyAuthPage` / `ThirdPartyAuthListPage` / 设置入口 / `main.dart` 接线；M6 落地：`showAccessNotice`（原生通知）+ `getAppIcon`（真实图标）；`AuthCodeService` 清理定时器改懒启动（构造不再创建 Timer） |
 | 2026-11-14 | v1.2 | M1–M6 全部完成，567 测试通过；`account.token` 说明文案去重（说明行只讲「读什么」，警示行只讲「风险」）；版本 1.5.0+172 |
 | 2026-11-15 | v1.3 | 注册表改为「内置 ∪ 远端」：新增 `remote_clients.dart`（`open.lightning-team.top/api/v1/clients`，Ed25519 验签 + SP 缓存 + 启动重验），`kRegisteredClients` 变合并 getter，`ClientRegistry.standard()` 改动态视图；纯 Dart Ed25519（pointycastle 3.9.1 无此实现）；版本 1.5.1+173 |
+| 2026-11-15 | v1.4 | 开放平台上线（Pages + D1，见 `suchmusic-open-platform/ARCHITECTURE.md`）：§8.3 改为「常规走平台审核、不发版；兜底写内置名单」；`docs/third-party-integration.md` 第 2 节改为指向 `open.lightning-team.top/register` |
