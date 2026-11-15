@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
@@ -105,6 +106,15 @@ class ThirdPartyBridge(private val context: Context) {
                         }
                     }
                     "getLaunchUri" -> result.success(mapOf("uri" to (launchUri ?: "")))
+                    "openUrl" -> {
+                        val url = call.argument<String>("url") ?: ""
+                        try {
+                            result.success(openUrl(url))
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "openUrl 失败: ${e.message}")
+                            result.success(false)
+                        }
+                    }
                     "getAppIcon" -> {
                         val pkg = call.argument<String>("package") ?: ""
                         try {
@@ -319,6 +329,35 @@ class ThirdPartyBridge(private val context: Context) {
         } catch (e: Throwable) {
             Log.w(TAG, "投递授权结果失败: ${e.message}")
             mapOf("sent" to false, "reason" to "no_callback_activity")
+        }
+    }
+
+    // ── openUrl ────────────────────────────────────────────────
+
+    /**
+     * 用系统浏览器打开 https 地址（Web 客户端授权回跳）。
+     *
+     * 只放行 https：回跳地址来自登记过的 redirect_uri，不做任意 scheme 跳转，
+     * 避免把「唤醒任意应用」的能力暴露给网页侧。没有可用浏览器时返回 false，
+     * Dart 侧据此回滚授权记录。
+     */
+    private fun openUrl(url: String): Boolean {
+        val uri = try {
+            Uri.parse(url)
+        } catch (e: Throwable) {
+            return false
+        }
+        if (uri.scheme != "https" || uri.host.isNullOrEmpty()) return false
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Throwable) {
+            Log.w(TAG, "打开浏览器失败: ${e.message}")
+            false
         }
     }
 

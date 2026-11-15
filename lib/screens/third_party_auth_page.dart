@@ -61,6 +61,8 @@ class _ThirdPartyAuthPageState extends State<ThirdPartyAuthPage> {
   }
 
   Future<void> _loadIcon() async {
+    // 网页应用没有安装包图标，直接走首字占位，不用白跑一次通道调用
+    if (widget.request.isWeb) return;
     try {
       final bridge = widget.bridge ?? MethodChannelThirdPartyBridge();
       final bytes = await bridge.getAppIcon(widget.request.packageName);
@@ -71,6 +73,15 @@ class _ThirdPartyAuthPageState extends State<ThirdPartyAuthPage> {
       // 取不到图标不影响授权判断，静默退回首字占位
       debugPrint('[ThirdParty] 读取应用图标失败: ${e.runtimeType}');
     }
+  }
+
+  /// 回调地址的主机名（确认页只展示域名，不展示带 code 的完整地址）。
+  String _hostOfRedirect() {
+    final raw = widget.request.redirectUri;
+    if (raw == null || raw.isEmpty) return '网页应用';
+    final uri = Uri.tryParse(raw);
+    if (uri == null || uri.host.isEmpty) return raw;
+    return uri.host;
   }
 
   /// 交回用户决定。[allow] 为 false 即「拒绝」（返回键同此路径）。
@@ -122,7 +133,9 @@ class _ThirdPartyAuthPageState extends State<ThirdPartyAuthPage> {
                       const SizedBox(height: AppSpace.xs),
                       Center(
                         child: Text(
-                          request.packageName,
+                          request.isWeb
+                              ? '网页应用 · ${_hostOfRedirect()}'
+                              : request.packageName,
                           textAlign: TextAlign.center,
                           style: AppType.caption.copyWith(
                             color: AppColors.inkTertiary,

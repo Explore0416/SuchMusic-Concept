@@ -80,7 +80,11 @@ class RemoteClients {
   /// 全局单例（`main.dart` 启动时 warmUp）。
   static final RemoteClients instance = RemoteClients();
 
-  /// 公开清单接口。
+  /// 公开清单接口（v2：含 Web 客户端，1.5.3+ 使用）。
+  static const String endpointUrlV2 =
+      'https://open.lightning-team.top/api/v2/clients';
+
+  /// 公开清单接口（v1：仅 Android 客户端，兼容回退用）。
   static const String endpointUrl =
       'https://open.lightning-team.top/api/v1/clients';
 
@@ -90,11 +94,17 @@ class RemoteClients {
   /// 签名串第一行（域分隔，防跨用途重放）。
   static const String signatureDomain = 'suchmusic-clients-v1';
 
+  /// v2 签名串第一行（比 v1 多 app_type 与 redirect_uris 两个字段）。
+  static const String signatureDomainV2 = 'suchmusic-clients-v2';
+
   /// 客户端条目之间的分隔符。
   static const String entrySeparator = '\n---\n';
 
   /// 支持的清单版本。
   static const int supportedVersion = 1;
+
+  /// 支持的 v2 清单版本。
+  static const int supportedVersionV2 = 2;
 
   /// 缓存包装的 schema 版本。
   static const int cacheSchemaVersion = 1;
@@ -201,8 +211,18 @@ class RemoteClients {
       // 名单还是新的，跳过网络，保持「有效」语义。
       return true;
     }
+    // 1.5.3 起优先拉 v2（含 Web 客户端）；服务端未升级 / v2 异常时回退 v1，
+    // 保证「旧服务端 + 新 App」和「新服务端 + 新 App」都能拿到可用清单。
+    for (final endpoint in <String>[endpointUrlV2, endpointUrl]) {
+      if (await _tryEndpoint(endpoint)) return true;
+    }
+    return false;
+  }
+
+  /// 拉取单个端点并验签；任何环节失败返回 false（不抛异常、不清空现有清单）。
+  Future<bool> _tryEndpoint(String endpoint) async {
     try {
-      final raw = await _fetcher(Uri.parse(endpointUrl));
+      final raw = await _fetcher(Uri.parse(endpoint));
       final decoded = jsonDecode(raw);
       if (decoded is! Map) {
         _log('清单结构异常（非对象），保持现有清单');
@@ -215,11 +235,14 @@ class RemoteClients {
         _log('清单验签失败，丢弃本次响应');
         return false;
       }
-      final parsed = parseClients(payload['clients']);
+      final version = payload['version'] is int ? payload['version'] as int : 0;
+      final parsed = parseClients(payload['clients'], version: version);
       // 验签通过才落盘：缓存里存的是**原始响应文本** + 拉取时间。
       _apply(parsed, _now());
       await _writeCache(raw, _now());
-      _log('清单已更新: ${parsed.length} 条 @ ${_lastSyncedAt?.toIso8601String()}');
+      _log(
+        '清单已更新: ${parsed.length} 条（v$version）@ ${_lastSyncedAt?.toIso8601String()}',
+      );
       return true;
     } catch (error) {
       // 网络异常 / JSON 解析异常 / 未预期异常：全部静默。
@@ -282,7 +305,10 @@ class RemoteClients {
       await _cache.clear();
       return;
     }
-    final parsed = parseClients(payload['clients']);
+    final parsed = parseClients(
+      payload['clients'],
+      version: payload['version'] is int ? payload['version'] as int : 0,
+    );
     final syncedAt = fetchedAt is num
         ? DateTime.fromMillisecondsSinceEpoch(fetchedAt.toInt())
         : _now();
@@ -313,7 +339,8 @@ class RemoteClients {
   static bool verifyPayload(Map<String, dynamic> payload) {
     try {
       final version = payload['version'];
-      if (version is! int || version != supportedVersion) return false;
+      if (version is! int) return false;
+      if (version != supportedVersion && version != supportedVersionV2) return false;
 
       final keyId = payload['key_id'];
       if (keyId is! String) return false;
@@ -326,7 +353,11 @@ class RemoteClients {
       final signatureText = payload['signature'];
       if (signatureText is! String || signatureText.isEmpty) return false;
 
-      final message = buildSigningMessage(payload);
+      // v1 与 v2 的签名串字段集合不同，必须按版本选对应的构造函数，
+      // 否则「新端点用旧串验」会永远失败，反之则会把未签名字段当成可信。
+      final message = version == supportedVersionV2
+          ? buildSigningMessageV2(payload)
+          : buildSigningMessage(payload);
       if (message == null) return false;
 
       final signature = decodeBase64UrlBytes(signatureText);
@@ -393,13 +424,81 @@ class RemoteClients {
     ].join('\n');
   }
 
+  /// 按 v2 规则拼签名串；结构不合法返回 null。
+  ///
+  /// ```text
+  /// suchmusic-clients-v2\n
+  /// <generated_at>\n
+  /// <client_id>\n<app_type>\n<package_name>\n<signature>\n<redirect_uris>\n<scopes>
+  /// ```
+  /// 条目之间仍是 `\n---\n`；`redirect_uris` 与 `scopes` 均按字典序升序、逗号连接。
+  /// 必须与 `src/sign.js#canonicalMessageV2` 逐字节一致。
+  @visibleForTesting
+  static String? buildSigningMessageV2(Map<String, dynamic> payload) {
+    final generatedAt = payload['generated_at'];
+    final clients = payload['clients'];
+    if (generatedAt is! int || clients is! List) return null;
+
+    final blocks = <String>[];
+    for (final raw in clients) {
+      if (raw is! Map) return null;
+      final entry = <String, dynamic>{
+        for (final e in raw.entries) e.key.toString(): e.value,
+      };
+      final clientId = entry['client_id'];
+      final appType = entry['app_type'];
+      final packageName = entry['package_name'];
+      final signatureSha256 = entry['signature_sha256'];
+      final redirectUris = entry['redirect_uris'];
+      final scopes = entry['scopes'];
+      if (clientId is! String ||
+          appType is! String ||
+          packageName is! String ||
+          signatureSha256 is! String ||
+          redirectUris is! List ||
+          scopes is! List) {
+        return null;
+      }
+      final redirectCodes = <String>[];
+      for (final item in redirectUris) {
+        if (item is! String) return null;
+        redirectCodes.add(item);
+      }
+      redirectCodes.sort();
+      final scopeCodes = <String>[];
+      for (final scope in scopes) {
+        if (scope is! String) return null;
+        scopeCodes.add(scope);
+      }
+      scopeCodes.sort();
+      blocks.add(
+        <String>[
+          clientId,
+          appType,
+          packageName,
+          signatureSha256,
+          redirectCodes.join(','),
+          scopeCodes.join(','),
+        ].join('\n'),
+      );
+    }
+    return <String>[
+      signatureDomainV2,
+      '$generatedAt',
+      blocks.join(entrySeparator),
+    ].join('\n');
+  }
+
   /// 把 `clients` 数组解析成 [ThirdPartyClient]，**逐条校验、逐条丢弃**。
   ///
-  /// 丢弃条件：`client_id` / `package_name` 为空、`signature_sha256` 不是
-  /// 64 位小写 hex、`scopes` 缺失或含四个合法值以外的项。
+  /// Android 条目丢弃条件：`client_id` / `package_name` 为空，或
+  /// `signature_sha256` 不是 64 位小写 hex。
+  /// Web 条目（v2 且 `app_type=web`）丢弃条件：包名/签名必须为空，
+  /// `redirect_uris` 必须是非空 https 绝对地址列表。
+  /// 两者共同要求：`scopes` 缺失或含四个合法值以外的项。
   /// 单条不合法不影响其它条目（不做整份丢弃）。
   @visibleForTesting
-  static List<ThirdPartyClient> parseClients(Object? rawClients) {
+  static List<ThirdPartyClient> parseClients(Object? rawClients, {int version = 1}) {
     if (rawClients is! List) return const <ThirdPartyClient>[];
     final byId = <String, ThirdPartyClient>{};
     for (final raw in rawClients) {
@@ -412,20 +511,51 @@ class RemoteClients {
           (entry['package_name'] as Object?)?.toString().trim() ?? '';
       final signatureSha256 =
           (entry['signature_sha256'] as Object?)?.toString().trim() ?? '';
-      if (clientId.isEmpty || packageName.isEmpty) continue;
-      if (!_sha256Pattern.hasMatch(signatureSha256)) continue;
+      if (clientId.isEmpty) continue;
+
+      // v1 清单里没有 app_type，一律按 Android 处理
+      final appType = version >= supportedVersionV2
+          ? ThirdPartyAppType.fromCode(entry['app_type'])
+          : ThirdPartyAppType.android;
+
+      if (appType == ThirdPartyAppType.web) {
+        // 网页应用不该带包名/签名：带了说明清单被拼错，直接丢弃更安全
+        if (packageName.isNotEmpty || signatureSha256.isNotEmpty) continue;
+        if (!_hasValidRedirects(entry['redirect_uris'])) continue;
+      } else {
+        if (packageName.isEmpty) continue;
+        if (!_sha256Pattern.hasMatch(signatureSha256)) continue;
+      }
+
       if (!_hasOnlyKnownScopes(entry['scopes'])) continue;
       final displayName = (entry['display_name'] as Object?)?.toString() ?? '';
+      final rawRedirects = entry['redirect_uris'];
       byId[clientId] = ThirdPartyClient(
         clientId: clientId,
         packageName: packageName,
         signatureSha256: signatureSha256,
         displayName: displayName.isEmpty ? clientId : displayName,
+        appType: appType,
+        redirectUris: appType == ThirdPartyAppType.web && rawRedirects is List
+            ? <String>[for (final item in rawRedirects) item as String]
+            : const <String>[],
       );
     }
     final list = byId.values.toList();
     list.sort((a, b) => a.clientId.compareTo(b.clientId));
     return List<ThirdPartyClient>.unmodifiable(list);
+  }
+
+  /// 回调地址列表必须非空、全部是 https 绝对地址、不带 userinfo / query / fragment。
+  static bool _hasValidRedirects(Object? raw) {
+    if (raw is! List || raw.isEmpty) return false;
+    for (final item in raw) {
+      if (item is! String || item.isEmpty || item.length > 300) return false;
+      final uri = Uri.tryParse(item);
+      if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) return false;
+      if (uri.hasQuery || uri.hasFragment || uri.userInfo.isNotEmpty) return false;
+    }
+    return true;
   }
 
   /// `scopes` 必须是「全部落在 [allowedScopes] 内」的字符串数组。

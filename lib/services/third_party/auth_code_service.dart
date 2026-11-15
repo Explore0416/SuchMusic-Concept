@@ -18,6 +18,7 @@ class AuthCode {
     required this.issuedAt,
     required this.expiresAt,
     required this.foregroundConfirmed,
+    this.codeChallenge,
   });
 
   /// 32 字节随机数的 base64Url（无 padding，43 字符）。
@@ -38,6 +39,11 @@ class AuthCode {
 
   /// 是否经过前台确认（`account.token` 必须为 true，ARCH §6.5）。
   final bool foregroundConfirmed;
+
+  /// Web 客户端的 PKCE code_challenge（S256，base64url）；Android 为 null。
+  ///
+  /// 存在时，loopback 交换必须带上匹配的 `code_verifier`，否则 code 不可用。
+  final String? codeChallenge;
 
   bool isExpiredAt(int nowSeconds) => nowSeconds >= expiresAt;
 
@@ -114,6 +120,7 @@ class AuthCodeService {
     required Set<ThirdPartyScope> scopes,
     required int port,
     bool foregroundConfirmed = false,
+    String? codeChallenge,
   }) {
     final now = _now();
     final value = _newCodeValue();
@@ -127,6 +134,7 @@ class AuthCodeService {
       issuedAt: now,
       expiresAt: now + ttl.inSeconds,
       foregroundConfirmed: foregroundConfirmed,
+      codeChallenge: codeChallenge,
     );
     return value;
   }

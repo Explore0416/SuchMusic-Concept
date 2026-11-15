@@ -98,50 +98,108 @@ enum ThirdPartyScope {
   }
 }
 
+/// 客户端形态（ARCHITECTURE §7「客户端类型」）。
+///
+/// - [android]：用「包名 + 签名指纹」识别，授权结果经 explicit intent 投递；
+/// - [web]：没有安装包，用「已登记的回调地址」识别，授权后跳回浏览器，
+///   由网页在**本机** loopback 端口上换取数据（数据不出设备）。
+enum ThirdPartyAppType {
+  android('android'),
+  web('web');
+
+  const ThirdPartyAppType(this.code);
+
+  /// 清单里的协议标识。
+  final String code;
+
+  static ThirdPartyAppType fromCode(Object? raw) {
+    final text = (raw ?? '').toString().trim();
+    return text == 'web' ? ThirdPartyAppType.web : ThirdPartyAppType.android;
+  }
+}
+
 /// 已登记的第三方 Client（ARCHITECTURE §7）。
 ///
-/// 信任根 = 「注册表里的包名 + 签名 SHA-256」与「本机实际安装的包」同时匹配，
-/// 因此 [signatureSha256] 为小写 hex，空串表示跳过签名比对（仅 debug 探针使用）。
+/// 信任根分两种：
+/// - Android：注册表里的包名 + 签名 SHA-256 与本机实际安装包同时匹配；
+/// - Web：注册表里的回调地址与请求中的 `redirect_uri` **逐字相等**。
 class ThirdPartyClient {
   const ThirdPartyClient({
     required this.clientId,
     required this.packageName,
     required this.signatureSha256,
     required this.displayName,
+    this.appType = ThirdPartyAppType.android,
+    this.redirectUris = const <String>[],
   });
 
   /// 注册表主键，随深链 `client_id` 传入。
   final String clientId;
 
-  /// 目标包名，必须与本机已安装包一致。
+  /// 目标包名（仅 Android 应用有值）。
   final String packageName;
 
-  /// 签名证书 SHA-256（小写 hex）；空串 = 不比对签名（仅 debug）。
+  /// 签名证书 SHA-256（小写 hex）；空串 = 不比对签名（仅 debug 探针）。
   final String signatureSha256;
 
   /// 注册表内的展示名（UI 以 PackageManager 结果优先）。
   final String displayName;
 
-  /// 是否需要比对签名。
-  bool get requiresSignature => signatureSha256.trim().isNotEmpty;
+  /// 客户端形态。
+  final ThirdPartyAppType appType;
+
+  /// 已登记的回调地址（仅 Web 应用有值，逐字比对，不做前缀匹配）。
+  final List<String> redirectUris;
+
+  /// 是否为网页应用。
+  bool get isWeb => appType == ThirdPartyAppType.web;
+
+  /// 是否需要比对签名（Web 应用永远不需要）。
+  bool get requiresSignature => !isWeb && signatureSha256.trim().isNotEmpty;
+
+  /// 回调地址是否已登记（Web 授权的前置校验）。
+  bool allowsRedirect(String uri) => redirectUris.contains(uri);
+
+  /// 已登记回调地址的 origin 集合（loopback CORS 白名单）。
+  Set<String> get redirectOrigins {
+    final out = <String>{};
+    for (final raw in redirectUris) {
+      final uri = Uri.tryParse(raw);
+      if (uri == null || !uri.hasScheme || uri.host.isEmpty) continue;
+      out.add('${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}');
+    }
+    return out;
+  }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'client_id': clientId,
+        'app_type': appType.code,
         'package': packageName,
         'signature_sha256': signatureSha256,
+        'redirect_uris': redirectUris,
         'display_name': displayName,
       };
 
-  factory ThirdPartyClient.fromJson(Map<String, dynamic> json) =>
-      ThirdPartyClient(
-        clientId: (json['client_id'] ?? '').toString(),
-        packageName: (json['package'] ?? '').toString(),
-        signatureSha256: (json['signature_sha256'] ?? '').toString(),
-        displayName: (json['display_name'] ?? '').toString(),
-      );
+  factory ThirdPartyClient.fromJson(Map<String, dynamic> json) {
+    final rawRedirects = json['redirect_uris'];
+    return ThirdPartyClient(
+      clientId: (json['client_id'] ?? '').toString(),
+      packageName: (json['package'] ?? '').toString(),
+      signatureSha256: (json['signature_sha256'] ?? '').toString(),
+      displayName: (json['display_name'] ?? '').toString(),
+      appType: ThirdPartyAppType.fromCode(json['app_type']),
+      redirectUris: rawRedirects is Iterable
+          ? <String>[
+              for (final item in rawRedirects)
+                if (item is String && item.isNotEmpty) item,
+            ]
+          : const <String>[],
+    );
+  }
 
   @override
-  String toString() => 'ThirdPartyClient($clientId → $packageName)';
+  String toString() =>
+      'ThirdPartyClient($clientId → ${isWeb ? redirectUris.join(",") : packageName})';
 }
 
 /// 一条长期授权记录（ARCHITECTURE §7）。
@@ -277,6 +335,7 @@ class AuthRequest {
     this.alreadyGranted = const <ThirdPartyScope>{},
     this.appLabel = '',
     this.signaturePrefix = '',
+    this.redirectUri,
   });
 
   /// 已通过注册表 + 安装校验的 Client。
@@ -300,6 +359,14 @@ class AuthRequest {
   /// 签名 SHA-256 前 8 位（确认页展示给用户辨认，T10）。
   final String signaturePrefix;
 
+  /// Web 客户端本次请求的回调地址；Android 客户端为 null。
+  ///
+  /// 已在服务层校验过「必须逐字命中登记值」，UI 只负责展示，不得再放行判断。
+  final String? redirectUri;
+
+  /// 是否为网页应用（确认页据此切换「包名/签名」为「回调域名」）。
+  bool get isWeb => client.isWeb;
+
   /// 调用方包名。
   String get packageName => client.packageName;
 
@@ -322,6 +389,7 @@ class AuthRequest {
         'already_granted': ThirdPartyScope.codesOf(alreadyGranted),
         'app_label': appLabel,
         'signature_prefix': signaturePrefix,
+        'redirect_uri': redirectUri,
       };
 
   factory AuthRequest.fromJson(Map<String, dynamic> json) {
@@ -350,6 +418,9 @@ class AuthRequest {
           rawGranted is Iterable ? ThirdPartyScope.fromCodes(rawGranted) : <ThirdPartyScope>{},
       appLabel: (json['app_label'] ?? '').toString(),
       signaturePrefix: (json['signature_prefix'] ?? '').toString(),
+      redirectUri: (json['redirect_uri'] ?? '').toString().isEmpty
+          ? null
+          : (json['redirect_uri'] ?? '').toString(),
     );
   }
 }
@@ -416,6 +487,15 @@ abstract final class AuthErrors {
 
   /// 目标包没有可接收回调的 Activity。
   static const String noCallbackActivity = 'no_callback_activity';
+
+  /// Web 客户端的 redirect_uri 缺失或未登记。
+  static const String invalidRedirectUri = 'invalid_redirect_uri';
+
+  /// Web 客户端缺少 PKCE 参数。
+  static const String pkceRequired = 'pkce_required';
+
+  /// 无法唤起浏览器（没有可用浏览器 / 系统拒绝）。
+  static const String browserUnavailable = 'browser_unavailable';
 
   /// 超过每 client 每分钟 10 次签发。
   static const String rateLimited = 'rate_limited';

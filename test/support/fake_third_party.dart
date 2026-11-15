@@ -73,6 +73,12 @@ class FakeBridge implements ThirdPartyBridge {
   int infoCalls = 0;
   final List<Map<String, Object?>> callbacks = <Map<String, Object?>>[];
 
+  /// `openUrl` 被调用的地址（Web 客户端授权回跳）。
+  final List<String> openedUrls = <String>[];
+
+  /// 模拟「没有可用浏览器」：置 false 后 openUrl 返回 false。
+  bool browserAvailable = true;
+
   /// 收到的静默访问通知（按调用顺序）。
   final List<FakeAccessNotice> notices = <FakeAccessNotice>[];
   final StreamController<String> _links = StreamController<String>.broadcast();
@@ -100,6 +106,12 @@ class FakeBridge implements ThirdPartyBridge {
     callbacks.add(<String, Object?>{'package': packageName, ...extras});
     if (!callbackSent) return ClientCallbackResult.noCallbackActivity;
     return const ClientCallbackResult(sent: true);
+  }
+
+  @override
+  Future<bool> openUrl(String url) async {
+    openedUrls.add(url);
+    return browserAvailable;
   }
 
   @override
@@ -134,6 +146,10 @@ class FakeLoopback implements LoopbackPort {
   int stopCalls = 0;
   final List<String> startedClients = <String>[];
 
+  /// 最近一次 start 收到的 PKCE challenge / CORS 白名单（Web 客户端断言用）。
+  String? lastCodeChallenge;
+  Set<String> lastAllowedOrigins = const <String>{};
+
   @override
   Future<int> start({
     required String clientId,
@@ -142,9 +158,13 @@ class FakeLoopback implements LoopbackPort {
     required ThirdPartyDataProvider provider,
     bool foregroundConfirmed = false,
     String packageName = '',
+    String? codeChallenge,
+    Set<String> allowedOrigins = const <String>{},
   }) async {
     startCalls++;
     startedClients.add(clientId);
+    lastCodeChallenge = codeChallenge;
+    lastAllowedOrigins = allowedOrigins;
     if (failStart) throw StateError('bind failed');
     return port;
   }

@@ -108,39 +108,94 @@ class ThirdPartyAuthService {
     final params = uri.queryParameters;
     final clientId = (params['client_id'] ?? '').trim();
     final packageName = (params['package'] ?? '').trim();
+    final redirectUri = (params['redirect_uri'] ?? '').trim();
+    final codeChallenge = (params['code_challenge'] ?? '').trim();
+    final challengeMethod = (params['code_challenge_method'] ?? '').trim();
     final rawScopes = (params['scopes'] ?? '').trim();
     final state = params['state'] ?? '';
     final silent = params['silent'] == '1';
-    if (clientId.isEmpty || packageName.isEmpty || rawScopes.isEmpty) {
+    if (clientId.isEmpty || rawScopes.isEmpty) {
       return const AuthFailed(
         AuthErrors.invalidRequest,
-        '缺少必填参数（client_id / package / scopes）',
+        '缺少必填参数（client_id / scopes）',
       );
     }
 
-    // ② 注册表：client_id 必须存在，且包名一致
+    // ② 注册表：client_id 必须存在。两种客户端的身份凭证不同：
+    //    Android → 包名一致 + 本机安装包签名一致；
+    //    Web     → redirect_uri 逐字命中登记值 + 强制 PKCE（公开客户端没有密钥可藏）。
     final client = _registry.findById(clientId);
-    if (client == null || client.packageName != packageName) {
+    if (client == null) {
       // 冒名者拿不到 code，因此这里不写任何记录（T1）
       return const AuthFailed(
         AuthErrors.clientMismatch,
-        '调用方身份校验失败：未登记或包名不匹配',
+        '调用方身份校验失败：未登记',
       );
     }
 
-    // ③ 本机安装状态 + 签名指纹（T1）
-    final info = await _bridge.getInstalledAppInfo(packageName);
-    if (!info.installed) {
-      return const AuthFailed(
-        AuthErrors.clientMismatch,
-        '调用方应用未安装，无法投递授权结果',
-      );
-    }
-    if (!_signatureMatches(client, info)) {
-      return const AuthFailed(
-        AuthErrors.clientMismatch,
-        '调用方签名与应用登记信息不一致',
-      );
+    var info = InstalledAppInfo.notInstalled;
+    if (client.isWeb) {
+      if (redirectUri.isEmpty) {
+        return const AuthFailed(AuthErrors.invalidRedirectUri, '缺少 redirect_uri');
+      }
+      if (!client.allowsRedirect(redirectUri)) {
+        return const AuthFailed(
+          AuthErrors.invalidRedirectUri,
+          '回调地址与应用登记信息不一致',
+        );
+      }
+      if (codeChallenge.isEmpty) {
+        return const AuthFailed(
+          AuthErrors.pkceRequired,
+          '网页应用必须使用 PKCE（code_challenge）',
+        );
+      }
+      if (challengeMethod != 'S256') {
+        return const AuthFailed(
+          AuthErrors.pkceRequired,
+          'code_challenge_method 必须为 S256',
+        );
+      }
+      if (packageName.isNotEmpty) {
+        return const AuthFailed(
+          AuthErrors.invalidRequest,
+          '网页应用不应携带 package 参数',
+        );
+      }
+    } else {
+      if (packageName.isEmpty) {
+        return const AuthFailed(
+          AuthErrors.invalidRequest,
+          '缺少必填参数（package）',
+        );
+      }
+      if (client.packageName != packageName) {
+        return const AuthFailed(
+          AuthErrors.clientMismatch,
+          '调用方身份校验失败：包名不匹配',
+        );
+      }
+      if (redirectUri.isNotEmpty || codeChallenge.isNotEmpty) {
+        return const AuthFailed(
+          AuthErrors.invalidRequest,
+          'Android 应用不支持 redirect_uri / PKCE',
+        );
+      }
+
+      // ③ 本机安装状态 + 签名指纹（T1）
+      info = await _bridge.getInstalledAppInfo(packageName);
+      if (!info.installed) {
+        return const AuthFailed(
+          AuthErrors.clientMismatch,
+          '调用方应用未安装，无法投递授权结果',
+        );
+      }
+      if (!_signatureMatches(client, info)) {
+        return const AuthFailed(
+          AuthErrors.clientMismatch,
+          '调用方签名与应用登记信息不一致',
+        );
+      }
     }
 
     // ④ scopes：必须全部合法且非空（自动去重）
@@ -190,9 +245,13 @@ class ThirdPartyAuthService {
       signaturePrefix: info.signatureSha256.length >= 8
           ? info.signatureSha256.substring(0, 8)
           : info.signatureSha256,
+      redirectUri: client.isWeb ? redirectUri : null,
     );
 
-    final canSilent = silent &&
+    // 网页应用一律走前台确认：没有安装包与签名做长期身份绑定，
+    // 「已授权就静默」会把一次网页授权放大成永久读权限（ADR-003 的收紧版）。
+    final canSilent = !client.isWeb &&
+        silent &&
         grant != null &&
         grant.covers(scopes) &&
         !scopes.contains(ThirdPartyScope.accountToken) &&
@@ -224,6 +283,8 @@ class ThirdPartyAuthService {
       state: state,
       previousGrant: grant,
       silent: canSilent,
+      redirectUri: client.isWeb ? redirectUri : null,
+      codeChallenge: client.isWeb ? codeChallenge : null,
     );
   }
 
@@ -235,6 +296,8 @@ class ThirdPartyAuthService {
     required String state,
     required ThirdPartyGrant? previousGrant,
     required bool silent,
+    String? redirectUri,
+    String? codeChallenge,
   }) async {
     final sortedScopes = scopes.toList()..sort((a, b) => a.index.compareTo(b.index));
 
@@ -253,6 +316,7 @@ class ThirdPartyAuthService {
         // 端口此刻尚未绑定，start() 之后回填
         port: 0,
         foregroundConfirmed: foregroundConfirmed,
+        codeChallenge: codeChallenge,
       );
 
       final port = await _server.start(
@@ -262,31 +326,29 @@ class ThirdPartyAuthService {
         provider: _dataProvider,
         foregroundConfirmed: foregroundConfirmed,
         packageName: client.packageName,
+        codeChallenge: codeChallenge,
+        allowedOrigins: client.isWeb ? client.redirectOrigins : const <String>{},
       );
       _codes.attachPort(code, port);
 
-      final result = await _bridge.sendClientCallback(
-        client.packageName,
-        <String, Object?>{
-          'code': code,
-          'port': port,
-          'state': state,
-          'client_id': client.clientId,
-          'scopes': ThirdPartyScope.codesOf(sortedScopes),
-        },
+      final delivered = await _deliver(
+        client: client,
+        code: code,
+        port: port,
+        state: state,
+        scopes: sortedScopes,
+        redirectUri: redirectUri,
       );
 
-      // ⑪ 目标包没有回调页：回滚授权记录，避免「用户同意了却无处接收」
-      if (!result.sent) {
+      // ⑪ 投递失败：回滚授权记录，避免「用户同意了却无处接收」
+      if (!delivered) {
         await _rollback(client.clientId, previousGrant, code);
-        await _appendLog(
-          client.clientId,
-          sortedScopes,
-          'error:${AuthErrors.noCallbackActivity}',
-        );
-        return const AuthFailed(
-          AuthErrors.noCallbackActivity,
-          '该应用没有可接收授权结果的页面，请升级后再试',
+        final error =
+            client.isWeb ? AuthErrors.browserUnavailable : AuthErrors.noCallbackActivity;
+        await _appendLog(client.clientId, sortedScopes, 'error:$error');
+        return AuthFailed(
+          error,
+          client.isWeb ? '无法打开浏览器，请检查系统默认浏览器设置' : '该应用没有可接收授权结果的页面，请升级后再试',
         );
       }
     } catch (e) {
@@ -305,6 +367,70 @@ class ThirdPartyAuthService {
     if (silent) _lastSilentAt[client.clientId] = _now();
     await _appendLog(client.clientId, sortedScopes, 'granted');
     return AuthCompleted(client.clientId, silent: silent);
+  }
+
+  /// 把 code / port 交给调用方：Android 走 explicit intent，Web 走浏览器回跳。
+  ///
+  /// 返回 false 表示「没送出去」，调用方必须回滚授权记录。
+  Future<bool> _deliver({
+    required ThirdPartyClient client,
+    required String code,
+    required int port,
+    required String state,
+    required List<ThirdPartyScope> scopes,
+    String? redirectUri,
+  }) async {
+    if (client.isWeb) {
+      final target = (redirectUri ?? '').trim();
+      if (target.isEmpty) return false;
+      return _bridge.openUrl(
+        buildWebRedirect(
+          redirectUri: target,
+          code: code,
+          port: port,
+          state: state,
+          scopes: scopes,
+          clientId: client.clientId,
+        ),
+      );
+    }
+    final result = await _bridge.sendClientCallback(
+      client.packageName,
+      <String, Object?>{
+        'code': code,
+        'port': port,
+        'state': state,
+        'client_id': client.clientId,
+        'scopes': ThirdPartyScope.codesOf(scopes),
+      },
+    );
+    return result.sent;
+  }
+
+  /// 组装 Web 回跳地址：所有参数放 **fragment**。
+  ///
+  /// 放 fragment 而不是 query 的原因：fragment 不会进 Referer，也不会被任何
+  /// 中间层与服务器访问日志记录；demo 页面读到后可以立刻 replaceState 抹掉。
+  @visibleForTesting
+  static String buildWebRedirect({
+    required String redirectUri,
+    required String code,
+    required int port,
+    required String state,
+    required List<ThirdPartyScope> scopes,
+    required String clientId,
+  }) {
+    final base = Uri.parse(redirectUri);
+    final fragment = Uri(
+      queryParameters: <String, String>{
+        'code': code,
+        'port': '$port',
+        'state': state,
+        'client_id': clientId,
+        'scopes': ThirdPartyScope.codesOf(scopes).join(','),
+      },
+    ).query;
+    return base.replace(fragment: fragment).toString();
   }
 
   /// 回滚：恢复原 grant（无原授权则删除）+ 作废 code + 关服。

@@ -80,6 +80,12 @@ abstract class ThirdPartyBridge {
     Map<String, Object?> extras,
   );
 
+  /// 用系统浏览器打开一个 https 地址（Web 客户端授权回跳）。
+  ///
+  /// 返回 false 表示没有可用浏览器 / 系统拒绝，调用方据此回滚授权。
+  /// 只接受 https：回跳地址来自登记过的 redirect_uri，不做任意 scheme 跳转。
+  Future<bool> openUrl(String url);
+
   /// 冷启动时的初始深链（无则返回 null）。
   Future<String?> getLaunchUri();
 
@@ -156,6 +162,21 @@ class MethodChannelThirdPartyBridge implements ThirdPartyBridge {
         sent: false,
         reason: 'channel_unavailable',
       );
+    }
+  }
+
+  @override
+  Future<bool> openUrl(String url) async {
+    try {
+      final result = await _method.invokeMethod<Object?>(
+        'openUrl',
+        <String, Object?>{'url': url},
+      );
+      return result == true;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
     }
   }
 

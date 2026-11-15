@@ -112,6 +112,12 @@
         </intent>
         <!-- 联系我们：唤起QQ群名片需要可见手Q -->
         <package android:name="com.tencent.mobileqq"/>
+        <!--
+            歌曲分享到 Wrensong：Android 11+ 包可见性下，未在此声明的包对
+            `getPackageInfo` / `resolveActivity` 一律不可见 —— 会导致「已安装
+            Wrensong 却被判成未安装」而不唤起分享面板。改包名时这里必须同步改。
+        -->
+        <package android:name="top.lztech.wrensong"/>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="mqqapi"/>

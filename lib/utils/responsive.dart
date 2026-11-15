@@ -43,17 +43,32 @@ class Responsive {
   /// 以最短边判定平板形态（而非设备型号）
   static bool isTablet(Size size) => size.shortestSide >= 600;
 
+  /// 断点判定：**最短边定设备形态，横竖定布局方向**。
+  ///
+  /// 旧实现只看宽度（宽 <600 → 手机竖屏、<900 → 平板竖屏），完全忽略方向，
+  /// 于是「568×320 窄横屏」被判成 b1 竖屏、「800×600 平板横屏」被判成 b3
+  /// 平板竖屏 —— 两者都走了单列竖屏布局，在只有 300 多 dp 的高度里必然
+  /// 溢出（实测 568×320 溢出 563px，800×600 溢出 35px），底部的动作行被
+  /// 挤出屏外，用户看到的就是「横屏没有竖屏那些功能」。
+  ///
+  /// 现在的规则：
+  /// - 最短边 <600（手机，不论方向）：横屏 b2 / 竖屏 b1；
+  /// - 最短边 ≥600（平板）：横屏时 宽 <1200 → b4、≥1200 → b5；竖屏 → b3。
   static AppBreakpoint of(Size size) {
     final shortestSide = size.shortestSide;
+    // 正方形视作竖屏（宽 == 高时宽高互换无意义，沿用竖屏布局更稳）
+    final landscape = size.width > size.height;
     if (shortestSide < 600) {
-      // 手机：宽 < 600 为竖屏，否则横屏
-      return size.width < 600
-          ? AppBreakpoint.b1PhonePortrait
-          : AppBreakpoint.b2PhoneLandscape;
+      return landscape
+          ? AppBreakpoint.b2PhoneLandscape
+          : AppBreakpoint.b1PhonePortrait;
     }
-    if (size.width < 900) return AppBreakpoint.b3TabletPortrait;
-    if (size.width < 1200) return AppBreakpoint.b4TabletLandscape;
-    return AppBreakpoint.b5UltraWide;
+    if (landscape) {
+      return size.width < 1200
+          ? AppBreakpoint.b4TabletLandscape
+          : AppBreakpoint.b5UltraWide;
+    }
+    return AppBreakpoint.b3TabletPortrait;
   }
 
   static AppBreakpoint ofContext(BuildContext context) =>

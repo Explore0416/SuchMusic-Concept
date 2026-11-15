@@ -7,6 +7,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../models/song_model.dart';
 import '../services/audio_player_service.dart';
 import '../services/song_download_service.dart';
+import '../services/share/wrensong_share_service.dart';
 import '../services/user_library_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
@@ -43,6 +44,9 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 下载中：按钮显示进度并禁用重复点击
   bool _downloading = false;
   double _downloadProgress = 0;
+
+  /// 分享中：唤起 Wrensong 期间禁用分享按钮，避免连点拉起两个分享面板
+  bool _sharing = false;
 
   /// 定时关闭的秒级刷新（只在开启定时时才 setState）
   Timer? _sleepTick;
@@ -160,10 +164,9 @@ class _PlayerPageState extends State<PlayerPage> {
     final size = MediaQuery.sizeOf(context);
     final bp = Responsive.of(size);
     final split = Responsive.isPlayerSplit(bp);
-    // 分栏形态（Q6=B）：封面固定显示，禁用「点击封面收起为大歌词」
-    if (split && _coverCollapsed) {
-      _coverCollapsed = false;
-    }
+    // 分栏形态不再强制复位 `_coverCollapsed`：横屏左栏也允许点封面把封面
+    // 收缩成 70px 小图（复用竖屏语义），把空间让给歌名 / 歌词 / 控制。
+    // 旧实现每帧把状态强改回 false，导致横屏点封面毫无反应。
     // 深色页面：系统栏用浅色图标，避免 ColorOS 手势条自动垫浅色背景
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
@@ -294,11 +297,15 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 一行。为了保证「宁可没有封面，也不能没有功能」，这里按可用高度三级降级：
   ///
   /// - `>= 420`：常规结构，封面用 [Expanded] 自适应剩余空间；
-  /// - `280 ~ 420`：封面改为「高度上限 34%」的正方形（空间不够时继续等比收缩），
-  ///   歌名缩小、进度与控制的间距各收 2；
+  /// - `280 ~ 420`：封面吃满剩余空间（[Flexible] 兜住空间不足），歌名缩小、
+  ///   进度与控制的间距各收 2 —— **这是绝大多数手机横屏实际落到的档位**；
   /// - `< 280`：**隐藏封面**，只留歌名/艺人（各一行）+ 进度 + 控制 + 动作行。
   ///
   /// 三种分支都不使用滚动容器——播放页必须一屏可见。
+  ///
+  /// 三个档位里「封面可点收起」「歌词行」必须**一样有**：720×480（可用高 416）
+  /// 与 1080p 手机横屏（逻辑高 360~400）都落在 compact 档，只给 full 档做这两件
+  /// 事，用户看到的就还是「横屏和竖屏不一样」。
   Widget _buildSplitLeft() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 12, 0),
@@ -309,13 +316,20 @@ class _PlayerPageState extends State<PlayerPage> {
             return _buildSplitLeftFull();
           }
           if (availableHeight >= 280) {
-            return _buildSplitLeftCompact(availableHeight);
+            return _buildSplitLeftCompact(
+              availableHeight,
+              constraints.maxWidth,
+            );
           }
           return _buildSplitLeftTiny(constraints);
         },
       ),
     );
   }
+
+  /// 分栏档下「点封面收起」后的小封面边长（与竖屏 `_buildCoverAndSongInfo`
+  /// 的 collapsedSize 保持一致，避免横竖屏两处魔法数字各自漂移）。
+  static const double _splitCollapsedCoverSide = 70;
 
   /// 封面：正方形、居中，受 [maxHeight] 与 [Responsive.coverMaxSide] 双重约束。
   Widget _buildSplitCover({required double maxHeight}) {
@@ -338,19 +352,48 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
+  /// 封面热区：整块区域（含封面四周留白）都可点，点一下按竖屏同一套
+  /// `_coverCollapsed` 语义收起 / 恢复。
+  ///
+  /// [HitTestBehavior.opaque] 是必须的：封面用了 [Center] + [AspectRatio]，热区
+  /// 之外的留白默认不参与命中测试，不加 opaque 时用户点在封面边上会「点不动」。
+  Widget _buildCoverTapTarget(double maxHeight) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _coverCollapsed = !_coverCollapsed),
+      child: _buildSplitCover(maxHeight: maxHeight),
+    );
+  }
+
   /// 三档中最大的一档：可用高度充足，封面吃满剩余空间。
+  ///
+  /// 封面可点：点一下按与竖屏一致的 `_coverCollapsed` 语义收起为 70px 小封面
+  /// （把高度让给歌名 / 当前歌词），再点一下恢复 —— 横屏与竖屏操作一致。
   Widget _buildSplitLeftFull() {
     return Column(
       children: [
         const SizedBox(height: 8),
-        Expanded(child: _buildSplitCover(maxHeight: Responsive.coverMaxSide)),
+        // 收起后**不能**再用 Expanded：Expanded 的槽位始终占满剩余高度，封面
+        // 自己缩到 70 之后周边只剩空白，歌名 / 歌词 / 进度 / 控制的位置一动不动
+        // —— 用户点了封面却「什么都没发生」，与竖屏「收起让位」的语义不符。
+        if (_coverCollapsed)
+          SizedBox(
+            height: _splitCollapsedCoverSide,
+            child: _buildCoverTapTarget(_splitCollapsedCoverSide),
+          )
+        else
+          Expanded(child: _buildCoverTapTarget(Responsive.coverMaxSide)),
         const SizedBox(height: 12),
         // 与上方封面（Center 居中）对齐：歌名/歌手同样居中
         SizedBox(
           width: double.infinity,
           child: _buildSongInfo(collapsed: true, center: true),
         ),
-        const SizedBox(height: 12),
+        // 横屏补齐「当前歌词」一行（竖屏 `_buildColumnBody` 的 collapsed=false
+        // 分支已有）。
+        const SizedBox(height: 8),
+        const LyricDisplay(),
+        const SizedBox(height: 4),
         const ProgressBar(),
         const SizedBox(height: 8),
         _buildControls(),
@@ -361,32 +404,63 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 中档：小高度横屏（如 640×360）。封面高度上限 34% 可用高度，
-  /// 并用 [Flexible] 兜住「固定内容已占满、封面必须让位」的极端情况。
-  Widget _buildSplitLeftCompact(double availableHeight) {
-    return Column(
-      children: [
-        const SizedBox(height: 6),
-        Flexible(
-          child: _buildSplitCover(maxHeight: availableHeight * 0.34),
-        ),
-        const SizedBox(height: 8),
+  /// 中档：小高度横屏（**手机横屏的主场景**，如 720×480 / 1080p 逻辑高 360）。
+  ///
+  /// [availableHeight] 是左栏可用高度（已扣掉 TopBar 与底部 12）。
+  /// [maxWidth] 只用于收起态兜底容器的定宽，避免 [FittedBox] 在无界宽度里布局。
+  ///
+  /// 与本轮修复直接相关的三点：
+  /// 1. 封面可点（`_buildCoverTapTarget`），720×480 点封面必须有反应；
+  /// 2. 收起后封面用**固定 70 高**，不再套 [Flexible]：Flexible 的槽位仍然
+  ///    占满剩余可用高度，封面只是自己变小，下面控件一动不动，等于没收起；
+  /// 3. 歌词行：收起后或可用高度够（≥380）时显示。720×480（可用 416）看得见，
+  ///    640×360（可用 296）不显示，避免把四个动作入口挤出屏幕。
+  Widget _buildSplitLeftCompact(double availableHeight, double maxWidth) {
+    final showLyricLine = _coverCollapsed || availableHeight >= 380;
+    final children = <Widget>[
+      const SizedBox(height: 6),
+      if (_coverCollapsed)
         SizedBox(
-          width: double.infinity,
-          child: _buildSongInfo(
-            collapsed: true,
-            center: true,
-            titleSize: 17,
-          ),
-        ),
-        const SizedBox(height: 10),
-        const ProgressBar(),
-        const SizedBox(height: 6),
-        _buildControls(),
-        const SizedBox(height: 2),
-        _buildActionRow(compact: true),
-        const SizedBox(height: 8),
-      ],
+          height: _splitCollapsedCoverSide,
+          child: _buildCoverTapTarget(_splitCollapsedCoverSide),
+        )
+      else
+        // 不再叠加「34%」上限：Flexible 本身已把封面夹在剩余空间里，再叠一层
+        // 百分比只会在 720×480 这类尺寸下造出「槽 174 / 封面 141」的空隙，
+        // 既浪费 30+ px，也让收起前后的位移小到看不出来。
+        Flexible(child: _buildCoverTapTarget(Responsive.coverMaxSide)),
+      const SizedBox(height: 8),
+      SizedBox(
+        width: double.infinity,
+        child: _buildSongInfo(collapsed: true, center: true, titleSize: 17),
+      ),
+      if (showLyricLine) ...[const SizedBox(height: 4), const LyricDisplay()],
+      const SizedBox(height: 10),
+      const ProgressBar(),
+      const SizedBox(height: 6),
+      _buildControls(),
+      const SizedBox(height: 2),
+      _buildActionRow(compact: true),
+      const SizedBox(height: 8),
+    ];
+
+    if (!_coverCollapsed) {
+      return Column(children: children);
+    }
+    // 收起态：整列按内容高度排（不再有 Flexible 占位），歌名 / 歌词 / 进度 /
+    // 控制整体上移，底部留白随可用高度自然出现（**不加 Spacer**，否则控件会被
+    // 顶回底部，收起又白做了）。
+    //
+    // 极窄高度（可用 280~320，如 640×360）时「固定 70 的封面 + 歌词行」可能仍
+    // 略高于可用空间：用 [FittedBox] 等比兜底，宁可整体缩一度，也绝不允许
+    // overflow、更不允许把四个动作入口挤出屏幕。
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.topCenter,
+      child: SizedBox(
+        width: maxWidth,
+        child: Column(mainAxisSize: MainAxisSize.min, children: children),
+      ),
     );
   }
 
@@ -828,14 +902,6 @@ class _PlayerPageState extends State<PlayerPage> {
     return '剩 $m 分';
   }
 
-  String _shareLinkOf(SongModel song) {
-    if (song.source.isLocal) return '本地文件';
-    if (song.source.isKugou) {
-      return 'https://www.kugou.com/song/#hash=${song.id}';
-    }
-    return 'https://music.163.com/song?id=${song.id}';
-  }
-
   /// 动作行：下载 / 分享 / 定时 / 更多。
   ///
   /// [compact] 仅用于横屏分栏（空间紧张）：按钮视觉尺寸缩小，但点击热区
@@ -857,8 +923,9 @@ class _PlayerPageState extends State<PlayerPage> {
         ),
         _ActionButton(
           icon: Icons.ios_share_rounded,
-          label: '分享',
-          onTap: hasSong ? _shareCurrent : null,
+          // 分享中改文案：用户能看到「点了、在等」，也不会以为没反应而连点
+          label: _sharing ? '分享中' : '分享',
+          onTap: hasSong && !_sharing ? _shareCurrent : null,
           compact: compact,
         ),
         _ActionButton(
@@ -896,13 +963,40 @@ class _PlayerPageState extends State<PlayerPage> {
     DesignToast.show(context, result.message);
   }
 
+  /// 分享当前歌曲：优先唤起 Wrensong，任何失败都降级为「复制歌曲信息」。
+  ///
+  /// 为什么表单和降级都在这里做：分享是「一次点击要么拉起对方面板、要么
+  /// 给用户一份可粘贴的文本」，中间不允许出现「点了没反应」的空档。
   Future<void> _shareCurrent() async {
     final song = _audioPlayer.currentSong;
-    if (song == null) return;
-    final text = '${song.name} - ${song.artist}\n${_shareLinkOf(song)}';
-    await Clipboard.setData(ClipboardData(text: text));
+    if (song == null || _sharing) return;
+    setState(() => _sharing = true);
+    try {
+      final result = await WrensongShareService.instance.shareSong(song);
+      if (!mounted) return;
+      switch (result) {
+        case WrensongShareOk():
+          // Wrensong 面板已经拉起，本 App 不再叠一层 toast
+          break;
+        case WrensongShareNotInstalled():
+          await _copyShareText(song, '未安装 Wrensong，已复制歌曲信息');
+        case WrensongShareNotSupportedLocal():
+          await _copyShareText(song, '本地歌曲已复制信息');
+        case WrensongShareFailed():
+          await _copyShareText(song, '分享未完成，已复制歌曲信息');
+      }
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
+
+  /// 降级：把 `歌名 - 歌手 + 链接` 放进剪贴板并提示。
+  Future<void> _copyShareText(SongModel song, String toast) async {
+    await Clipboard.setData(
+      ClipboardData(text: WrensongShareService.shareTextOf(song)),
+    );
     if (!mounted) return;
-    DesignToast.show(context, '歌曲信息已复制，发给朋友即可');
+    DesignToast.show(context, toast);
   }
 
   Future<void> _showSleepSheet() async {

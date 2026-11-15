@@ -53,6 +53,15 @@ class MainActivity : AudioServiceActivity() {
      */
     private val thirdParty: ThirdPartyBridge by lazy { ThirdPartyBridge(applicationContext) }
 
+    /**
+     * Wrensong 分享桥：explicit intent 唤起对方面板 + 封面压缩落盘。
+     * 无跨调用状态，但同样提升为实例字段，避免每次 configureFlutterEngine
+     * 重新建通道（引擎重建时只重设 handler，见 [WrensongShareBridge.register]）。
+     */
+    private val wrensongShare: WrensongShareBridge by lazy {
+        WrensongShareBridge(applicationContext)
+    }
+
     /** 等待音频权限结果后再完成的扫描请求。 */
     private var pendingScanResult: MethodChannel.Result? = null
 
@@ -218,6 +227,8 @@ class MainActivity : AudioServiceActivity() {
         // 第三方授权：MethodChannel（签名查询 / code 投递 / 冷启动深链）
         // + EventChannel（onNewIntent 收到的 suchmusic:// ）
         thirdParty.register(flutterEngine)
+        // Wrensong 分享：MethodChannel（isInstalled / share）
+        wrensongShare.register(flutterEngine)
         val bridge = IslandBridge(applicationContext)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IslandBridge.CHANNEL)
             .setMethodCallHandler { call, result ->
