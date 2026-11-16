@@ -128,9 +128,16 @@ challenge  = E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM   (method = S256)
 
 ### 3.3 state 与 verifier 的存放
 
-- `state` 与 `code_verifier` 放 `sessionStorage`（跟随标签页生命周期，比 `localStorage` 更收敛）；
-- 回跳后**先校验 `state` 再用 `verifier`**，用完立即删除；
+- **不要只放 `sessionStorage`**：App 回跳经常在**新标签页**里打开，而 `sessionStorage`
+  按标签页隔离，回调页会读不到 → 线上表现就是 `state` 校验失败（我们用演示站复现过）。
+- 推荐「按 `state` 建事务、放 `localStorage`」：键为 `前缀 + state`，值为
+  `{verifier, 时间戳}`。同一浏览器同一源的所有标签页都能读到；
+- 回跳后**按回传的 `state` 精确取事务**（state 就是键，取不到即为伪造/过期），
+  取出后**立即删除**；发起页启动时顺手清理超过 10 分钟的记录；
 - 绝不放进 URL 查询串（会进服务器日志）。
+
+> 这里存的只是**一次性的 PKCE 校验码**，不是用户数据；10 分钟过期 + 用后即删，
+> 比长期保存任何令牌都收敛。
 
 ---
 
@@ -157,9 +164,11 @@ https://你的域名/callback#code={一次性授权码}&port={本机端口}&stat
 const raw = location.hash.slice(1);          // 注意是 hash（#），不是 search（?）
 const params = new URLSearchParams(raw);
 history.replaceState(null, '', location.pathname);   // ① 清掉 URL 里的 code
-const state = sessionStorage.getItem('smo.state');   // ② 校验 state
-if (params.get('state') !== state) { /* 中止 */ }
-const verifier = sessionStorage.getItem('smo.verifier'); // ③ 取出 verifier
+const key = 'smo.tx.' + (params.get('state') || ''); // ② 按 state 取事务
+const tx = JSON.parse(localStorage.getItem(key) || 'null');
+localStorage.removeItem(key);                        //    取出即删
+if (!tx) { /* 未找到事务：中止 */ }
+const verifier = tx.verifier;                        // ③ 取出 verifier
 ```
 
 > **为什么用 `#` 片段而不是 `?` 查询**：片段不会被发送到任何 HTTP 服务器，
@@ -289,8 +298,9 @@ async function startAuth() {
   const challenge = base64url(new Uint8Array(
     await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
   const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
-  sessionStorage.setItem('smo.verifier', verifier);
-  sessionStorage.setItem('smo.state', state);
+  // 事务按 state 存 localStorage：App 回跳可能在新标签页打开
+  localStorage.setItem('smo.tx.' + state,
+    JSON.stringify({ verifier, t: Date.now() }));
   location.href = 'suchmusic://oauth/authorize?' + new URLSearchParams({
     client_id: 'sm_xxxxxxxxxxxxxxxx',
     scopes: 'genre.read,url.resolve',
@@ -307,14 +317,17 @@ async function startAuth() {
 ```js
 const p = new URLSearchParams(location.hash.slice(1));
 history.replaceState(null, '', location.pathname);
-if (p.get('state') !== sessionStorage.getItem('smo.state')) throw new Error('state 不匹配');
+const key = 'smo.tx.' + (p.get('state') || '');
+const raw = localStorage.getItem(key);
+localStorage.removeItem(key);            // 先用后删，凭据只允许用一次
+if (!raw) throw new Error('没有本次授权事务');
+const { verifier, t } = JSON.parse(raw);
+if (Date.now() - t > 10 * 60 * 1000) throw new Error('授权事务已过期');
 const res = await fetch(`http://127.0.0.1:${p.get('port')}/v1/exchange`, {
   method: 'POST',
   headers: { 'Authorization': `Bearer ${p.get('code')}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ code_verifier: sessionStorage.getItem('smo.verifier') }),
+  body: JSON.stringify({ code_verifier: verifier }),
 });
-sessionStorage.removeItem('smo.verifier');
-sessionStorage.removeItem('smo.state');
 const payload = await res.json();
 // 渲染 payload.data …
 ```

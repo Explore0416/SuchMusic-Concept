@@ -257,8 +257,12 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 左右分栏形态（手机横屏 B2 / 平板横屏 B4 / 超宽屏 B5）：
-  /// 左=封面+信息+进度+控制，右=歌词滚动区
+  /// 左右分栏形态（手机横屏 B2 / 平板横屏 B4 / 超宽屏 B5）。
+  ///
+  /// **与竖屏同一套语义：默认只显示播放器，点封面（卡片）才进入歌词形态。**
+  /// 旧实现把右半屏常驻 [FullLyricDisplay]，横屏一进来歌词就占掉一半屏幕，
+  /// 与竖屏「点卡片才显示歌词」不一致（用户反馈「横屏要干什么」）。
+  /// 现在收起封面（`_coverCollapsed`）才切到「左小封面 + 右大歌词」。
   Widget _buildSplitBody() {
     return Column(
       children: [
@@ -267,22 +271,34 @@ class _PlayerPageState extends State<PlayerPage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(child: _buildSplitLeft()),
-              const SizedBox(width: 24),
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final vh = constraints.maxHeight;
-                      return FullLyricDisplay(
-                        topPadding: (vh * 0.35).clamp(40.0, 200.0),
-                        bottomPadding: (vh * 0.65).clamp(120.0, 500.0),
-                      );
-                    },
+                child: _coverCollapsed
+                    ? _buildSplitLeft()
+                    : Center(
+                        child: ConstrainedBox(
+                          // 居中收窄：超宽屏（B5）上不让封面/控件被拉得满屏跑
+                          constraints: const BoxConstraints(maxWidth: 560),
+                          child: _buildSplitLeft(centered: true),
+                        ),
+                      ),
+              ),
+              if (_coverCollapsed) ...[
+                const SizedBox(width: 24),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final vh = constraints.maxHeight;
+                        return FullLyricDisplay(
+                          topPadding: (vh * 0.35).clamp(40.0, 200.0),
+                          bottomPadding: (vh * 0.65).clamp(120.0, 500.0),
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -306,9 +322,14 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 三个档位里「封面可点收起」「歌词行」必须**一样有**：720×480（可用高 416）
   /// 与 1080p 手机横屏（逻辑高 360~400）都落在 compact 档，只给 full 档做这两件
   /// 事，用户看到的就还是「横屏和竖屏不一样」。
-  Widget _buildSplitLeft() {
+  ///
+  /// [centered]：单栏居中形态（默认态）下左右留白对称；分栏（歌词态）仍保留
+  /// 左侧 24 / 右侧 12 的原始配比，避免歌词面板贴得太近。
+  Widget _buildSplitLeft({bool centered = false}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 0, 12, 0),
+      padding: centered
+          ? const EdgeInsets.symmetric(horizontal: 24)
+          : const EdgeInsets.fromLTRB(24, 0, 12, 0),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final availableHeight = constraints.maxHeight;

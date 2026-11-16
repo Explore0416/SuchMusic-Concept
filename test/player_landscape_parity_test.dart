@@ -421,6 +421,62 @@ void main() {
     });
   });
 
+  // ── 1.5.5：横屏歌词默认不出现，点封面（卡片）才展开 ────────────────
+  //
+  // 用户反馈：竖屏是「点卡片显示歌词」，横屏却一进来就右半屏铺歌词。
+  // 本组锁定新语义：默认只有播放器；点封面 → 小封面 + 右侧大歌词；再点恢复。
+  group('横屏：歌词默认不出现，点卡片才展开（与竖屏一致）', () {
+    testWidgets('800×600 默认无 FullLyricDisplay，点封面后出现、再点消失', (tester) async {
+      await _pumpPlayer(tester, const Size(800, 600));
+
+      expect(
+        find.byType(FullLyricDisplay),
+        findsNothing,
+        reason: '横屏默认应只显示播放器，不得常驻歌词面板',
+      );
+
+      await tester.tap(find.byType(AspectRatio));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(
+        find.byType(FullLyricDisplay),
+        findsOneWidget,
+        reason: '点卡片后应展开右侧歌词',
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byType(AspectRatio));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(FullLyricDisplay), findsNothing);
+
+      await _drain(tester);
+    });
+
+    testWidgets('720×480（compact 档）同样默认无歌词、点封面展开', (tester) async {
+      await _pumpPlayer(tester, const Size(720, 480));
+
+      expect(find.byType(FullLyricDisplay), findsNothing);
+
+      await tester.tap(find.byType(AspectRatio));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byType(FullLyricDisplay), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: '展开歌词后仍不得 overflow');
+
+      // 四个动作入口在歌词形态下也要在屏内
+      for (final label in _actionLabels) {
+        _expectOnScreen(
+          tester,
+          _actionHitArea(label),
+          const Size(720, 480),
+          '720×480 歌词态「$label」入口',
+        );
+      }
+
+      await _drain(tester);
+    });
+  });
+
   group('竖屏回归', () {
     testWidgets('390×844 四入口 / 收藏 / 播放列表仍在屏内', (tester) async {
       await _pumpPlayer(tester, const Size(390, 844));
