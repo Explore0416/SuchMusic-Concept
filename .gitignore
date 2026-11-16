@@ -66,3 +66,6 @@ android/build/
 .env
 .env.*
 !.env.example
+
+# flutter 金图测试失败时产生的临时 diff
+test/failures/
