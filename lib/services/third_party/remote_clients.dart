@@ -172,6 +172,28 @@ class RemoteClients {
     unawaited(refresh());
   }
 
+  /// 授权请求前的就绪保障：缓存恢复 + 至少一次网络刷新，带超时。
+  ///
+  /// 解决冷启动竞态：`suchmusic://` 深链可能先于清单就绪到达，
+  /// 直接查注册表会把「还没加载」误判成「未登记」。
+  /// [force] 为 true 时绕过 6h 节流强制拉取（注册表未命中时用）。
+  /// 超时 / 失败均不抛出，由调用方走后续失败分支。
+  Future<void> ensureReady({
+    bool force = false,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    try {
+      await warmUp().timeout(timeout);
+    } catch (_) {
+      // 超时也继续：缓存可能已恢复成功
+    }
+    try {
+      await refresh(force: force).timeout(timeout);
+    } catch (_) {
+      // 网络超时：保持现有清单，交由上层判定
+    }
+  }
+
   /// 拉取、验签、缓存。
   ///
   /// [force] 为 false 且距上次成功拉取不足 [minRefreshInterval] 时跳过网络。

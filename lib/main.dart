@@ -246,8 +246,41 @@ class _MainShellState extends State<MainShell> {
           );
           return allowed ?? false;
         },
+        onError: (String error, String message) {
+          // 授权失败必须反馈给用户：App 是被深链唤起的，静默吞掉
+          // 等于「点了没反应」。错误码进日志，界面只显示人话。
+          final ctx = appNavigatorKey.currentContext;
+          if (ctx != null) {
+            DesignToast.show(ctx, _friendlyAuthError(error, message));
+          }
+        },
       ),
     );
+  }
+
+  /// 把授权错误码翻译成用户可读的提示。
+  static String _friendlyAuthError(String error, String message) {
+    switch (error) {
+      case AuthErrors.accessDenied:
+        return '已取消授权';
+      case AuthErrors.rateLimited:
+        return '授权请求过于频繁，请稍后再试';
+      case AuthErrors.browserUnavailable:
+        return '无法打开浏览器，请检查默认浏览器设置';
+      case AuthErrors.clientMismatch:
+        return '授权失败：应用身份校验未通过（请确认应用已通过开放平台审核）';
+      case AuthErrors.invalidRedirectUri:
+      case AuthErrors.pkceRequired:
+        return '授权失败：应用接入参数不合规';
+      case AuthErrors.noCallbackActivity:
+        return '授权失败：目标应用没有可接收授权结果的页面';
+      case AuthErrors.invalidRequest:
+      case AuthErrors.invalidScope:
+      case AuthErrors.invalidState:
+        return '授权失败：请求参数不合法';
+      default:
+        return '授权失败：$message';
+    }
   }
 
   @override

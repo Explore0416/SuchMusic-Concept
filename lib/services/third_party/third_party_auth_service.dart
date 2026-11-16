@@ -8,6 +8,7 @@ import '../../models/third_party_auth.dart';
 import 'auth_code_service.dart';
 import 'client_registry.dart';
 import 'loopback_server.dart';
+import 'remote_clients.dart';
 import 'third_party_bridge.dart';
 import 'third_party_data_provider.dart';
 
@@ -30,6 +31,7 @@ class ThirdPartyAuthService {
     int Function()? now,
     this.silentDebounce = const Duration(seconds: 5),
     this.rateLimitPerMinute = 10,
+    this.onUnknownClient,
   })  : _registry = registry ?? ClientRegistry.standard(),
         _bridge = bridge ?? MethodChannelThirdPartyBridge(),
         _codes = codes ?? AuthCodeService.instance,
@@ -39,7 +41,13 @@ class ThirdPartyAuthService {
         _now = now ?? _defaultNow;
 
   /// 全局单例（App 运行期唯一决策点）。
-  static final ThirdPartyAuthService instance = ThirdPartyAuthService();
+  ///
+  /// [onUnknownClient] 只在生产单例接线：注册表未命中时先等远端清单
+  /// 刷新再重查一次，消除「深链先于清单就绪」的冷启动竞态。
+  /// 测试注入自己的实例时默认为 null（不触发任何网络）。
+  static final ThirdPartyAuthService instance = ThirdPartyAuthService(
+    onUnknownClient: () => RemoteClients.instance.ensureReady(force: true),
+  );
 
   /// 授权记录存储键。
   static const String grantsKey = 'third_party_grants_v1';
@@ -75,6 +83,11 @@ class ThirdPartyAuthService {
 
   /// 每 client 每分钟最大签发次数（ARCH T7）。
   final int rateLimitPerMinute;
+
+  /// 注册表未命中时的补救钩子（等远端清单刷新后重查）。
+  ///
+  /// 生产单例指向 `RemoteClients.ensureReady(force: true)`；测试为 null。
+  final Future<void> Function()? onUnknownClient;
 
   /// 每 client 的签发时间戳（秒），用于限流（T7）。
   final Map<String, List<int>> _issueHistory = <String, List<int>>{};
@@ -124,7 +137,20 @@ class ThirdPartyAuthService {
     // ② 注册表：client_id 必须存在。两种客户端的身份凭证不同：
     //    Android → 包名一致 + 本机安装包签名一致；
     //    Web     → redirect_uri 逐字命中登记值 + 强制 PKCE（公开客户端没有密钥可藏）。
-    final client = _registry.findById(clientId);
+    var client = _registry.findById(clientId);
+    if (client == null) {
+      // 冷启动竞态：深链可能先于远端清单就绪到达（缓存恢复/网络拉取都是异步），
+      // 「还没加载」不能当成「未登记」。等清单强制刷新后重查一次再下结论。
+      final remedy = onUnknownClient;
+      if (remedy != null) {
+        try {
+          await remedy();
+        } catch (e) {
+          debugPrint('[ThirdParty] 清单补救刷新失败: ${e.runtimeType}');
+        }
+        client = _registry.findById(clientId);
+      }
+    }
     if (client == null) {
       // 冒名者拿不到 code，因此这里不写任何记录（T1）
       return const AuthFailed(

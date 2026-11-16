@@ -34,6 +34,7 @@ class DeepLinkService {
 
   StreamSubscription<String>? _sub;
   Future<bool> Function(AuthRequest request)? _confirm;
+  void Function(String error, String message)? _onError;
   bool _started = false;
 
   /// 是否已开始监听。
@@ -43,8 +44,14 @@ class DeepLinkService {
   ///
   /// [confirm] 由 M4（授权确认页）注入；为 null 时只打印日志、不弹页，
   /// 保证内核可以先落地而不依赖 UI。
-  Future<void> start({Future<bool> Function(AuthRequest request)? confirm}) async {
+  /// [onError] 把授权失败回传给 UI 层（如 SnackBar）——授权失败绝不静默，
+  /// 否则用户只看到 App 被唤起却毫无反应（1.5.3 实机踩过的坑）。
+  Future<void> start({
+    Future<bool> Function(AuthRequest request)? confirm,
+    void Function(String error, String message)? onError,
+  }) async {
     _confirm = confirm;
+    _onError = onError;
     if (_started) return;
     _started = true;
 
@@ -73,6 +80,7 @@ class DeepLinkService {
   void stop() {
     _sub?.cancel();
     _sub = null;
+    _onError = null;
     _started = false;
   }
 
@@ -119,6 +127,13 @@ class DeepLinkService {
         }
       case AuthFailed(:final String error, :final String message):
         debugPrint('[ThirdParty] 授权失败: $error $message');
+        // 失败必须让用户看见：App 是被这条深链唤起的，静默吞掉
+        // 只会让人以为「点了没反应」。UI 未接线时仅日志。
+        try {
+          _onError?.call(error, message);
+        } catch (e) {
+          debugPrint('[ThirdParty] 错误回传异常: ${e.runtimeType}');
+        }
     }
   }
 

@@ -175,6 +175,15 @@ class MainActivity : AudioServiceActivity() {
         }
         if (uri == null) return
 
+        // 只接受真正的音频来源：content://（分享/打开方式）与 file://。
+        // suchmusic:// 是第三方授权深链（suchmusic://oauth/authorize），
+        // 若不在此拦截，会被当成音频打开 —— lastPathSegment="authorize"，
+        // 播放条会出现「authorize 正在播放」，授权流程同时被搅乱。
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != ContentResolver.SCHEME_CONTENT && scheme != ContentResolver.SCHEME_FILE) {
+            return
+        }
+
         // 尽可能让后台播放服务也能长期读取该 Uri（部分 ROM 不支持则静默忽略）
         try {
             val takeFlags = i.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION

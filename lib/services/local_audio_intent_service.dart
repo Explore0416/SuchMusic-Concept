@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../models/song_model.dart';
@@ -38,11 +39,23 @@ class LocalAudioIntentService {
     _sub = null;
   }
 
+  /// 入站音频只接受的来源 scheme（content:// 分享/打开方式，file:// 本地路径）。
+  ///
+  /// `suchmusic://` 是第三方授权深链，绝不能当歌曲播放 ——
+  /// 一旦漏进来，`lastPathSegment` 会让播放条出现「authorize 正在播放」。
+  /// 原生侧（MainActivity.captureInboundAudio）已过滤，这里是双保险。
+  @visibleForTesting
+  static bool acceptsSource(String uri) {
+    final scheme = Uri.tryParse(uri)?.scheme?.toLowerCase() ?? '';
+    return scheme == 'content' || scheme == 'file';
+  }
+
   /// 原生事件形如 `{ "uri": "content://...", "name": "xxx.mp3" }`。
   Future<void> _onEvent(dynamic event) async {
     if (event is! Map) return;
     final uri = event['uri']?.toString() ?? '';
     if (uri.isEmpty) return;
+    if (!acceptsSource(uri)) return;
     final name = event['name']?.toString();
     final song = SongModel.fromLocalUri(uri, displayName: name);
     await _audioPlayer.playAndAdd(song);
