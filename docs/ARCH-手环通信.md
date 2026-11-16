@@ -30,7 +30,7 @@
 | F6 | 手机端用小米官方 `xms-wearable-lib`（`com.xiaomi.xms.wearable`）：`Wearable.getNodeApi/getAuthApi/getMessageApi`；`NodeApi.getConnectedNodes()`、`sendMessage(nodeId, byte[])`、`OnMessageReceivedListener.onMessageReceived(nodeId, byte[])` | 官方 v1.4 文档 / 同类实现 | 手机桥接核心 API |
 | F7 | 消息通信需 `Permission.DEVICE_MANAGER`（`AuthApi.checkPermission/requestPermission`） | 官方 v1.4 文档 | 首次使用须请求权限 |
 | F8 | **跨设备图片传输示例使用 header→data→end 三段式分片协议（Base64 分片）** | 官方 samples | 分片协议直接采用 |
-| F9 | **包名与签名必须一致**，否则通信被拒绝；证书从 `.jks` 导出：`keytool -importkeystore`（jks→p12）→ `openssl pkcs12 -nodes`（p12→pem），PEM 需含**私钥 + 证书** | 官方文档 / 论坛 | 本仓库已有 `android/keystore/suchmusic-release.jks` |
+| F9 | **包名与签名必须一致**，否则通信被拒绝；证书从 `.jks` 导出：`keytool -importkeystore`（jks→p12）→ `openssl pkcs12 -nodes`（p12→pem），PEM 需含**私钥 + 证书** | 官方文档 / 论坛 | 本仓库已有 `android/keystore/release.jks` |
 | F10 | 手环屏幕 212×520，`designWidth=106`；快应用无 Canvas；`<list-item>` 文本不换行 | 用户提供 + 论坛 | UI 规范与性能取舍 |
 | F11 | Windows 无法直连手环：interconnect 仅对「与手环配对且同包名/签名的 Android App」开放，无 PC SDK、无第三方直连 BLE 通道 | F1/F9 推论 + 官方文档 | 必须经手机中转 |
 | F12 | `AIStatusForMiBand10pro` 的工程结构：`quickapp/src/manifest.json`（package 与 Android 一致）+ `sign/`+「interconnect 封装 + JSON-RPC 客户端」，手机端 `WearBridgeService.kt` + `BridgeRouter.kt` + `xms-wearable-lib_1.4_release.aar` | GitHub | **本设计沿用其成熟结构** |
@@ -47,7 +47,7 @@
 | 数据模型 | `lib/models/song_model.dart` | `SongModel{id,name,artist,album,coverUrl,duration(ms),source,hash,albumId,albumAudioId,localUri}`；`SongSource{netease,kugouStd,kugou,local}` | 歌曲信息协议的字段来源 |
 | 搜索 | `lib/services/sources/music_source.dart` | `search(keyword,{limit})`、`hotSearch()`、`searchSuggest(keyword)`；经 `SourceManager().source` 调用 | 手环搜索落地目标 |
 | 设计基因 | `lib/widgets/design_dialog.dart`、`lib/utils/responsive.dart`、各 screen | 主色 `#2F84FE`、页底 `#F1F2F4`、白卡片、圆角 8/10/16、副标题灰 `#838383`、字色 `#333333`、取消灰 `#8A8A8A`、字体 MiSans；设计稿基准宽 430 | §5 手环降级规范的来源 |
-| 签名 | `android/keystore/suchmusic-release.jks` + `android/key.properties` | PKCS12 型 keystore，alias `suchmusic`；SHA-1 `8E:7C:55:ED:E0:65:6F:BF:36:03:AC:BB:96:CB:2C:8B:6E:06:1B:46`、SHA-256 `B8:A0:80:…:1D:0B`（本次已用 keytool 核实） | §6.2 证书导出 |
+| 签名 | `android/keystore/release.jks` + `android/key.properties` | PKCS12 型 keystore，alias `suchmusic`；SHA-1 `56:41:0C:A2:AD:B5:40:7B:38:80:2F:78:0F:D7:D9:21:7D:09:63:DF`、SHA-256 `48:43:F6:7C:F1:EE:1C:DB:9E:1F:E4:CC:38:A4:ED:C5:EB:A7:27:B4:19:B3:61:56:08:DF:9D:9B:A8:5B:F8:06`（2026-11-16 用 keytool 对 release.jks 重新核实） | §6.2 证书导出 |
 
 ---
 
@@ -425,7 +425,7 @@ suchmusic-band/
       format.js            # 时间/文本截断工具
     common/style.css       # 设计令牌（§5）
     assets/                # 小图标 PNG
-  sign/sign.pem            # 由 suchmusic-release.jks 导出（§6.2）
+  sign/sign.pem            # 由 release.jks 导出（§6.2）
 ```
 
 **职责边界**
@@ -807,13 +807,13 @@ Windows 侧命令产生的状态变化同样回推给手环（§阶段 5）。
 
 ```bash
 # 0) 事实核实：jks 实为 PKCS12 类型，alias=suchmusic
-keytool -list -v -keystore android/keystore/suchmusic-release.jks \
+keytool -list -v -keystore android/keystore/release.jks \
         -storepass "$(grep storePassword android/key.properties | cut -d= -f2)" -alias suchmusic
-#   SHA1: 8E:7C:55:ED:E0:65:6F:BF:36:03:AC:BB:96:CB:2C:8B:6E:06:1B:46
+#   SHA1: 56:41:0C:A2:AD:B5:40:7B:38:80:2F:78:0F:D7:D9:21:7D:09:63:DF
 
 # 1) jks → p12
 keytool -importkeystore \
-  -srckeystore android/keystore/suchmusic-release.jks -srcstoretype pkcs12 \
+  -srckeystore android/keystore/release.jks -srcstoretype pkcs12 \
   -destkeystore suchmusic.p12 -deststoretype pkcs12
 
 # 2) p12 → pem（PEM 必须同时含私钥与证书）
