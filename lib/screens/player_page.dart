@@ -272,7 +272,7 @@ class _PlayerPageState extends State<PlayerPage> {
   /// │  ──────●──────────────                        │
   /// │  01:23              03:12                     │
   /// │  ⟳   ⏮   ▶   ⏭   ☰                          │
-  /// │  ⬇ 下载   ↗ 分享   ⏱ 定时   ⋯ 更多            │
+  /// │  ⬇   ↗   ⏱   ⋯（只有图标，无文字，贴左栏）     │
   /// └──────────────────────────────────────────────┘
   /// ```
   ///
@@ -280,7 +280,7 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 1. **歌词常驻右半屏**多行滚动，不存在「点封面切换歌词」这种交互——
   ///    封面是静态图，点了没有任何反应；
   /// 2. 左栏只放封面 / 歌名 / 进度 / 播放控制，不塞歌词行；
-  /// 3. 下载 / 分享 / 定时 / 更多 四个功能入口横跨整屏底部，而不是缩在左栏。
+  /// 3. 下载 / 分享 / 定时 / 更多 收在左栏下方、左对齐，**纯图标不带文字**。
   Widget _buildSplitBody() {
     return Column(
       children: [
@@ -317,9 +317,33 @@ class _PlayerPageState extends State<PlayerPage> {
             ],
           ),
         ),
-        const SizedBox(height: 4),
-        _buildActionRow(compact: true),
-        const SizedBox(height: 8),
+        const SizedBox(height: 2),
+        _buildSplitActionRow(),
+        const SizedBox(height: 6),
+      ],
+    );
+  }
+
+  /// 底部四个功能入口：**只占左栏宽度、左对齐，且只有图标没有文字**。
+  ///
+  /// 旧实现让这一行横跨整屏（`spaceEvenly`），在 720 宽的屏上「更多」离左栏
+  /// 快 300px、1280 宽时接近 600px，视觉上和播放器断成两块。现在复用主体
+  /// 的 48 / 52 分栏比例，入口只排在左栏内，左沿与左栏内容区（24）对齐；
+  /// 每个入口热区 44×44、图标 22 居中，故左内边距取 12（12 + 12 = 24）。
+  Widget _buildSplitActionRow() {
+    return Row(
+      children: [
+        Expanded(
+          flex: 48,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _buildActionRow(compact: true, iconOnly: true),
+            ),
+          ),
+        ),
+        const Expanded(flex: 52, child: SizedBox.shrink()),
       ],
     );
   }
@@ -876,12 +900,20 @@ class _PlayerPageState extends State<PlayerPage> {
   ///
   /// [compact] 仅用于横屏分栏（空间紧张）：按钮视觉尺寸缩小，但点击热区
   /// 仍然补到 44 高；竖屏传默认 false → 与改造前完全一致。
-  Widget _buildActionRow({bool compact = false}) {
+  ///
+  /// [iconOnly] 横屏底部专用：**只画图标不画文字**，`label` 仅作为无障碍
+  /// 语义保留（TalkBack 仍能念出「下载 / 分享 / 定时 / 更多」）。
+  Widget _buildActionRow({bool compact = false, bool iconOnly = false}) {
     final song = _audioPlayer.currentSong;
     final hasSong = song != null;
     final hasSleep = _audioPlayer.hasSleepTimer;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      // 纯图标形态包在 Align 里（宽度松约束），必须 min 否则 Row 会撑满左栏，
+      // 图标被 spaceEvenly 重新摊开
+      mainAxisSize: iconOnly ? MainAxisSize.min : MainAxisSize.max,
+      mainAxisAlignment:
+          iconOnly ? MainAxisAlignment.start : MainAxisAlignment.spaceEvenly,
+      spacing: iconOnly ? 2 : 0,
       children: [
         _ActionButton(
           icon: Icons.download_rounded,
@@ -890,6 +922,9 @@ class _PlayerPageState extends State<PlayerPage> {
               : '下载',
           onTap: hasSong && !_downloading ? _downloadCurrent : null,
           compact: compact,
+          iconOnly: iconOnly,
+          // 纯图标时没有文字可写进度，改用图标位置的进度环表达
+          progress: iconOnly && _downloading ? _downloadProgress : null,
         ),
         _ActionButton(
           icon: Icons.ios_share_rounded,
@@ -897,19 +932,25 @@ class _PlayerPageState extends State<PlayerPage> {
           label: _sharing ? '分享中' : '分享',
           onTap: hasSong && !_sharing ? _shareCurrent : null,
           compact: compact,
+          iconOnly: iconOnly,
         ),
         _ActionButton(
-          icon: Icons.timer_outlined,
-          label: _sleepLabel(),
+          icon: hasSleep ? Icons.timer_rounded : Icons.timer_outlined,
+          // 竖屏文字就是状态本身（「剩 12 分」）；纯图标时读屏需要完整语义
+          label: iconOnly
+              ? (hasSleep ? '定时关闭：${_sleepLabel()}' : '定时关闭')
+              : _sleepLabel(),
           active: hasSleep,
           onTap: _showSleepSheet,
           compact: compact,
+          iconOnly: iconOnly,
         ),
         _ActionButton(
           icon: Icons.more_horiz_rounded,
           label: '更多',
           onTap: hasSong ? _showMoreSheet : null,
           compact: compact,
+          iconOnly: iconOnly,
         ),
       ],
     );
@@ -2097,6 +2138,8 @@ class _ActionButton extends StatelessWidget {
     this.onTap,
     this.active = false,
     this.compact = false,
+    this.iconOnly = false,
+    this.progress,
   });
 
   final IconData icon;
@@ -2112,12 +2155,64 @@ class _ActionButton extends StatelessWidget {
   /// （见 [build] 里的 [SizedBox]），避免按钮变小后点不中。
   final bool compact;
 
+  /// 纯图标形态（横屏底部四个入口）：不画文字，[label] 只进无障碍语义。
+  ///
+  /// 热区 44×44、图标 22 居中；下载中用 [progress] 画进度环代替图标，
+  /// 保证「没有文字」时状态依然可见。
+  final bool iconOnly;
+
+  /// 下载进度 0~1，仅 [iconOnly] 下生效（竖屏用文字百分比表达）
+  final double? progress;
+
   /// 紧凑形态的最小点击热区高度（Material 可点区域下限）
   static const double _compactHitHeight = 44;
+
+  /// 纯图标形态的热区边长（正方形，Material 可点区域下限）
+  static const double _iconOnlyHitSide = 44;
 
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
+
+    if (iconOnly) {
+      return Semantics(
+        label: label,
+        button: true,
+        enabled: enabled,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.32,
+          child: GestureDetector(
+            onTap: onTap,
+            behavior: HitTestBehavior.opaque,
+            child: SizedBox(
+              width: _iconOnlyHitSide,
+              height: _iconOnlyHitSide,
+              child: Center(
+                child: progress != null
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          value: progress,
+                          strokeWidth: 2,
+                          color: Colors.white.withValues(alpha: 0.9),
+                          backgroundColor: Colors.white.withValues(alpha: 0.18),
+                        ),
+                      )
+                    : Icon(
+                        icon,
+                        size: 22,
+                        color: Colors.white.withValues(
+                          alpha: active ? 1 : 0.86,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final boxWidth = compact ? 52.0 : 64.0;
     final visualHeight = compact ? 36.0 : 56.0;
     final hitHeight = compact ? _compactHitHeight : 56.0;

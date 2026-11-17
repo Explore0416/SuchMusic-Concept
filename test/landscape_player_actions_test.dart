@@ -2,11 +2,11 @@
 //
 // 背景：分栏（横屏）左栏此前只拼了封面 / 歌名 / 进度 / 控制，把
 // 下载 / 分享 / 定时关闭 / 更多 四个入口整个漏掉了。本文件锁定：
-//  1. 720×480 横屏四个入口同时可见；
-//  2. 点「更多」能弹出「歌曲信息」面板；
+//  1. 720×480 横屏四个入口同时可见（顶部纯图标形态，不再有文字）；
+//  2. 点「更多」图标能弹出「歌曲信息」面板；
 //  3. 640×360 小屏横屏四个入口仍在，且无 overflow 异常；
 //  4. 390×844 竖屏四个入口仍在（防止把竖屏改坏）；
-//  5. 紧凑形态下动作按钮点击热区高度 ≥ 44。
+//  5. 纯图标形态下动作按钮点击热区 44×44。
 //
 // PlayerPage 会触发 AudioPlayerService 单例（just_audio 平台通道在纯 Dart
 // 测试里会抛 MissingPluginException，但服务内部已 try/catch，不会冒泡到
@@ -41,8 +41,16 @@ class _TempPathProvider extends PathProvider {
   String getDataSavedPath() => '$root/.data/';
 }
 
-/// 四个动作入口的文案（与 `_buildActionRow` 保持一致）
+/// 竖屏四个动作入口的文案（横屏已改纯图标，文案只作无障碍语义）
 const List<String> _actionLabels = ['下载', '分享', '定时', '更多'];
+
+/// 横屏四个动作入口的图标（定时未生效时是 `timer_outlined`）
+const List<IconData> _actionIcons = [
+  Icons.download_rounded,
+  Icons.ios_share_rounded,
+  Icons.timer_outlined,
+  Icons.more_horiz_rounded,
+];
 
 /// 本地伪曲目：路径不存在，play() 会把 currentSong 同步置上后静默失败，
 /// 不会像在线曲目那样去打网络接口。
@@ -69,9 +77,14 @@ Future<void> _pumpPlayer(WidgetTester tester, Size size) async {
   await tester.pump(const Duration(milliseconds: 300));
 }
 
-/// 动作按钮的点击热区（最近的 GestureDetector 祖先）
+/// 动作按钮的点击热区（最近的 GestureDetector 祖先），按文案定位（竖屏）
 Finder _actionHitArea(String label) => find
     .ancestor(of: find.text(label), matching: find.byType(GestureDetector))
+    .first;
+
+/// 横屏动作按钮的点击热区（横屏不渲染文字，只能按图标定位）
+Finder _actionHitAreaByIcon(IconData icon) => find
+    .ancestor(of: find.byIcon(icon), matching: find.byType(GestureDetector))
     .first;
 
 void main() {
@@ -85,17 +98,25 @@ void main() {
   testWidgets('720×480 横屏：下载 / 分享 / 定时 / 更多 四个入口同时存在', (tester) async {
     await _pumpPlayer(tester, const Size(720, 480));
 
-    for (final label in _actionLabels) {
+    for (var i = 0; i < _actionIcons.length; i++) {
       expect(
-        find.text(label),
+        find.byIcon(_actionIcons[i]),
         findsOneWidget,
-        reason: '横屏播放页缺少「$label」入口',
+        reason: '横屏播放页缺少「${_actionLabels[i]}」入口',
+      );
+      // 纯图标：横屏不允许出现动作文案
+      expect(
+        find.text(_actionLabels[i]),
+        findsNothing,
+        reason: '横屏入口不应带文字「${_actionLabels[i]}」',
       );
     }
     expect(tester.takeException(), isNull);
 
     // 动作行必须落在左栏（分栏左侧），而不是溢出到右栏或屏幕外
-    final downloadCenter = tester.getCenter(find.text('下载'));
+    final downloadCenter = tester.getCenter(
+      _actionHitAreaByIcon(Icons.download_rounded),
+    );
     expect(downloadCenter.dx, lessThan(720 / 2));
   });
 
@@ -106,10 +127,10 @@ void main() {
     AudioPlayerService().play(_probeSong);
 
     await _pumpPlayer(tester, const Size(720, 480));
-    expect(find.text('更多'), findsOneWidget);
+    expect(find.byIcon(Icons.more_horiz_rounded), findsOneWidget);
     expect(find.text('歌曲信息'), findsNothing);
 
-    await tester.tap(find.text('更多'));
+    await tester.tap(find.byIcon(Icons.more_horiz_rounded));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
@@ -127,14 +148,18 @@ void main() {
   testWidgets('640×360 小屏横屏：四个入口仍在，且无 overflow', (tester) async {
     await _pumpPlayer(tester, const Size(640, 360));
 
-    for (final label in _actionLabels) {
-      expect(find.text(label), findsOneWidget, reason: '小屏横屏缺少「$label」入口');
+    for (var i = 0; i < _actionIcons.length; i++) {
+      expect(
+        find.byIcon(_actionIcons[i]),
+        findsOneWidget,
+        reason: '小屏横屏缺少「${_actionLabels[i]}」入口',
+      );
     }
     expect(tester.takeException(), isNull, reason: '小屏横屏不应出现 overflow');
 
     // 四个入口都必须真正落在屏幕内、且可点击
-    for (final label in _actionLabels) {
-      final rect = tester.getRect(_actionHitArea(label));
+    for (var i = 0; i < _actionIcons.length; i++) {
+      final rect = tester.getRect(_actionHitAreaByIcon(_actionIcons[i]));
       expect(rect.top, greaterThanOrEqualTo(0));
       expect(rect.bottom, lessThanOrEqualTo(360));
       expect(rect.height, greaterThanOrEqualTo(44));
@@ -153,17 +178,21 @@ void main() {
     expect(tester.getSize(_actionHitArea('下载')).height, 56);
   });
 
-  testWidgets('紧凑形态动作按钮点击热区高度 ≥ 44', (tester) async {
+  testWidgets('纯图标形态动作按钮点击热区 44×44', (tester) async {
     await _pumpPlayer(tester, const Size(720, 480));
 
-    for (final label in _actionLabels) {
-      final size = tester.getSize(_actionHitArea(label));
+    for (var i = 0; i < _actionIcons.length; i++) {
+      final size = tester.getSize(_actionHitAreaByIcon(_actionIcons[i]));
       expect(
         size.height,
         greaterThanOrEqualTo(44),
-        reason: '「$label」紧凑按钮热区只有 ${size.height}，低于 44 会点不中',
+        reason: '「${_actionLabels[i]}」热区只有 ${size.height}，低于 44 会点不中',
       );
-      expect(size.width, 52, reason: '紧凑形态视觉宽 52（热区随宽）');
+      expect(
+        size.width,
+        greaterThanOrEqualTo(44),
+        reason: '「${_actionLabels[i]}」热区只有 ${size.width} 宽，低于 44 会点不中',
+      );
     }
 
     // 竖屏对照：热区按常规尺寸 56 高

@@ -11,21 +11,22 @@
 // │    歌名 ♡     ○ ……（可滚动）                   │
 // │  ──────●──────────────                        │
 // │  ⟳   ⏮   ▶   ⏭   ☰                          │
-// │  ⬇ 下载   ↗ 分享   ⏱ 定时   ⋯ 更多            │
+// │  ⬇   ↗   ⏱   ⋯  （只有图标、无文字、贴左栏）    │
 // └──────────────────────────────────────────────┘
 // ```
 //
 // 与竖屏的三处刻意差异（用户明确要求）：
 //  1. 歌词常驻右半屏多行滚动 —— 不是「点封面才出现」；
 //  2. 封面是静态图，**点击没有任何反应**；
-//  3. 下载 / 分享 / 定时 / 更多 四个入口横跨底部。
+//  3. 下载 / 分享 / 定时 / 更多 收在左栏下方左对齐，**纯图标不带文字**。
 //
 // 本文件锁定：
 //  1. 断点判定（最短边定形态 + 方向定布局）；
 //  2. 6 个横屏尺寸：无 overflow、四入口在屏内、收藏/播放列表在屏内；
 //  3. 横屏右栏常驻 FullLyricDisplay，左栏不再有单行 LyricDisplay（不重复）；
 //  4. 点封面无反应：封面尺寸、进度条位置、歌词面板全部不变；
-//  5. 竖屏 390×844 四入口仍在屏内（防止把竖屏改坏）。
+//  5. 四入口只占左半屏、贴左、且不渲染任何文字；
+//  6. 竖屏 390×844 四入口带文字且仍在屏内（防止把竖屏改坏）。
 //
 // 音频通道：`PlayerPage` 依赖 just_audio / audio_service 单例，纯 Dart 测试里
 // 平台通道缺失由服务内部 try/catch 吞掉；收藏 / 动作行需要一首当前歌曲才有
@@ -58,8 +59,17 @@ class _TempPathProvider extends PathProvider {
   String getDataSavedPath() => '$root/.data/';
 }
 
-/// 四个动作入口的文案（与 `_buildActionRow` 保持一致）
+/// 竖屏四个动作入口的文案（与 `_buildActionRow` 保持一致；横屏已改纯图标）
 const List<String> _actionLabels = ['下载', '分享', '定时', '更多'];
+
+/// 横屏四个动作入口的图标：横屏不带文字，只能按图标定位。
+/// 定时未生效时是 `timer_outlined`（生效后是实心 `timer_rounded`）。
+const List<IconData> _actionIcons = [
+  Icons.download_rounded,
+  Icons.ios_share_rounded,
+  Icons.timer_outlined,
+  Icons.more_horiz_rounded,
+];
 
 /// 本地伪曲目：路径不存在，play() 只把 currentSong 同步置上后静默失败。
 const SongModel _probeSong = SongModel(
@@ -117,6 +127,11 @@ Future<void> _drain(WidgetTester tester) async {
 /// 动作按钮的点击热区（最近的 GestureDetector 祖先）
 Finder _actionHitArea(String label) => find
     .ancestor(of: find.text(label), matching: find.byType(GestureDetector))
+    .first;
+
+/// 横屏动作按钮的点击热区（按图标定位，横屏不渲染文字）
+Finder _actionHitAreaByIcon(IconData icon) => find
+    .ancestor(of: find.byIcon(icon), matching: find.byType(GestureDetector))
     .first;
 
 /// 收藏按钮：`_LikeButton` 用 `Icons.favorite(_border)`（非 rounded 变体），
@@ -208,7 +223,7 @@ void main() {
     });
   });
 
-  group('横屏：四入口 / 收藏 / 播放列表都在屏内', () {
+  group('横屏：四入口（纯图标、贴左栏）/ 收藏 / 播放列表都在屏内', () {
     for (final size in _landscapeSizes) {
       testWidgets('${size.width.toInt()}×${size.height.toInt()} 无溢出且入口在屏内', (
         tester,
@@ -217,14 +232,42 @@ void main() {
 
         expect(tester.takeException(), isNull, reason: '不应出现 overflow');
 
+        for (var i = 0; i < _actionIcons.length; i++) {
+          final icon = _actionIcons[i];
+          final what = '「${_actionLabels[i]}」入口（${size.width.toInt()}×${size.height.toInt()}）';
+          expect(
+            find.byIcon(icon),
+            findsOneWidget,
+            reason: '$what 缺少图标',
+          );
+          _expectOnScreen(tester, _actionHitAreaByIcon(icon), size, what);
+        }
+
+        // 纯图标：横屏不允许出现任何动作文案
         for (final label in _actionLabels) {
           expect(
             find.text(label),
-            findsOneWidget,
-            reason: '${size.width.toInt()}×${size.height.toInt()} 缺少「$label」入口',
+            findsNothing,
+            reason: '横屏底部入口不应带文字「$label」',
           );
-          _expectOnScreen(tester, _actionHitArea(label), size, '「$label」入口');
         }
+
+        // 贴左栏：整行落在左半屏，且第一个热区紧贴左侧（不是居中或横跨整屏）
+        final first = tester.getRect(
+          _actionHitAreaByIcon(_actionIcons.first),
+        );
+        final last = tester.getRect(_actionHitAreaByIcon(_actionIcons.last));
+        expect(
+          last.right,
+          lessThanOrEqualTo(size.width * 0.5),
+          reason:
+              '动作行应只占左栏（last.right=${last.right}，屏宽 ${size.width}）',
+        );
+        expect(
+          first.left,
+          lessThan(size.width * 0.08),
+          reason: '动作行应贴左边（first.left=${first.left}）',
+        );
 
         _expectOnScreen(tester, _likeIcon, size, '收藏按钮');
         _expectOnScreen(tester, _playlistEntry, size, '播放列表入口');
@@ -316,12 +359,12 @@ void main() {
         findsNothing,
         reason: '可用高不足 240 时主动放弃封面，把空间留给控制与四入口',
       );
-      for (final label in _actionLabels) {
+      for (var i = 0; i < _actionIcons.length; i++) {
         _expectOnScreen(
           tester,
-          _actionHitArea(label),
+          _actionHitAreaByIcon(_actionIcons[i]),
           const Size(568, 320),
-          '568×320「$label」入口',
+          '568×320「${_actionLabels[i]}」入口',
         );
       }
       expect(tester.takeException(), isNull);
