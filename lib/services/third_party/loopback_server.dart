@@ -329,26 +329,45 @@ class LoopbackServer implements LoopbackPort {
     }
 
     // ⑧ 取数
+    //
+    // 单 scope 失败**不再拖垮整次交换**：网页常常一次要「曲风 + 直链 + 代播」，
+    // 只是其中一项没条件（比如没在放歌导致直链解析不了）就把全部数据都判死，
+    // 接入方只能拿到一个 400，连曲风画像都看不到。
+    // 现在逐项收集：成功的进 `data`，失败的进 `errors`；全部失败才返回 400。
     final data = <String, Object?>{};
-    try {
-      for (final scope in effective) {
-        data[scope.code] = await session.provider.fetch(scope, params[scope.code]);
+    final errors = <String, Object?>{};
+    ThirdPartyException? firstError;
+    for (final scope in effective) {
+      try {
+        data[scope.code] = await session.provider.fetch(
+          scope,
+          params[scope.code],
+        );
+      } on ThirdPartyException catch (e) {
+        firstError ??= e;
+        errors[scope.code] = <String, Object?>{
+          'error': e.code,
+          'message': e.message.isEmpty ? '取数失败' : e.message,
+        };
       }
-    } on ThirdPartyException catch (e) {
+    }
+    if (data.isEmpty && firstError != null) {
       await _respond(session, request, HttpStatus.badRequest, <String, Object?>{
-        'error': e.code,
-        'message': e.message.isEmpty ? '取数失败' : e.message,
+        'error': firstError.code,
+        'message': firstError.message.isEmpty ? '取数失败' : firstError.message,
+        'errors': errors,
       });
       await stop(session.clientId);
       return;
     }
 
-    // ⑨ 成功响应
+    // ⑨ 成功响应（`errors` 仅在部分失败时出现，旧接入方忽略该字段即可）
     await _respond(session, request, HttpStatus.ok, <String, Object?>{
       'client_id': session.clientId,
       'scopes': ThirdPartyScope.codesOf(effective),
       'issued_at': consumed.issuedAt,
       'data': data,
+      if (errors.isNotEmpty) 'errors': errors,
     });
 
     // ⑩ 交换成功立即关服（T3「单次交换后立即关服」）

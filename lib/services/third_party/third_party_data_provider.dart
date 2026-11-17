@@ -78,11 +78,13 @@ class ThirdPartyDataProvider {
     KugouCredentialSource? credentialSource,
     SongUrlResolver? urlResolver,
     PlaybackPort? playback,
+    SongModel? Function()? currentSong,
     int Function()? now,
   })  : _tagIndexSource = tagIndexSource ?? _defaultTagIndexSource,
         _credentialSource = credentialSource ?? _defaultCredentialSource,
         _urlResolver = urlResolver ?? _defaultUrlResolver,
         _playbackOverride = playback,
+        _currentSong = currentSong ?? _defaultCurrentSong,
         _now = now ?? _defaultNow;
 
   /// 曲风画像最多返回多少个标签（ARCH §6.2）。
@@ -110,10 +112,18 @@ class ThirdPartyDataProvider {
 
   static int _defaultNow() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
+  /// 默认「当前歌曲」来源：App 正在播放的那首。
+  ///
+  /// 网页拿不到歌曲 id（它没有播放入口），所以 `url.resolve` /
+  /// `playback.control(play)` 允许省略 `params.song`，此时以 App 当前播放
+  /// 歌曲为准 —— 这是 demo 报 `缺少 song 对象` 的直接修复点。
+  static SongModel? _defaultCurrentSong() => AudioPlayerService().currentSong;
+
   final GenreTagIndexSource _tagIndexSource;
   final KugouCredentialSource _credentialSource;
   final SongUrlResolver _urlResolver;
   final PlaybackPort? _playbackOverride;
+  final SongModel? Function() _currentSong;
   final int Function() _now;
 
   late final PlaybackPort _playback = _playbackOverride ?? AudioServicePlaybackPort();
@@ -217,9 +227,24 @@ class ThirdPartyDataProvider {
 
   // ── url.resolve ──────────────────────────────────────────────
 
-  /// 解析直链；入参必须带 `song` 对象。
+  /// 取本次要操作的歌曲：优先 `params.song`，缺省回落 App 当前播放歌曲。
+  ///
+  /// 两者都没有时给一个**可行动**的错误：说清两种解法（带 song / 先放首歌），
+  /// 而不是只丢一句「缺少 song 对象」让接入方去猜。
+  SongModel _songOrCurrent(Map<String, dynamic>? params) {
+    final raw = params?['song'];
+    if (raw is Map) return songFromJson(raw);
+    final current = _currentSong();
+    if (current != null) return current;
+    throw const ThirdPartyException(
+      AuthErrors.badRequest,
+      '缺少 song 对象：请在 params.song 中指定歌曲（id 必填），或先在 App 内播放一首歌',
+    );
+  }
+
+  /// 解析直链；`params.song` 缺省时用 App 当前播放的歌曲。
   Future<Map<String, dynamic>> _resolveUrl(Map<String, dynamic>? params) async {
-    final song = songFromParams(params);
+    final song = _songOrCurrent(params);
     String? url;
     try {
       url = await _urlResolver(song);
@@ -254,7 +279,7 @@ class ThirdPartyDataProvider {
     final action = (params?['action']?.toString() ?? '').trim().toLowerCase();
     switch (action) {
       case 'play':
-        final song = songFromParams(params);
+        final song = _songOrCurrent(params);
         await _playback.playSongs(<SongModel>[song]);
         break;
       case 'pause':

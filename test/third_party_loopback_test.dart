@@ -352,6 +352,31 @@ void main() {
     expect(response.error, 'not_logged_in');
   });
 
+  test('单 scope 失败不拖垮整次交换 → 200 + data + errors', () async {
+    // 直链解析失败（通常是「App 没在放歌」），曲风数据必须照常返回
+    provider.errors[ThirdPartyScope.urlResolve] = const ThirdPartyException(
+      'bad_request',
+      '缺少 song 对象：请在 params.song 中指定歌曲',
+    );
+    final session = await openSession();
+
+    final response = await rawExchange(
+      session.port,
+      authorization: 'Bearer ${session.code}',
+    );
+
+    expect(response.status, 200);
+    final data = response.json['data'] as Map<String, dynamic>;
+    expect(data.keys, contains('genre.read'));
+    expect(data.keys, isNot(contains('url.resolve')));
+
+    final errors = response.json['errors'] as Map<String, dynamic>;
+    expect((errors['url.resolve'] as Map)['error'], 'bad_request');
+
+    // code 已消费、服务已关（一次性语义不受部分失败影响）
+    expect(codes.consume(session.code), isNull);
+  });
+
   test('新会话替换同一 client 的旧会话', () async {
     final first = await openSession();
     expect(server.isRunning(kClientId), isTrue);

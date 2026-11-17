@@ -220,6 +220,10 @@ class FakeProvider implements ThirdPartyDataProvider {
   /// 非空时 fetch 直接抛出该异常（模拟 not_logged_in 等）。
   ThirdPartyException? error;
 
+  /// 按 scope 定向抛错（模拟「直链解析失败但曲风正常」这类部分失败）。
+  final Map<ThirdPartyScope, ThirdPartyException> errors =
+      <ThirdPartyScope, ThirdPartyException>{};
+
   @override
   Future<Map<String, dynamic>> fetch(
     ThirdPartyScope scope,
@@ -227,7 +231,7 @@ class FakeProvider implements ThirdPartyDataProvider {
   ) async {
     fetched.add(scope);
     paramsSeen[scope] = params;
-    final failure = error;
+    final failure = errors[scope] ?? error;
     if (failure != null) throw failure;
     return data[scope] ?? <String, dynamic>{'ok': true};
   }

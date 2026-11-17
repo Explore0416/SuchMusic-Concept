@@ -164,9 +164,8 @@ class _PlayerPageState extends State<PlayerPage> {
     final size = MediaQuery.sizeOf(context);
     final bp = Responsive.of(size);
     final split = Responsive.isPlayerSplit(bp);
-    // 分栏形态不再强制复位 `_coverCollapsed`：横屏左栏也允许点封面把封面
-    // 收缩成 70px 小图（复用竖屏语义），把空间让给歌名 / 歌词 / 控制。
-    // 旧实现每帧把状态强改回 false，导致横屏点封面毫无反应。
+    // `_coverCollapsed` 只服务竖屏（点卡片展开大歌词）。横屏是另一套形态：
+    // 右半屏常驻歌词，封面是静态图，点它没有任何反应。
     // 深色页面：系统栏用浅色图标，避免 ColorOS 手势条自动垫浅色背景
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
@@ -259,10 +258,29 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 左右分栏形态（手机横屏 B2 / 平板横屏 B4 / 超宽屏 B5）。
   ///
-  /// **与竖屏同一套语义：默认只显示播放器，点封面（卡片）才进入歌词形态。**
-  /// 旧实现把右半屏常驻 [FullLyricDisplay]，横屏一进来歌词就占掉一半屏幕，
-  /// 与竖屏「点卡片才显示歌词」不一致（用户反馈「横屏要干什么」）。
-  /// 现在收起封面（`_coverCollapsed`）才切到「左小封面 + 右大歌词」。
+  /// 横屏有自己的一套形态，**不照搬竖屏**：
+  ///
+  /// ```text
+  /// ┌──────────────────────────────────────────────┐
+  /// │  ⌄         正在播放              音源   音效  │
+  /// │  ┌────────┐   ○ 小鱼翻身探脑瓜                 │
+  /// │  │        │   ○ 虫儿醒来说着悄悄话             │
+  /// │  │  封面  │   ● 屋檐雨落滴滴答                 │
+  /// │  └────────┘   ○ 新生希望在枝桠                 │
+  /// │    歌名 ♡     ○ 春风送我青云白马               │
+  /// │    歌手       ○ 春天在我心里发芽               │
+  /// │  ──────●──────────────                        │
+  /// │  01:23              03:12                     │
+  /// │  ⟳   ⏮   ▶   ⏭   ☰                          │
+  /// │  ⬇ 下载   ↗ 分享   ⏱ 定时   ⋯ 更多            │
+  /// └──────────────────────────────────────────────┘
+  /// ```
+  ///
+  /// 与竖屏的三处刻意差异：
+  /// 1. **歌词常驻右半屏**多行滚动，不存在「点封面切换歌词」这种交互——
+  ///    封面是静态图，点了没有任何反应；
+  /// 2. 左栏只放封面 / 歌名 / 进度 / 播放控制，不塞歌词行；
+  /// 3. 下载 / 分享 / 定时 / 更多 四个功能入口横跨整屏底部，而不是缩在左栏。
   Widget _buildSplitBody() {
     return Column(
       children: [
@@ -271,72 +289,61 @@ class _PlayerPageState extends State<PlayerPage> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // 左 48% / 右 52%：歌词行普遍比封面信息长，右栏略宽更耐读
+              Expanded(flex: 48, child: _buildSplitLeft()),
               Expanded(
-                child: _coverCollapsed
-                    ? _buildSplitLeft()
-                    : Center(
-                        child: ConstrainedBox(
-                          // 居中收窄：超宽屏（B5）上不让封面/控件被拉得满屏跑
-                          constraints: const BoxConstraints(maxWidth: 560),
-                          child: _buildSplitLeft(centered: true),
-                        ),
-                      ),
-              ),
-              if (_coverCollapsed) ...[
-                const SizedBox(width: 24),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final vh = constraints.maxHeight;
-                        return FullLyricDisplay(
-                          topPadding: (vh * 0.35).clamp(40.0, 200.0),
-                          bottomPadding: (vh * 0.65).clamp(120.0, 500.0),
-                        );
-                      },
-                    ),
+                flex: 52,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final vh = constraints.maxHeight;
+                      // 字号跟着**栏宽**走：一行约 13 个汉字。
+                      // 固定 26 在 568×320 会把「雨纷纷 旧故里草木深」折成两行，
+                      // 不封顶又会在平板上放大到 40+。扣掉左右各 25 的内边距。
+                      final lyricCap =
+                          ((constraints.maxWidth - 56) / 13).clamp(20.0, 32.0);
+                      return FullLyricDisplay(
+                        // 当前行悬停在视口 28% 处（_doScroll 的锚点），上下留白
+                        // 只需保证首行 / 末行也能滚到该锚点
+                        topPadding: (vh * 0.28).clamp(24.0, 160.0),
+                        bottomPadding: (vh * 0.72).clamp(80.0, 400.0),
+                        maxFontSize: lyricCap,
+                      );
+                    },
                   ),
                 ),
-              ],
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
+        _buildActionRow(compact: true),
+        const SizedBox(height: 8),
       ],
     );
   }
 
-  /// 分栏左栏：封面 + 歌名 + 进度 + 控制 + **动作行（下载/分享/定时/更多）**。
+  /// 分栏左栏：封面 + 歌名 + 进度 + 控制。
   ///
-  /// 手机横屏的逻辑高度可能只有 360 左右（可用高度 ≈ 300），而动作行必然要占
-  /// 一行。为了保证「宁可没有封面，也不能没有功能」，这里按可用高度三级降级：
+  /// 手机横屏的逻辑高度可能只有 360 左右（可用高度 ≈ 230），而控制行必然要占
+  /// 一行。为了保证「宁可没有封面，也不能没有功能」，按可用高度三级降级：
   ///
   /// - `>= 420`：常规结构，封面用 [Expanded] 自适应剩余空间；
-  /// - `280 ~ 420`：封面吃满剩余空间（[Flexible] 兜住空间不足），歌名缩小、
-  ///   进度与控制的间距各收 2 —— **这是绝大多数手机横屏实际落到的档位**；
-  /// - `< 280`：**隐藏封面**，只留歌名/艺人（各一行）+ 进度 + 控制 + 动作行。
+  /// - `240 ~ 420`：封面按可用高度取三成（72~200），整列用 [FittedBox] 兜底；
+  /// - `< 240`：**隐藏封面**，只留歌名 / 艺人 + 进度 + 控制。
   ///
   /// 三种分支都不使用滚动容器——播放页必须一屏可见。
-  ///
-  /// 三个档位里「封面可点收起」「歌词行」必须**一样有**：720×480（可用高 416）
-  /// 与 1080p 手机横屏（逻辑高 360~400）都落在 compact 档，只给 full 档做这两件
-  /// 事，用户看到的就还是「横屏和竖屏不一样」。
-  ///
-  /// [centered]：单栏居中形态（默认态）下左右留白对称；分栏（歌词态）仍保留
-  /// 左侧 24 / 右侧 12 的原始配比，避免歌词面板贴得太近。
-  Widget _buildSplitLeft({bool centered = false}) {
+  Widget _buildSplitLeft() {
     return Padding(
-      padding: centered
-          ? const EdgeInsets.symmetric(horizontal: 24)
-          : const EdgeInsets.fromLTRB(24, 0, 12, 0),
+      padding: const EdgeInsets.fromLTRB(24, 0, 16, 0),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final availableHeight = constraints.maxHeight;
           if (availableHeight >= 420) {
             return _buildSplitLeftFull();
           }
-          if (availableHeight >= 280) {
+          if (availableHeight >= 240) {
             return _buildSplitLeftCompact(
               availableHeight,
               constraints.maxWidth,
@@ -348,11 +355,10 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 分栏档下「点封面收起」后的小封面边长（与竖屏 `_buildCoverAndSongInfo`
-  /// 的 collapsedSize 保持一致，避免横竖屏两处魔法数字各自漂移）。
-  static const double _splitCollapsedCoverSide = 70;
-
   /// 封面：正方形、居中，受 [maxHeight] 与 [Responsive.coverMaxSide] 双重约束。
+  ///
+  /// 横屏下封面**不可点**（没有「点一下切歌词」这种交互），所以这里直接返回
+  /// 图片本身，不包任何手势。
   Widget _buildSplitCover({required double maxHeight}) {
     return Center(
       child: ConstrainedBox(
@@ -373,53 +379,22 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 封面热区：整块区域（含封面四周留白）都可点，点一下按竖屏同一套
-  /// `_coverCollapsed` 语义收起 / 恢复。
-  ///
-  /// [HitTestBehavior.opaque] 是必须的：封面用了 [Center] + [AspectRatio]，热区
-  /// 之外的留白默认不参与命中测试，不加 opaque 时用户点在封面边上会「点不动」。
-  Widget _buildCoverTapTarget(double maxHeight) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => setState(() => _coverCollapsed = !_coverCollapsed),
-      child: _buildSplitCover(maxHeight: maxHeight),
-    );
-  }
-
   /// 三档中最大的一档：可用高度充足，封面吃满剩余空间。
-  ///
-  /// 封面可点：点一下按与竖屏一致的 `_coverCollapsed` 语义收起为 70px 小封面
-  /// （把高度让给歌名 / 当前歌词），再点一下恢复 —— 横屏与竖屏操作一致。
   Widget _buildSplitLeftFull() {
     return Column(
       children: [
         const SizedBox(height: 8),
-        // 收起后**不能**再用 Expanded：Expanded 的槽位始终占满剩余高度，封面
-        // 自己缩到 70 之后周边只剩空白，歌名 / 歌词 / 进度 / 控制的位置一动不动
-        // —— 用户点了封面却「什么都没发生」，与竖屏「收起让位」的语义不符。
-        if (_coverCollapsed)
-          SizedBox(
-            height: _splitCollapsedCoverSide,
-            child: _buildCoverTapTarget(_splitCollapsedCoverSide),
-          )
-        else
-          Expanded(child: _buildCoverTapTarget(Responsive.coverMaxSide)),
-        const SizedBox(height: 12),
-        // 与上方封面（Center 居中）对齐：歌名/歌手同样居中
+        Expanded(child: _buildSplitCover(maxHeight: Responsive.coverMaxSide)),
+        const SizedBox(height: 14),
+        // 与上方封面（Center 居中）对齐：歌名/歌手/爱心同样居中
         SizedBox(
           width: double.infinity,
           child: _buildSongInfo(collapsed: true, center: true),
         ),
-        // 横屏补齐「当前歌词」一行（竖屏 `_buildColumnBody` 的 collapsed=false
-        // 分支已有）。
-        const SizedBox(height: 8),
-        const LyricDisplay(),
-        const SizedBox(height: 4),
+        const SizedBox(height: 10),
         const ProgressBar(),
         const SizedBox(height: 8),
         _buildControls(),
-        const SizedBox(height: 4),
-        _buildActionRow(compact: true),
         const SizedBox(height: 8),
       ],
     );
@@ -427,68 +402,44 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 中档：小高度横屏（**手机横屏的主场景**，如 720×480 / 1080p 逻辑高 360）。
   ///
-  /// [availableHeight] 是左栏可用高度（已扣掉 TopBar 与底部 12）。
-  /// [maxWidth] 只用于收起态兜底容器的定宽，避免 [FittedBox] 在无界宽度里布局。
-  ///
-  /// 与本轮修复直接相关的三点：
-  /// 1. 封面可点（`_buildCoverTapTarget`），720×480 点封面必须有反应；
-  /// 2. 收起后封面用**固定 70 高**，不再套 [Flexible]：Flexible 的槽位仍然
-  ///    占满剩余可用高度，封面只是自己变小，下面控件一动不动，等于没收起；
-  /// 3. 歌词行：收起后或可用高度够（≥380）时显示。720×480（可用 416）看得见，
-  ///    640×360（可用 296）不显示，避免把四个动作入口挤出屏幕。
+  /// [availableHeight] 是左栏可用高度（已扣掉 TopBar 与底部动作行）。
+  /// 封面高度取三成（夹在 72~200），四块内容仍可能略超 —— 用 [FittedBox]
+  /// 等比兜底，宁可整体缩一度，也绝不允许 overflow。
   Widget _buildSplitLeftCompact(double availableHeight, double maxWidth) {
-    final showLyricLine = _coverCollapsed || availableHeight >= 380;
-    final children = <Widget>[
-      const SizedBox(height: 6),
-      if (_coverCollapsed)
-        SizedBox(
-          height: _splitCollapsedCoverSide,
-          child: _buildCoverTapTarget(_splitCollapsedCoverSide),
-        )
-      else
-        // 不再叠加「34%」上限：Flexible 本身已把封面夹在剩余空间里，再叠一层
-        // 百分比只会在 720×480 这类尺寸下造出「槽 174 / 封面 141」的空隙，
-        // 既浪费 30+ px，也让收起前后的位移小到看不出来。
-        Flexible(child: _buildCoverTapTarget(Responsive.coverMaxSide)),
-      const SizedBox(height: 8),
-      SizedBox(
-        width: double.infinity,
-        child: _buildSongInfo(collapsed: true, center: true, titleSize: 17),
-      ),
-      if (showLyricLine) ...[const SizedBox(height: 4), const LyricDisplay()],
-      const SizedBox(height: 10),
-      const ProgressBar(),
-      const SizedBox(height: 6),
-      _buildControls(),
-      const SizedBox(height: 2),
-      _buildActionRow(compact: true),
-      const SizedBox(height: 8),
-    ];
-
-    if (!_coverCollapsed) {
-      return Column(children: children);
-    }
-    // 收起态：整列按内容高度排（不再有 Flexible 占位），歌名 / 歌词 / 进度 /
-    // 控制整体上移，底部留白随可用高度自然出现（**不加 Spacer**，否则控件会被
-    // 顶回底部，收起又白做了）。
-    //
-    // 极窄高度（可用 280~320，如 640×360）时「固定 70 的封面 + 歌词行」可能仍
-    // 略高于可用空间：用 [FittedBox] 等比兜底，宁可整体缩一度，也绝不允许
-    // overflow、更不允许把四个动作入口挤出屏幕。
+    final coverSide = (availableHeight * 0.34).clamp(72.0, 200.0);
     return FittedBox(
       fit: BoxFit.scaleDown,
-      alignment: Alignment.topCenter,
       child: SizedBox(
         width: maxWidth,
-        child: Column(mainAxisSize: MainAxisSize.min, children: children),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 4),
+            _buildSplitCover(maxHeight: coverSide),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: _buildSongInfo(
+                collapsed: true,
+                center: true,
+                titleSize: 17,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const ProgressBar(),
+            const SizedBox(height: 4),
+            _buildControls(),
+            const SizedBox(height: 4),
+          ],
+        ),
       ),
     );
   }
 
-  /// 最小档：可用高度 < 280 时**放弃封面**，但四个动作入口一个都不能少。
+  /// 最小档：可用高度 < 240 时**放弃封面**，但控制与四个动作入口一个都不能少。
   ///
-  /// 外层套 [FittedBox] 只作保险：正常小高度横屏（≥ 220 可用高）内容按原尺寸
-  /// 居中显示，一旦被分屏压到更矮就整体等比缩小，绝不允许出现 overflow。
+  /// 外层套 [FittedBox] 只作保险：正常小高度横屏按原尺寸居中显示，一旦被
+  /// 分屏压到更矮就整体等比缩小，绝不允许出现 overflow。
   Widget _buildSplitLeftTiny(BoxConstraints constraints) {
     return FittedBox(
       fit: BoxFit.scaleDown,
@@ -510,9 +461,7 @@ class _PlayerPageState extends State<PlayerPage> {
             const ProgressBar(),
             const SizedBox(height: 6),
             _buildControls(),
-            const SizedBox(height: 2),
-            _buildActionRow(compact: true),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
           ],
         ),
       ),
@@ -1700,7 +1649,12 @@ class _LyricDisplayState extends State<LyricDisplay> {
           key: ValueKey<String>(_currentLyric),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 16, color: Colors.white54),
+          // 与多行歌词同理：显式字体，别让中文掉到引擎默认字体
+          style: const TextStyle(
+            fontFamily: 'MiSans',
+            fontSize: 16,
+            color: Colors.white54,
+          ),
         ),
       ),
     );
@@ -1712,6 +1666,7 @@ class FullLyricDisplay extends StatefulWidget {
     super.key,
     this.topPadding = 200.0,
     this.bottomPadding = 500.0,
+    this.maxFontSize,
   });
 
   /// 歌词列表顶部留白（分栏形态下按视口高比例传入）
@@ -1719,6 +1674,12 @@ class FullLyricDisplay extends StatefulWidget {
 
   /// 歌词列表底部留白
   final double bottomPadding;
+
+  /// 当前行字号上限（可选）。
+  ///
+  /// 分栏形态的歌词只有半屏宽，字号跟着整屏 UI 缩放放大时一行放不下，
+  /// 会折成两行破坏「一句一行」的读谱感；横屏按栏宽传一个较小的上限。
+  final double? maxFontSize;
 
   @override
   State<FullLyricDisplay> createState() => _FullLyricDisplayState();
@@ -1943,8 +1904,15 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
 
     // 歌词字号：以 430 设计稿为基准随 UI 缩放，封顶 lyricFontMax（不随宽度线性放大）
     final scale = Responsive.uiScale(MediaQuery.sizeOf(context));
-    final currentFont = Responsive.clampLyricFont(scale * 30);
-    final otherFont = Responsive.clampLyricFont(scale * 24);
+    final cap = widget.maxFontSize;
+    final currentBase = Responsive.clampLyricFont(scale * 30);
+    final otherBase = Responsive.clampLyricFont(scale * 24);
+    final currentFont = cap == null
+        ? currentBase
+        : (currentBase > cap ? cap : currentBase);
+    final otherFont = cap == null
+        ? otherBase
+        : (otherBase > cap * 0.82 ? cap * 0.82 : otherBase);
 
     // 上下渐隐遮罩：歌词靠近边缘时淡出，避免生硬截断。
     // 底部从 78% 就开始淡出（原 85% 太晚，最后一行会以近实色半截贴在屏底）；
@@ -2024,6 +1992,10 @@ class _FullLyricDisplayState extends State<FullLyricDisplay> {
                         curve: Curves.easeOut,
                         textAlign: TextAlign.left,
                         style: TextStyle(
+                          // 必须显式指定：DefaultTextStyle 的 style 不继承
+                          // ThemeData.fontFamily，留空会掉到引擎默认字体
+                          // （中文直接没有字形，渲染成豆腐块）。
+                          fontFamily: 'MiSans',
                           fontSize: isCurrent ? currentFont : otherFont,
                           fontWeight: isCurrent
                               ? FontWeight.bold

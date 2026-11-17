@@ -191,6 +191,7 @@ const res = await fetch(`http://127.0.0.1:${port}/v1/exchange`, {
   body: JSON.stringify({
     code_verifier: verifier,      // Web 客户端必填
     request: {                    // 可选：按需指定要什么
+      // song 可以省略 —— 省略时 App 用「当前正在播放的那首歌」
       'url.resolve': { song: { id: '186016', source: 'netease', name: '东风破', artist: '周杰伦' } },
       'playback.control': { action: 'play', song: { id: '186016', source: 'netease' } },
     },
@@ -198,6 +199,18 @@ const res = await fetch(`http://127.0.0.1:${port}/v1/exchange`, {
 });
 const payload = await res.json();
 ```
+
+### 5.0 `song` 可以省略
+
+`url.resolve` 与 `playback.control` 的 `params.song` **不是必填**：
+
+- 给了 → 就用你指定的歌；
+- 没给 → 用 **App 当前正在播放的歌曲**（网页通常没有播放入口，这是最常见的情形）；
+- 没给、App 也没在放歌 → 该 scope 返回 `bad_request`，错误消息会明确写出两种解法。
+
+> 这也是「网页侧只拿到 code 也能试听」的设计：用户授权前在 App 里放着歌，网页请求
+> 直链时不用知道任何歌曲 id。想指定歌曲就带 `song.id`（+ `source`，酷狗源还需 `hash`）。
+
 
 ### 5.1 CORS 与私有网络访问（PNA）
 
@@ -269,6 +282,31 @@ Access-Control-Request-Headers: authorization, content-type
 | `playback.control` | `{ action, ok, songId? }` | action ∈ play/pause/resume/next/previous |
 | `account.token` | `{ platform, token, userId, nickname }` | 仅 Android 客户端可申请（Web 禁止） |
 
+**部分成功（200 + `errors`）**：
+
+单次交换里只要**有一项**取到数据就返回 200；失败的 scope 不出现在 `data` 里，
+而是进 `errors`。旧接入方忽略 `errors` 即可，行为向后兼容。
+
+```json
+{
+  "client_id": "sm_xxxxxxxxxxxxxxxx",
+  "scopes": ["genre.read", "url.resolve"],
+  "issued_at": 1731600000,
+  "data": {
+    "genre.read": { "topGenres": [{ "tag": "流行", "weight": 0.42 }], "sampleSize": 128 }
+  },
+  "errors": {
+    "url.resolve": {
+      "error": "bad_request",
+      "message": "缺少 song 对象：请在 params.song 中指定歌曲（id 必填），或先在 App 内播放一首歌"
+    }
+  }
+}
+```
+
+> 只有**全部 scope 都失败**时才回 400（带第一个错误）。这样「曲风能拿、直链拿不到」
+> 这类常见情形不会让整页变成错误页。
+
 ### 5.3 交换层错误码（HTTP）
 
 | HTTP | error | 含义 | 处理 |
@@ -278,9 +316,11 @@ Access-Control-Request-Headers: authorization, content-type
 | 401 | `invalid_code` | verifier 与 challenge 不匹配 | 用发起时同一个 verifier |
 | 403 | `scope_not_granted` | 请求了未授予的 scope | 只请求已授予范围 |
 | 403 | （无 CORS 头） | Origin 不在白名单 | 用登记过的域名发起 |
-| 400 | `bad_request` | 请求体非合法 JSON | 修请求体 |
+| 400 | `bad_request` | 请求体非合法 JSON / 缺 `song` 且无当前歌曲 | 修请求体，或在 App 内先放一首歌 |
 | 400 | `resolve_failed` | 直链解析失败（版权/参数） | 检查 song 字段 |
 | 400 | `not_logged_in` | 用户未登录酷狗 | 提示先在 App 内登录 |
+
+> 400 也可能出现在 `errors` 字段里（部分失败），此时整次请求的 HTTP 状态是 200。
 
 约束：`code` 一次性；60 秒闲置自动关服；仅 `127.0.0.1` 监听；请求体 ≤32KB；
 同一 client 每分钟最多 10 次授权签发（`rate_limited`）。

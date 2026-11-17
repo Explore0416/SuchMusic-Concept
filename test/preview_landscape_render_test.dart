@@ -1,6 +1,9 @@
-// 1.5.2 横屏播放页预览图，供人工目检：
-//   568×320（tiny，无封面）/ 640×360（compact，无歌词行）/
-//   720×480（compact，有歌词行）/ 720×480 收起态 / 800×600（full）。
+// 横屏播放页预览图，供人工目检：
+//   568×320（tiny，无封面）/ 640×360 / 720×480（compact）/
+//   800×600（full）。
+//
+// 横屏形态（2026-11 定稿）：左封面+歌名+进度+控制，右半屏常驻多行歌词，
+// 底部 4 个功能入口；封面不可点，因此**没有**「收起态」截图。
 //
 // 为什么单独一个文件：`preview_render_test.dart` 是 1.4.0 那批整包截图，
 // 批量 `--update-goldens` 会连带重写一批与本轮无关的旧图；这里只负责横屏这批，
@@ -19,6 +22,7 @@ import 'package:such_music/models/song_model.dart';
 import 'package:such_music/screens/player_page.dart';
 import 'package:such_music/services/audio_player_service.dart';
 import 'package:such_music/services/local_lyric_service.dart';
+import 'package:such_music/theme/app_theme.dart';
 
 /// 测试用路径提供者：网易云 SDK 的 cookie 目录指到临时目录，
 /// 避开 path_provider 插件（widget test 里没有平台实现）。
@@ -37,26 +41,38 @@ class _TempPathProvider extends PathProvider {
   String getDataSavedPath() => '$root/.data/';
 }
 
-Future<void> _loadFonts() async {
+/// 中文字体：**每个用例内部**、经 `runAsync` 调用（见 [shoot] 里的说明）。
+///
+/// 走 `File.readAsBytes`（与 `preview_render_test.dart` 一致）：`File` IO 在
+/// fake async 里会挂起，所以调用点必须包在 `tester.runAsync` 里。
+Future<void> _loadTextFont() async {
   final loader = FontLoader('MiSans');
   for (final f in const [
     'assets/fonts/MiSans-Regular.ttf',
     'assets/fonts/MiSans-Medium.ttf',
     'assets/fonts/MiSans-Bold.ttf',
   ]) {
+    // 必须用 `File` 读原始字节：`rootBundle.load()` 返回的 ByteData 是 asset
+    // bundle 大 buffer 上的切片，直接交给 FontLoader 会解析失败（整个 family
+    // 静默失效 → 中文全变豆腐块）。
     loader.addFont(File(f).readAsBytes().then((b) => b.buffer.asByteData()));
   }
   await loader.load();
+}
 
+/// 图标字体：走 `File` 读 Flutter SDK 缓存里的 MaterialIcons。
+///
+/// 只在 [shoot] 的 `runAsync`（真实 Zone）里调用 —— `File` IO 在 fake async
+/// 里会挂起，`FontLoader.load()` 不 await 又会让图标退化成方块。
+Future<void> _loadIconFont() async {
   final icons = File(
     '${Platform.environment['FLUTTER_ROOT'] ?? '/opt/flutter'}'
     '/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
   );
-  if (icons.existsSync()) {
-    final il = FontLoader('MaterialIcons');
-    il.addFont(icons.readAsBytes().then((b) => b.buffer.asByteData()));
-    await il.load();
-  }
+  if (!icons.existsSync()) return;
+  final il = FontLoader('MaterialIcons');
+  il.addFont(icons.readAsBytes().then((b) => b.buffer.asByteData()));
+  await il.load();
 }
 
 /// 给 just_audio / audio_session 打最小桩（同 preview_render_test.dart）：
@@ -112,7 +128,6 @@ const SongModel _probeLocalSong = SongModel(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
-    await _loadFonts();
     final dir = await Directory.systemTemp.createTemp(
       'suchmusic_landscape_preview',
     );
@@ -124,12 +139,22 @@ void main() {
     // ignore: discarded_futures
     AudioPlayerService().play(_probeLocalSong);
 
-    // 伪曲目是个不存在的本地文件，本身取不到歌词。但金图要能**肉眼**看出
-    // 「歌名下面那一行歌词」是否存在（LyricDisplay 空文本只占 20px 空白，
-    // 截图里看不出区别），所以先给它塞一条手动歌词再让播放器重新取一次。
+    // 伪曲目是个不存在的本地文件，本身取不到歌词。但右栏歌词面板要能**肉眼**
+    // 看出多行滚动效果（空歌词面板与有内容的面板，截图差别很大），所以先给它
+    // 塞几行手动歌词再让播放器重新取一次。
     SharedPreferences.setMockInitialValues(<String, Object>{});
     await LocalLyricService().init();
-    await LocalLyricService().set(_probeLocalSong.id, '[00:00.000]雨纷纷 旧故里草木深');
+    await LocalLyricService().set(
+      _probeLocalSong.id,
+      '[00:00.000]雨纷纷 旧故里草木深\n'
+          '[00:08.000]我听闻 你始终一个人\n'
+          '[00:16.000]斑驳的城门 盘踞着老树根\n'
+          '[00:24.000]石板上回荡的是 再等\n'
+          '[00:32.000]雨纷纷 旧故里草木深\n'
+          '[00:40.000]我听闻 你仍守着孤城\n'
+          '[00:48.000]城郊牧笛声 落在那座野村\n'
+          '[00:56.000]缘份落地生根是 我们',
+    );
     // 逐字对齐要下载 / 解码音频，纯 widget 测试里跑不通（会抛 path_provider
     // 的 MissingPluginException），这里先关掉；关掉后 reloadLyrics 只做
     // 「取歌词文本 → 更新 currentLyric」这一步，正好是我们需要的。
@@ -137,27 +162,30 @@ void main() {
     await AudioPlayerService().reloadLyrics();
   });
 
-  Future<void> shoot(
-    WidgetTester tester,
-    String name,
-    Size size, {
-    bool tapCover = false,
-  }) async {
+  Future<void> shoot(WidgetTester tester, String name, Size size) async {
+    // 字体必须在每个用例内部、且用 `runAsync`（真实 Zone）注册：
+    // 放 setUpAll 里时字形不参与解析，金图的中文全变豆腐块 —— 而且不会报错，
+    // 只能靠肉眼发现。加载必须 await 到 `FontLoader.load()` 完成。
+    await tester.runAsync(() async {
+      await _loadTextFont();
+      await _loadIconFont();
+    });
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
+    // 必须带真实主题：歌名 / 歌词的 TextStyle 没显式写 fontFamily，靠
+    // ThemeData.fontFamily 落到 MiSans；裸 MaterialApp 会落到 Roboto，
+    // 中文直接渲染成豆腐块。
     await tester.pumpWidget(
-      const MaterialApp(debugShowCheckedModeBanner: false, home: PlayerPage()),
+      MaterialApp(
+        theme: AppTheme.light(),
+        debugShowCheckedModeBanner: false,
+        home: const PlayerPage(),
+      ),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-
-    if (tapCover) {
-      // 收起态：点封面（compact / full 两档都必须有反应），等动画走完再截
-      await tester.tap(find.byType(AspectRatio).first);
-      await tester.pump(const Duration(milliseconds: 300));
-    }
 
     await expectLater(
       find.byType(MaterialApp),
@@ -181,16 +209,11 @@ void main() {
     await shoot(tester, 'player-landscape-720x480', const Size(720, 480));
   });
 
-  testWidgets('player-landscape-720x480-collapsed', (tester) async {
-    await shoot(
-      tester,
-      'player-landscape-720x480-collapsed',
-      const Size(720, 480),
-      tapCover: true,
-    );
-  });
-
   testWidgets('player-landscape-800x600', (tester) async {
     await shoot(tester, 'player-landscape-800x600', const Size(800, 600));
+  });
+
+  testWidgets('player-landscape-1280x720', (tester) async {
+    await shoot(tester, 'player-landscape-1280x720', const Size(1280, 720));
   });
 }

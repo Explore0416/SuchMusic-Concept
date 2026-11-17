@@ -264,15 +264,39 @@ void main() {
       );
     });
 
-    test('缺少 song 对象 → bad_request', () async {
-      final provider = ThirdPartyDataProvider();
+    test('缺少 song 且当前无歌 → bad_request（错误信息可行动）', () async {
+      final provider = ThirdPartyDataProvider(currentSong: () => null);
       await expectLater(
         provider.fetch(ThirdPartyScope.urlResolve, null),
         throwsA(
           isA<ThirdPartyException>()
-              .having((e) => e.code, 'code', AuthErrors.badRequest),
+              .having((e) => e.code, 'code', AuthErrors.badRequest)
+              .having((e) => e.message, 'message', contains('params.song')),
         ),
       );
+    });
+
+    test('缺少 song 时回落到 App 当前播放歌曲', () async {
+      var resolvedId = '';
+      final provider = ThirdPartyDataProvider(
+        currentSong: () => const SongModel(
+          id: 'now-playing-1',
+          name: '东风破',
+          artist: '周杰伦',
+          album: '叶惠美',
+          duration: 300000,
+          source: SongSource.local,
+        ),
+        urlResolver: (song) async {
+          resolvedId = song.id;
+          return 'http://example.test/${song.id}.mp3';
+        },
+      );
+
+      final result = await provider.fetch(ThirdPartyScope.urlResolve, null);
+      expect(resolvedId, 'now-playing-1');
+      expect(result['url'], 'http://example.test/now-playing-1.mp3');
+      expect(result['songId'], 'now-playing-1');
     });
   });
 
@@ -327,8 +351,11 @@ void main() {
       );
     });
 
-    test('play 缺少 song → bad_request', () async {
-      final provider = ThirdPartyDataProvider(playback: FakePlayback());
+    test('play 缺少 song 且当前无歌 → bad_request', () async {
+      final provider = ThirdPartyDataProvider(
+        playback: FakePlayback(),
+        currentSong: () => null,
+      );
       await expectLater(
         provider.fetch(
           ThirdPartyScope.playbackControl,
@@ -336,6 +363,28 @@ void main() {
         ),
         throwsA(isA<ThirdPartyException>()),
       );
+    });
+
+    test('play 缺少 song 时播放 App 当前歌曲', () async {
+      final playback = FakePlayback();
+      final provider = ThirdPartyDataProvider(
+        playback: playback,
+        currentSong: () => const SongModel(
+          id: 'now-playing-2',
+          name: '东风破',
+          artist: '周杰伦',
+          album: '叶惠美',
+          duration: 300000,
+          source: SongSource.local,
+        ),
+      );
+
+      await provider.fetch(
+        ThirdPartyScope.playbackControl,
+        <String, dynamic>{'action': 'play'},
+      );
+      expect(playback.actions, <String>['play']);
+      expect(playback.played.single.id, 'now-playing-2');
     });
   });
 
