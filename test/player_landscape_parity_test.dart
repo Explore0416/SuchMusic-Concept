@@ -11,21 +11,21 @@
 // │    歌名 ♡     ○ ……（可滚动）                   │
 // │  ──────●──────────────                        │
 // │  ⟳   ⏮   ▶   ⏭   ☰                          │
-// │  ⬇   ↗   ⏱   ⋯  （只有图标、无文字、贴左栏）    │
+// │  ⬇    ↗    ⏱    ⋯  （纯图标，左栏内均分）      │
 // └──────────────────────────────────────────────┘
 // ```
 //
 // 与竖屏的三处刻意差异（用户明确要求）：
 //  1. 歌词常驻右半屏多行滚动 —— 不是「点封面才出现」；
 //  2. 封面是静态图，**点击没有任何反应**；
-//  3. 下载 / 分享 / 定时 / 更多 收在左栏下方左对齐，**纯图标不带文字**。
+//  3. 下载 / 分享 / 定时 / 更多 在左栏内均分（与进度条同带宽），**纯图标不带文字**。
 //
 // 本文件锁定：
 //  1. 断点判定（最短边定形态 + 方向定布局）；
 //  2. 6 个横屏尺寸：无 overflow、四入口在屏内、收藏/播放列表在屏内；
 //  3. 横屏右栏常驻 FullLyricDisplay，左栏不再有单行 LyricDisplay（不重复）；
 //  4. 点封面无反应：封面尺寸、进度条位置、歌词面板全部不变；
-//  5. 四入口只占左半屏、贴左、且不渲染任何文字；
+//  5. 四入口只占左半屏、等距铺开（与进度条同带宽）、且不渲染任何文字；
 //  6. 竖屏 390×844 四入口带文字且仍在屏内（防止把竖屏改坏）。
 //
 // 音频通道：`PlayerPage` 依赖 just_audio / audio_service 单例，纯 Dart 测试里
@@ -223,7 +223,7 @@ void main() {
     });
   });
 
-  group('横屏：四入口（纯图标、贴左栏）/ 收藏 / 播放列表都在屏内', () {
+  group('横屏：四入口（纯图标、左栏内均分）/ 收藏 / 播放列表都在屏内', () {
     for (final size in _landscapeSizes) {
       testWidgets('${size.width.toInt()}×${size.height.toInt()} 无溢出且入口在屏内', (
         tester,
@@ -252,21 +252,45 @@ void main() {
           );
         }
 
-        // 贴左栏：整行落在左半屏，且第一个热区紧贴左侧（不是居中或横跨整屏）
-        final first = tester.getRect(
-          _actionHitAreaByIcon(_actionIcons.first),
-        );
-        final last = tester.getRect(_actionHitAreaByIcon(_actionIcons.last));
+        // 与上方进度条同一宽度带：整行落在左半屏、四个入口等距铺开，
+        // 首尾中心收在进度条左右边界内（不是挤在左端，也不是横跨整屏）
+        final rects = <Rect>[
+          for (final icon in _actionIcons)
+            tester.getRect(_actionHitAreaByIcon(icon)),
+        ];
+        final centers = <double>[for (final r in rects) r.center.dx];
         expect(
-          last.right,
+          rects.last.right,
           lessThanOrEqualTo(size.width * 0.5),
-          reason:
-              '动作行应只占左栏（last.right=${last.right}，屏宽 ${size.width}）',
+          reason: '动作行应只占左栏（right=${rects.last.right}）',
+        );
+
+        final gaps = <double>[
+          for (var i = 1; i < centers.length; i++) centers[i] - centers[i - 1],
+        ];
+        for (final gap in gaps) {
+          expect(
+            (gap - gaps.first).abs(),
+            lessThan(2.0),
+            reason: '四个入口应等距铺开（gaps=$gaps）',
+          );
+        }
+        expect(
+          gaps.first,
+          greaterThan(44.0),
+          reason: '入口之间不该挤在一起（gap=${gaps.first}）',
+        );
+
+        final progressRect = tester.getRect(find.byType(ProgressBar));
+        expect(
+          centers.first,
+          greaterThan(progressRect.left),
+          reason: '首个图标应落在进度条左边界内（与上方控制行同宽度带）',
         );
         expect(
-          first.left,
-          lessThan(size.width * 0.08),
-          reason: '动作行应贴左边（first.left=${first.left}）',
+          centers.last,
+          lessThan(progressRect.right),
+          reason: '末个图标应落在进度条右边界内（与上方控制行同宽度带）',
         );
 
         _expectOnScreen(tester, _likeIcon, size, '收藏按钮');

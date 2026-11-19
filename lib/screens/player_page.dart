@@ -324,23 +324,21 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  /// 底部四个功能入口：**只占左栏宽度、左对齐，且只有图标没有文字**。
+  /// 底部四个功能入口：**在左栏范围内均分，与上方进度条 / 播放控制左右对齐**，
+  /// 且只有图标没有文字。
   ///
-  /// 旧实现让这一行横跨整屏（`spaceEvenly`），在 720 宽的屏上「更多」离左栏
-  /// 快 300px、1280 宽时接近 600px，视觉上和播放器断成两块。现在复用主体
-  /// 的 48 / 52 分栏比例，入口只排在左栏内，左沿与左栏内容区（24）对齐；
-  /// 每个入口热区 44×44、图标 22 居中，故左内边距取 12（12 + 12 = 24）。
+  /// 复用主体的 48 / 52 分栏，并且用与左栏完全相同的左右内边距（24 / 16）——
+  /// 这样四个图标的分布带就是进度条、播放控制那一条，视觉上属于同一列。
+  /// 早先横跨整屏会让「更多」跑出左栏；全挤在左端（`MainAxisSize.min`）又会
+  /// 缩成一小撮、和上方控制行脱节，两种都不对。
   Widget _buildSplitActionRow() {
     return Row(
       children: [
         Expanded(
           flex: 48,
           child: Padding(
-            padding: const EdgeInsets.only(left: 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: _buildActionRow(compact: true, iconOnly: true),
-            ),
+            padding: const EdgeInsets.fromLTRB(24, 0, 16, 0),
+            child: _buildActionRow(compact: true, iconOnly: true),
           ),
         ),
         const Expanded(flex: 52, child: SizedBox.shrink()),
@@ -908,12 +906,8 @@ class _PlayerPageState extends State<PlayerPage> {
     final hasSong = song != null;
     final hasSleep = _audioPlayer.hasSleepTimer;
     return Row(
-      // 纯图标形态包在 Align 里（宽度松约束），必须 min 否则 Row 会撑满左栏，
-      // 图标被 spaceEvenly 重新摊开
-      mainAxisSize: iconOnly ? MainAxisSize.min : MainAxisSize.max,
-      mainAxisAlignment:
-          iconOnly ? MainAxisAlignment.start : MainAxisAlignment.spaceEvenly,
-      spacing: iconOnly ? 2 : 0,
+      // 横向均分：四个图标铺在左栏那一条带上，与上方进度条 / 控制行同宽
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         _ActionButton(
           icon: Icons.download_rounded,
